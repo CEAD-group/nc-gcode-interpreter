@@ -40,6 +40,6 @@ def write_pest_file(grammar, filename=Path(__file__).parent / "ggroups.pest"):
 if __name__ == "__main__":
     pest_grammar = create_pest_grammar(g_groups)
     write_pest_file(pest_grammar)
-    print(f"Pest grammar file 'gcode.pest' has been generated.")
+    print("Pest grammar file 'gcode.pest' has been generated.")
 
 # %%
