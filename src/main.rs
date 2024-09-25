@@ -54,9 +54,9 @@ fn main() -> io::Result<()> {
                 .value_parser(clap::value_parser!(String)),
         )
         .arg(
-            Arg::new("loop_limit")
+            Arg::new("iteration_limit")
                 .short('l')
-                .long("loop_limit")
+                .long("iteration_limit")
                 .value_name("LIMIT")
                 .help("Maximum number of iterations for loops")
                 .default_value("10000")
@@ -85,7 +85,7 @@ fn main() -> io::Result<()> {
         .get_one::<String>("extra_axes")
         .map(|s| s.split(',').map(|axis| axis.trim().to_string()).collect());
 
-    let loop_limit = matches.get_one::<usize>("loop_limit").unwrap();
+    let iteration_limit = matches.get_one::<usize>("iteration_limit").unwrap();
 
     let disable_forward_fill = matches.get_flag("disable_forward_fill");
 
@@ -104,7 +104,7 @@ fn main() -> io::Result<()> {
         initial_state.as_deref(),
         axes_override.clone(),
         extra_axes,
-        *loop_limit,
+        *iteration_limit,
         disable_forward_fill
     )?;
 

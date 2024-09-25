@@ -28,6 +28,6 @@ def test_mpf_file_to_csv(mpf_file, initial_state):
     nc_to_dataframe(
         mpf_file.read_text(),
         initial_state=initial_state,
-        loop_limit=10000,
+        iteration_limit=10000,
         extra_axes=["ELX"],
     )

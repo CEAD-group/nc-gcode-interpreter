@@ -11,7 +11,7 @@ G3 X1 X=3 Y4.34
 G341
 """
 
-df, state = nc_to_dataframe(input_data, loop_limit=10000, extra_axes=["ELX"])
+df, state = nc_to_dataframe(input_data, iteration_limit=10000, extra_axes=["ELX"])
 print(df)
 print(state)
 # %%

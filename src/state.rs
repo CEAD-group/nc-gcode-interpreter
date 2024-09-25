@@ -8,12 +8,12 @@ pub struct State {
     pub symbol_table: HashMap<String, f32>,
     pub translation: HashMap<String, f32>,
     pub axis_identifiers: Vec<String>,
-    pub loop_limit: usize,
+    pub iteration_limit: usize,
 }
 
 impl State {
     // Constructor for State to initialize the HashMaps with default values
-    pub fn new(axis_identifiers: Vec<String>, loop_limit: usize) -> Self {
+    pub fn new(axis_identifiers: Vec<String>, iteration_limit: usize) -> Self {
         let mut symbols = HashMap::new();
         // Inserting default values
         symbols.insert("TRUE".to_string(), 1.0);
@@ -30,7 +30,7 @@ impl State {
             symbol_table: symbols,
             translation,
             axis_identifiers,
-            loop_limit,
+            iteration_limit,
         }
     }
 

@@ -412,13 +412,13 @@ fn interpret_statement_while(element: Pair<Rule>, output: &mut Output, state: &m
     let condition = pairs.next().expect("Expected a pair, got none");
     let blocks = pairs.next().expect("Expected a pair, got none");
     let mut loop_count = 0;
-    while evaluate_condition(condition.clone(), state)? && loop_count < state.loop_limit {
+    while evaluate_condition(condition.clone(), state)? && loop_count < state.iteration_limit {
         loop_count += 1;
         interpret_blocks(blocks.clone(), output, state)?;
     }
-    if loop_count >= state.loop_limit {
+    if loop_count >= state.iteration_limit {
         return Err(ParsingError::LoopLimit {
-            limit: state.loop_limit.to_string(),
+            limit: state.iteration_limit.to_string(),
         });
     }
     Ok(())

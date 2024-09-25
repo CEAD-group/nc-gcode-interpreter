@@ -27,7 +27,7 @@ pub fn nc_to_dataframe(
     initial_state: Option<&str>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
-    loop_limit: usize,
+    iteration_limit: usize,
     disable_forward_fill: bool,
 
 ) -> Result<(DataFrame, state::State), ParsingError> {
@@ -48,7 +48,7 @@ pub fn nc_to_dataframe(
     }
 
     // Process the defaults file first, if provided. This will set up the initial state
-    let mut state = state::State::new(axis_identifiers.clone(), loop_limit);
+    let mut state = state::State::new(axis_identifiers.clone(), iteration_limit);
     if let Some(initial_state) = initial_state {
         if let Err(error) = interpret_file(initial_state, &mut state) {
             eprintln!("Error while parsing defaults: {:?}", error);

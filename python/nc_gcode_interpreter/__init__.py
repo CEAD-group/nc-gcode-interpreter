@@ -18,7 +18,7 @@ def nc_to_dataframe(
     initial_state: TextFileLike | str | None = None,
     axis_identifiers: list[str] | None = None,
     extra_axes: list[str] | None = None,
-    loop_limit: int = 10000,
+    iteration_limit: int = 10000,
 ) -> tuple[pl.DataFrame, dict]:
     if input is None:
         raise ValueError("input cannot be None")
@@ -28,6 +28,6 @@ def nc_to_dataframe(
         initial_state = initial_state.read()
 
     df, state = _nc_to_dataframe(
-        input, initial_state, axis_identifiers, extra_axes, loop_limit
+        input, initial_state, axis_identifiers, extra_axes, iteration_limit
     )
     return df, state
