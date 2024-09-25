@@ -1,0 +1,13 @@
+DEF INT aa=1
+IF TRUE
+X1
+ELSE
+IF aa
+X5
+ELSE
+X3
+Y32
+ENDIF
+ENDIF
+
+

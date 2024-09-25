@@ -1,0 +1,2922 @@
+[
+  {
+    "nr": 1,
+    "title": "G group 1: Modally valid motion commands",
+    "effectiveness": "modal",
+    "short_name": "gg01_motion",
+    "entries": [
+      {
+        "id": "G0",
+        "nr": 1,
+        "description": "Rapid traverse"
+      },
+      {
+        "id": "G1",
+        "nr": 2,
+        "description": "Linear interpolation (linear interpolation)"
+      },
+      {
+        "id": "G2",
+        "nr": 3,
+        "description": "Circular interpolation clockwise"
+      },
+      {
+        "id": "G3",
+        "nr": 4,
+        "description": "Circular interpolation counter-clockwise"
+      },
+      {
+        "id": "CIP",
+        "nr": 5,
+        "description": "Circular interpolation through intermediate point"
+      },
+      {
+        "id": "ASPLINE",
+        "nr": 6,
+        "description": "Akima spline"
+      },
+      {
+        "id": "BSPLINE",
+        "nr": 7,
+        "description": "B spline"
+      },
+      {
+        "id": "CSPLINE",
+        "nr": 8,
+        "description": "Cubic spline"
+      },
+      {
+        "id": "POLY",
+        "nr": 9,
+        "description": "Polynomial interpolation"
+      },
+      {
+        "id": "G33",
+        "nr": 10,
+        "description": "Thread cutting with constant lead"
+      },
+      {
+        "id": "G331",
+        "nr": 11,
+        "description": "Tapping"
+      },
+      {
+        "id": "G332",
+        "nr": 12,
+        "description": "Retraction (tapping)"
+      },
+      {
+        "id": "OEMIPO1",
+        "nr": 13,
+        "description": "Reserved"
+      },
+      {
+        "id": "OEMIPO2",
+        "nr": 14,
+        "description": "Reserved"
+      },
+      {
+        "id": "CT",
+        "nr": 15,
+        "description": "Circle with tangential transition"
+      },
+      {
+        "id": "G34",
+        "nr": 16,
+        "description": "Thread cutting with linear increasing lead"
+      },
+      {
+        "id": "G35",
+        "nr": 17,
+        "description": "Thread cutting with linear decreasing lead"
+      },
+      {
+        "id": "INVCW",
+        "nr": 18,
+        "description": "Involute interpolation clockwise"
+      },
+      {
+        "id": "INVCCW",
+        "nr": 19,
+        "description": "Counter-clockwise involute interpolation"
+      },
+      {
+        "id": "G335",
+        "nr": 20,
+        "description": "Turning a convex thread in clockwise direction"
+      },
+      {
+        "id": "G336",
+        "nr": 21,
+        "description": "Turning a convex thread in counter-clockwise direction"
+      }
+    ]
+  },
+  {
+    "nr": 2,
+    "title": "G group 2: Non-modally valid motion, dwell time",
+    "effectiveness": "non-modal",
+    "short_name": "gg02_wait",
+    "entries": [
+      {
+        "id": "G4",
+        "nr": 1,
+        "description": "Dwell time, preset"
+      },
+      {
+        "id": "G63",
+        "nr": 2,
+        "description": "Tapping without synchronization"
+      },
+      {
+        "id": "G74",
+        "nr": 3,
+        "description": "Reference point approach with synchronization"
+      },
+      {
+        "id": "G75",
+        "nr": 4,
+        "description": "Fixed-point approach"
+      },
+      {
+        "id": "REPOSL",
+        "nr": 5,
+        "description": "Linear repositioning"
+      },
+      {
+        "id": "REPOSQ",
+        "nr": 6,
+        "description": "Repositioning in a quadrant"
+      },
+      {
+        "id": "REPOSH",
+        "nr": 7,
+        "description": "Repositioning in semicircle"
+      },
+      {
+        "id": "REPOSA",
+        "nr": 8,
+        "description": "Linear repositioning with all axes"
+      },
+      {
+        "id": "REPOSQA",
+        "nr": 9,
+        "description": "Linear repositioning with all axes, geometry axes in quadrant"
+      },
+      {
+        "id": "REPOSHA",
+        "nr": 10,
+        "description": "Repositioning with all axes; geometry axes in semicircle"
+      },
+      {
+        "id": "G147",
+        "nr": 11,
+        "description": "Approach contour with straight line"
+      },
+      {
+        "id": "G247",
+        "nr": 12,
+        "description": "Approach contour with quadrant"
+      },
+      {
+        "id": "G347",
+        "nr": 13,
+        "description": "Approach contour with semicircle"
+      },
+      {
+        "id": "G148",
+        "nr": 14,
+        "description": "Leave contour with straight line"
+      },
+      {
+        "id": "G248",
+        "nr": 15,
+        "description": "Leave contour with quadrant"
+      },
+      {
+        "id": "G348",
+        "nr": 16,
+        "description": "Leave contour with semicircle"
+      },
+      {
+        "id": "G5",
+        "nr": 17,
+        "description": "Oblique plunge-cut grinding"
+      },
+      {
+        "id": "G7",
+        "nr": 18,
+        "description": "Compensatory motion during oblique plunge-cut grinding"
+      }
+    ]
+  },
+  {
+    "nr": 3,
+    "title": "G group 3: Programmable frame, working area limitation and pole programming",
+    "effectiveness": "non-modal",
+    "short_name": "gg03_frame_area_limit",
+    "entries": [
+      {
+        "id": "TRANS",
+        "nr": 1,
+        "description": "TRANSLATION: Programmable offset"
+      },
+      {
+        "id": "ROT",
+        "nr": 2,
+        "description": "ROTATION: Programmable rotation"
+      },
+      {
+        "id": "SCALE",
+        "nr": 3,
+        "description": "SCALE: Programmable scaling"
+      },
+      {
+        "id": "MIRROR",
+        "nr": 4,
+        "description": "MIRROR: Programmable mirroring"
+      },
+      {
+        "id": "ATRANS",
+        "nr": 5,
+        "description": "Additive TRANSLATION: Additive programmable translation"
+      },
+      {
+        "id": "AROT",
+        "nr": 6,
+        "description": "Additive ROTATION: Programmable rotation"
+      },
+      {
+        "id": "ASCALE",
+        "nr": 7,
+        "description": "Additive SCALE: Programmable scaling"
+      },
+      {
+        "id": "AMIRROR",
+        "nr": 8,
+        "description": "Additive MIRROR: Programmable mirroring"
+      },
+      {
+        "id": "G25",
+        "nr": 10,
+        "description": "Minimum working area limitation/spindle speed limitation"
+      },
+      {
+        "id": "G26",
+        "nr": 11,
+        "description": "Maximum working area limitation/spindle speed limitation"
+      },
+      {
+        "id": "G110",
+        "nr": 12,
+        "description": "Pole programming relative to the last programmed setpoint position"
+      },
+      {
+        "id": "G111",
+        "nr": 13,
+        "description": "Polar programming relative to origin of current workpiece coordinate system"
+      },
+      {
+        "id": "G112",
+        "nr": 14,
+        "description": "Pole programming relative to the last valid pole"
+      },
+      {
+        "id": "G58",
+        "nr": 15,
+        "description": "Absolute programmable work offset"
+      },
+      {
+        "id": "G59",
+        "nr": 16,
+        "description": "Additive programmable work offset"
+      },
+      {
+        "id": "ROTS",
+        "nr": 17,
+        "description": "Rotation with solid angle"
+      },
+      {
+        "id": "AROTS",
+        "nr": 18,
+        "description": "Additive rotation with solid angle"
+      }
+    ]
+  },
+  {
+    "nr": 4,
+    "title": "G group 4: FIFO",
+    "effectiveness": "modal",
+    "short_name": "gg04_fifo",
+    "entries": [
+      {
+        "id": "STARTFIFO",
+        "nr": 1,
+        "description": "Start FIFO. Execute and simultaneously fill preprocessing memory"
+      },
+      {
+        "id": "STOPFIFO",
+        "nr": 2,
+        "description": "STOP FIFO. Stop machining; fill preprocessing memory until STARTFIFO is detected, FIFO is full or end of program"
+      },
+      {
+        "id": "FIFOCTRL",
+        "nr": 3,
+        "description": "Activation of automatic preprocessing memory control"
+      }
+    ]
+  },
+  {
+    "nr": 6,
+    "title": "G group 6: Plane selection",
+    "effectiveness": "modal",
+    "short_name": "gg06_plane_select",
+    "entries": [
+      {
+        "id": "G17",
+        "nr": 1,
+        "description": "Plane selection 1. - 2. Geometry axis"
+      },
+      {
+        "id": "G18",
+        "nr": 2,
+        "description": "Plane selection 3. - 1. Geometry axis"
+      },
+      {
+        "id": "G19",
+        "nr": 3,
+        "description": "Plane selection 2. - 3. Geometry axis"
+      }
+    ]
+  },
+  {
+    "nr": 7,
+    "title": "G group 7: Tool radius compensation",
+    "effectiveness": "modal",
+    "short_name": "gg07_tool_radius",
+    "entries": [
+      {
+        "id": "G40",
+        "nr": 1,
+        "description": "No tool radius compensation"
+      },
+      {
+        "id": "G41",
+        "nr": 2,
+        "description": "Tool radius compensation left of the contour"
+      },
+      {
+        "id": "G42",
+        "nr": 3,
+        "description": "Tool radius compensation right of the contour"
+      }
+    ]
+  },
+  {
+    "nr": 8,
+    "title": "G group 8: Settable work offset",
+    "effectiveness": "modal",
+    "short_name": "gg08_work_offset",
+    "entries": [
+      {
+        "id": "G500",
+        "nr": 1,
+        "description": "Deactivation of settable work offset (G54 to G57, G505 to G599)"
+      },
+      {
+        "id": "G54",
+        "nr": 2,
+        "description": "1st settable work offset"
+      },
+      {
+        "id": "G55",
+        "nr": 3,
+        "description": "2nd settable work offset"
+      },
+      {
+        "id": "G56",
+        "nr": 4,
+        "description": "3rd settable work offset"
+      },
+      {
+        "id": "G57",
+        "nr": 5,
+        "description": "4th settable work offset"
+      },
+      {
+        "id": "G505",
+        "nr": 6,
+        "description": "5th settable work offset"
+      },
+      {
+        "id": "G506",
+        "nr": 7,
+        "description": "6th settable work offset"
+      },
+      {
+        "id": "G507",
+        "nr": 8,
+        "description": "7th settable work offset"
+      },
+      {
+        "id": "G508",
+        "nr": 9,
+        "description": "8th settable work offset"
+      },
+      {
+        "id": "G509",
+        "nr": 10,
+        "description": "9th settable work offset"
+      },
+      {
+        "id": "G510",
+        "nr": 11,
+        "description": "10th settable work offset"
+      },
+      {
+        "id": "G511",
+        "nr": 12,
+        "description": "11th settable work offset"
+      },
+      {
+        "id": "G512",
+        "nr": 13,
+        "description": "12th settable work offset"
+      },
+      {
+        "id": "G513",
+        "nr": 14,
+        "description": "13th settable work offset"
+      },
+      {
+        "id": "G514",
+        "nr": 15,
+        "description": "14th settable work offset"
+      },
+      {
+        "id": "G515",
+        "nr": 16,
+        "description": "15th settable work offset"
+      },
+      {
+        "id": "G516",
+        "nr": 17,
+        "description": "16th settable work offset"
+      },
+      {
+        "id": "G517",
+        "nr": 18,
+        "description": "17th settable work offset"
+      },
+      {
+        "id": "G518",
+        "nr": 19,
+        "description": "18th settable work offset"
+      },
+      {
+        "id": "G519",
+        "nr": 20,
+        "description": "19th settable work offset"
+      },
+      {
+        "id": "G520",
+        "nr": 21,
+        "description": "20th settable work offset"
+      },
+      {
+        "id": "G521",
+        "nr": 22,
+        "description": "21th settable work offset"
+      },
+      {
+        "id": "G522",
+        "nr": 23,
+        "description": "22th settable work offset"
+      },
+      {
+        "id": "G523",
+        "nr": 24,
+        "description": "23th settable work offset"
+      },
+      {
+        "id": "G524",
+        "nr": 25,
+        "description": "24th settable work offset"
+      },
+      {
+        "id": "G525",
+        "nr": 26,
+        "description": "25th settable work offset"
+      },
+      {
+        "id": "G526",
+        "nr": 27,
+        "description": "26th settable work offset"
+      },
+      {
+        "id": "G527",
+        "nr": 28,
+        "description": "27th settable work offset"
+      },
+      {
+        "id": "G528",
+        "nr": 29,
+        "description": "28th settable work offset"
+      },
+      {
+        "id": "G529",
+        "nr": 30,
+        "description": "29th settable work offset"
+      },
+      {
+        "id": "G530",
+        "nr": 31,
+        "description": "30th settable work offset"
+      },
+      {
+        "id": "G531",
+        "nr": 32,
+        "description": "31th settable work offset"
+      },
+      {
+        "id": "G532",
+        "nr": 33,
+        "description": "32th settable work offset"
+      },
+      {
+        "id": "G533",
+        "nr": 34,
+        "description": "33th settable work offset"
+      },
+      {
+        "id": "G534",
+        "nr": 35,
+        "description": "34th settable work offset"
+      },
+      {
+        "id": "G535",
+        "nr": 36,
+        "description": "35th settable work offset"
+      },
+      {
+        "id": "G536",
+        "nr": 37,
+        "description": "36th settable work offset"
+      },
+      {
+        "id": "G537",
+        "nr": 38,
+        "description": "37th settable work offset"
+      },
+      {
+        "id": "G538",
+        "nr": 39,
+        "description": "38th settable work offset"
+      },
+      {
+        "id": "G539",
+        "nr": 40,
+        "description": "39th settable work offset"
+      },
+      {
+        "id": "G540",
+        "nr": 41,
+        "description": "40th settable work offset"
+      },
+      {
+        "id": "G541",
+        "nr": 42,
+        "description": "41th settable work offset"
+      },
+      {
+        "id": "G542",
+        "nr": 43,
+        "description": "42th settable work offset"
+      },
+      {
+        "id": "G543",
+        "nr": 44,
+        "description": "43th settable work offset"
+      },
+      {
+        "id": "G544",
+        "nr": 45,
+        "description": "44th settable work offset"
+      },
+      {
+        "id": "G545",
+        "nr": 46,
+        "description": "45th settable work offset"
+      },
+      {
+        "id": "G546",
+        "nr": 47,
+        "description": "46th settable work offset"
+      },
+      {
+        "id": "G547",
+        "nr": 48,
+        "description": "47th settable work offset"
+      },
+      {
+        "id": "G548",
+        "nr": 49,
+        "description": "48th settable work offset"
+      },
+      {
+        "id": "G549",
+        "nr": 50,
+        "description": "49th settable work offset"
+      },
+      {
+        "id": "G550",
+        "nr": 51,
+        "description": "50th settable work offset"
+      },
+      {
+        "id": "G551",
+        "nr": 52,
+        "description": "51th settable work offset"
+      },
+      {
+        "id": "G552",
+        "nr": 53,
+        "description": "52th settable work offset"
+      },
+      {
+        "id": "G553",
+        "nr": 54,
+        "description": "53th settable work offset"
+      },
+      {
+        "id": "G554",
+        "nr": 55,
+        "description": "54th settable work offset"
+      },
+      {
+        "id": "G555",
+        "nr": 56,
+        "description": "55th settable work offset"
+      },
+      {
+        "id": "G556",
+        "nr": 57,
+        "description": "56th settable work offset"
+      },
+      {
+        "id": "G557",
+        "nr": 58,
+        "description": "57th settable work offset"
+      },
+      {
+        "id": "G558",
+        "nr": 59,
+        "description": "58th settable work offset"
+      },
+      {
+        "id": "G559",
+        "nr": 60,
+        "description": "59th settable work offset"
+      },
+      {
+        "id": "G560",
+        "nr": 61,
+        "description": "60th settable work offset"
+      },
+      {
+        "id": "G561",
+        "nr": 62,
+        "description": "61th settable work offset"
+      },
+      {
+        "id": "G562",
+        "nr": 63,
+        "description": "62th settable work offset"
+      },
+      {
+        "id": "G563",
+        "nr": 64,
+        "description": "63th settable work offset"
+      },
+      {
+        "id": "G564",
+        "nr": 65,
+        "description": "64th settable work offset"
+      },
+      {
+        "id": "G565",
+        "nr": 66,
+        "description": "65th settable work offset"
+      },
+      {
+        "id": "G566",
+        "nr": 67,
+        "description": "66th settable work offset"
+      },
+      {
+        "id": "G567",
+        "nr": 68,
+        "description": "67th settable work offset"
+      },
+      {
+        "id": "G568",
+        "nr": 69,
+        "description": "68th settable work offset"
+      },
+      {
+        "id": "G569",
+        "nr": 70,
+        "description": "69th settable work offset"
+      },
+      {
+        "id": "G570",
+        "nr": 71,
+        "description": "70th settable work offset"
+      },
+      {
+        "id": "G571",
+        "nr": 72,
+        "description": "71th settable work offset"
+      },
+      {
+        "id": "G572",
+        "nr": 73,
+        "description": "72th settable work offset"
+      },
+      {
+        "id": "G573",
+        "nr": 74,
+        "description": "73th settable work offset"
+      },
+      {
+        "id": "G574",
+        "nr": 75,
+        "description": "74th settable work offset"
+      },
+      {
+        "id": "G575",
+        "nr": 76,
+        "description": "75th settable work offset"
+      },
+      {
+        "id": "G576",
+        "nr": 77,
+        "description": "76th settable work offset"
+      },
+      {
+        "id": "G577",
+        "nr": 78,
+        "description": "77th settable work offset"
+      },
+      {
+        "id": "G578",
+        "nr": 79,
+        "description": "78th settable work offset"
+      },
+      {
+        "id": "G579",
+        "nr": 80,
+        "description": "79th settable work offset"
+      },
+      {
+        "id": "G580",
+        "nr": 81,
+        "description": "80th settable work offset"
+      },
+      {
+        "id": "G581",
+        "nr": 82,
+        "description": "81th settable work offset"
+      },
+      {
+        "id": "G582",
+        "nr": 83,
+        "description": "82th settable work offset"
+      },
+      {
+        "id": "G583",
+        "nr": 84,
+        "description": "83th settable work offset"
+      },
+      {
+        "id": "G584",
+        "nr": 85,
+        "description": "84th settable work offset"
+      },
+      {
+        "id": "G585",
+        "nr": 86,
+        "description": "85th settable work offset"
+      },
+      {
+        "id": "G586",
+        "nr": 87,
+        "description": "86th settable work offset"
+      },
+      {
+        "id": "G587",
+        "nr": 88,
+        "description": "87th settable work offset"
+      },
+      {
+        "id": "G588",
+        "nr": 89,
+        "description": "88th settable work offset"
+      },
+      {
+        "id": "G589",
+        "nr": 90,
+        "description": "89th settable work offset"
+      },
+      {
+        "id": "G590",
+        "nr": 91,
+        "description": "90th settable work offset"
+      },
+      {
+        "id": "G591",
+        "nr": 92,
+        "description": "91th settable work offset"
+      },
+      {
+        "id": "G592",
+        "nr": 93,
+        "description": "92th settable work offset"
+      },
+      {
+        "id": "G593",
+        "nr": 94,
+        "description": "93th settable work offset"
+      },
+      {
+        "id": "G594",
+        "nr": 95,
+        "description": "94th settable work offset"
+      },
+      {
+        "id": "G595",
+        "nr": 96,
+        "description": "95th settable work offset"
+      },
+      {
+        "id": "G596",
+        "nr": 97,
+        "description": "96th settable work offset"
+      },
+      {
+        "id": "G597",
+        "nr": 98,
+        "description": "97th settable work offset"
+      },
+      {
+        "id": "G598",
+        "nr": 99,
+        "description": "98th settable work offset"
+      },
+      {
+        "id": "G599",
+        "nr": 100,
+        "description": "99th settable work offset"
+      }
+    ]
+  },
+  {
+    "nr": 9,
+    "title": "G group 9: Frame and tool offset suppression",
+    "effectiveness": "non-modal",
+    "short_name": "gg09_frame_tool_suppress",
+    "entries": [
+      {
+        "id": "G53",
+        "nr": 1,
+        "description": "Suppression of current frames: Programmable frame including system frame for TOROT and TOFRAME and active adjustable frame (G54 to G57, G505 to G599)"
+      },
+      {
+        "id": "SUPA",
+        "nr": 2,
+        "description": "As for G153 including suppression of system frames for actual value setting, scratching, external work offset, PAROT including handwheel offsets (DRF), [external work offset], overlaid movement"
+      },
+      {
+        "id": "G153",
+        "nr": 3,
+        "description": "As for G53 including suppression of all channel-specific and/or NCU-global basic frames"
+      },
+      {
+        "id": "SUPD",
+        "nr": 4,
+        "description": "Suppression of the active tool offsets"
+      }
+    ]
+  },
+  {
+    "nr": 10,
+    "title": "G group 10: Exact stop - continuous-path mode",
+    "effectiveness": "modal",
+    "short_name": "gg10_exact_stop_mode",
+    "entries": [
+      {
+        "id": "G60",
+        "nr": 1,
+        "description": "Exact stop"
+      },
+      {
+        "id": "G64",
+        "nr": 2,
+        "description": "Continuous-path mode"
+      },
+      {
+        "id": "G641",
+        "nr": 3,
+        "description": "Continuous-path mode with smoothing according to distance criterion (= programmable rounding clearance)"
+      },
+      {
+        "id": "G642",
+        "nr": 4,
+        "description": "Continuous-path mode with smoothing within the defined tolerances"
+      },
+      {
+        "id": "G643",
+        "nr": 5,
+        "description": "Continuous-path mode with smoothing within the defined tolerances (block-internal)"
+      },
+      {
+        "id": "G644",
+        "nr": 6,
+        "description": "Continuous-path mode with smoothing with maximum possible dynamic response"
+      },
+      {
+        "id": "G645",
+        "nr": 7,
+        "description": "Continuous-path mode with smoothing and tangential block transitions within defined tolerances"
+      }
+    ]
+  },
+  {
+    "nr": 11,
+    "title": "G group 11: Exact stop, non-modal",
+    "effectiveness": "non-modal",
+    "short_name": "gg11_exact_stop_non_modal",
+    "entries": [
+      {
+        "id": "G9",
+        "nr": 1,
+        "description": "Exact stop"
+      }
+    ]
+  },
+  {
+    "nr": 12,
+    "title": "G group 12: Block change criteria at exact stop (G60/G9)",
+    "effectiveness": "modal",
+    "short_name": "gg12_block_change_g60_g9",
+    "entries": [
+      {
+        "id": "G601",
+        "nr": 1,
+        "description": "Block change at exact stop fine"
+      },
+      {
+        "id": "G602",
+        "nr": 2,
+        "description": "Block change at exact stop coarse"
+      },
+      {
+        "id": "G603",
+        "nr": 3,
+        "description": "Block change at IPO block end"
+      }
+    ]
+  },
+  {
+    "nr": 13,
+    "title": "G group 13: Workpiece measuring inch/metric",
+    "effectiveness": "modal",
+    "short_name": "gg13_wp_measure",
+    "entries": [
+      {
+        "id": "G70",
+        "nr": 1,
+        "description": "Input system inches (length)"
+      },
+      {
+        "id": "G71",
+        "nr": 2,
+        "description": "Input system metric mm (lengths)"
+      },
+      {
+        "id": "G700",
+        "nr": 3,
+        "description": "Input system inch, inch/min (lengths + velocity + system variable)"
+      },
+      {
+        "id": "G710",
+        "nr": 4,
+        "description": "Input system metric mm, mm/min (lengths + velocity + system variable)"
+      }
+    ]
+  },
+  {
+    "nr": 14,
+    "title": "G group 14: Workpiece measuring absolute/incremental",
+    "effectiveness": "modal",
+    "short_name": "gg14_wp_measure_mode",
+    "entries": [
+      {
+        "id": "G90",
+        "nr": 1,
+        "description": "Absolute dimension"
+      },
+      {
+        "id": "G91",
+        "nr": 2,
+        "description": "Incremental dimensions"
+      }
+    ]
+  },
+  {
+    "nr": 15,
+    "title": "G group 15: Feed type",
+    "effectiveness": "modal",
+    "short_name": "gg15_feed_type",
+    "entries": [
+      {
+        "id": "G93",
+        "nr": 1,
+        "description": "Inverse-time feedrate rpm"
+      },
+      {
+        "id": "G94",
+        "nr": 2,
+        "description": "Linear feedrate in mm/min, inch/min"
+      },
+      {
+        "id": "G95",
+        "nr": 3,
+        "description": "Revolutional feedrate in mm/rev, inch/rev"
+      },
+      {
+        "id": "G96",
+        "nr": 4,
+        "description": "Revolutional feedrate (as for G95) and constant cutting rate"
+      },
+      {
+        "id": "G97",
+        "nr": 5,
+        "description": "Revolutional feedrate and constant spindle speed (constant cutting rate OFF)"
+      },
+      {
+        "id": "G931",
+        "nr": 6,
+        "description": "Feedrate specified by means of traversing time, deactivate constant path velocity"
+      },
+      {
+        "id": "G961",
+        "nr": 7,
+        "description": "Linear feedrate (as for G94) and constant cutting rate"
+      },
+      {
+        "id": "G971",
+        "nr": 8,
+        "description": "Linear feedrate and constant spindle speed (constant cutting rate OFF)"
+      },
+      {
+        "id": "G942",
+        "nr": 9,
+        "description": "Linear feedrate and constant cutting rate or constant spindle speed"
+      },
+      {
+        "id": "G952",
+        "nr": 10,
+        "description": "Revolutional feedrate and constant cutting rate or constant spindle speed"
+      },
+      {
+        "id": "G962",
+        "nr": 11,
+        "description": "Linear feedrate or revolutional feedrate and constant cutting rate"
+      },
+      {
+        "id": "G972",
+        "nr": 12,
+        "description": "Linear feedrate or revolutional feedrate and constant spindle speed (constant cutting rate OFF)"
+      },
+      {
+        "id": "G973",
+        "nr": 13,
+        "description": "Revolutional feedrate without spindle speed limitation and constant spindle speed (G97 without LIMS for ISO mode)"
+      }
+    ]
+  },
+  {
+    "nr": 16,
+    "title": "G group 16: Feedrate override at inside and outside curvature",
+    "effectiveness": "modal",
+    "short_name": "gg16_feedrate_override",
+    "entries": [
+      {
+        "id": "CFC",
+        "nr": 1,
+        "description": "Constant feedrate at contour effective for internal and external radius"
+      },
+      {
+        "id": "CFTCP",
+        "nr": 2,
+        "description": "Constant feedrate in tool center point (center point path)"
+      },
+      {
+        "id": "CFIN",
+        "nr": 3,
+        "description": "Constant feedrate for internal radius only, acceleration for external radius"
+      }
+    ]
+  },
+  {
+    "nr": 17,
+    "title": "G group 17: Approach and retraction response, tool offset",
+    "effectiveness": "modal",
+    "short_name": "gg17_approach_retract_tool",
+    "entries": [
+      {
+        "id": "NORM",
+        "nr": 1,
+        "description": "Normal position at starting and end points"
+      },
+      {
+        "id": "KONT",
+        "nr": 2,
+        "description": "Travel around contour at starting and end points"
+      },
+      {
+        "id": "KONTT",
+        "nr": 3,
+        "description": "Approach/retraction with constant tangent"
+      },
+      {
+        "id": "KONTC",
+        "nr": 4,
+        "description": "Approach/retraction with constant curvature"
+      }
+    ]
+  },
+  {
+    "nr": 18,
+    "title": "G group 18: Corner behavior, tool offset",
+    "effectiveness": "modal",
+    "short_name": "gg18_corner_behavior",
+    "entries": [
+      {
+        "id": "G450",
+        "nr": 1,
+        "description": "Transition circle (tool travels around workpiece corners on a circular path)"
+      },
+      {
+        "id": "G451",
+        "nr": 2,
+        "description": "Intersection of equidistant paths (tool backs off from the workpiece corner)"
+      }
+    ]
+  },
+  {
+    "nr": 19,
+    "title": "G group 19: Curve transition at beginning of spline",
+    "effectiveness": "modal",
+    "short_name": "gg19_curve_start_spline",
+    "entries": [
+      {
+        "id": "BNAT",
+        "nr": 1,
+        "description": "Natural transition to first spline block"
+      },
+      {
+        "id": "BTAN",
+        "nr": 2,
+        "description": "Tangential transition to first spline block"
+      },
+      {
+        "id": "BAUTO",
+        "nr": 3,
+        "description": "Definition of the first spline section by means of the next 3 points"
+      }
+    ]
+  },
+  {
+    "nr": 20,
+    "title": "G group 20: Curve transition at end of spline",
+    "effectiveness": "modal",
+    "short_name": "gg20_curve_end_spline",
+    "entries": [
+      {
+        "id": "ENAT",
+        "nr": 1,
+        "description": "Natural transition to next traversing block"
+      },
+      {
+        "id": "ETAN",
+        "nr": 2,
+        "description": "Tangential transition to next traversing block"
+      },
+      {
+        "id": "EAUTO",
+        "nr": 3,
+        "description": "Definition of the last spline section by means of the last 3 points"
+      }
+    ]
+  },
+  {
+    "nr": 21,
+    "title": "G group 21: Acceleration profile",
+    "effectiveness": "modal",
+    "short_name": "gg21_accel_profile",
+    "entries": [
+      {
+        "id": "BRISK",
+        "nr": 1,
+        "description": "Fast non-smoothed path acceleration"
+      },
+      {
+        "id": "SOFT",
+        "nr": 2,
+        "description": "Soft smoothed path acceleration"
+      },
+      {
+        "id": "DRIVE",
+        "nr": 3,
+        "description": "Velocity-dependent path acceleration"
+      }
+    ]
+  },
+  {
+    "nr": 22,
+    "title": "G group 22: Tool offset type",
+    "effectiveness": "modal",
+    "short_name": "gg22_tool_offset_type",
+    "entries": [
+      {
+        "id": "CUT2D",
+        "nr": 1,
+        "description": "2\u00bdD TRC"
+      },
+      {
+        "id": "CUT2DF",
+        "nr": 2,
+        "description": "2\u00bdD TRC relative to the current frame (inclined plane)"
+      },
+      {
+        "id": "CUT3DC",
+        "nr": 3,
+        "description": "3D TRC for circumferential milling"
+      },
+      {
+        "id": "CUT3DF",
+        "nr": 4,
+        "description": "3D TRC for face milling with change in orientation"
+      },
+      {
+        "id": "CUT3DFS",
+        "nr": 5,
+        "description": "3D TRC for face milling with constant orientation. The tool orientation is defined by G17 - G19 and is not influenced by frames."
+      },
+      {
+        "id": "CUT3DFF",
+        "nr": 6,
+        "description": "3D TRC for face milling with constant orientation. The tool orientation is the direction defined by G17 - G19 and, in some cases, rotated by a frame."
+      },
+      {
+        "id": "CUT3DCC",
+        "nr": 7,
+        "description": "3D TRC for circumferential milling taking into account a limitation surface with 3D radius compensation: Contour on the machining surface"
+      },
+      {
+        "id": "CUT3DCCD",
+        "nr": 8,
+        "description": "3D TRC for circumferential milling taking into account a limitation surface with a differential tool on the tool center-point path: Infeed to the limitation surface"
+      },
+      {
+        "id": "CUT2DD",
+        "nr": 9,
+        "description": "2\u00bd D TRC in relation to the differential tool"
+      },
+      {
+        "id": "CUT2DFD",
+        "nr": 10,
+        "description": "2\u00bdD TRC in relation to a differential tool relative to the current frame (inclined plane)"
+      },
+      {
+        "id": "CUT3DCD",
+        "nr": 11,
+        "description": "3D TRC in relation to a differential tool for circumferential milling"
+      },
+      {
+        "id": "CUT3DFD",
+        "nr": 12,
+        "description": "3D TRC in relation to a differential tool for face milling with change in orientation"
+      }
+    ]
+  },
+  {
+    "nr": 23,
+    "title": "G group 23: Collision monitoring at inside contours",
+    "effectiveness": "modal",
+    "short_name": "gg23_collision_monitor",
+    "entries": [
+      {
+        "id": "CDOF",
+        "nr": 1,
+        "description": "Collision detection OFF"
+      },
+      {
+        "id": "CDON",
+        "nr": 2,
+        "description": "Collision detection ON"
+      },
+      {
+        "id": "CDOF2",
+        "nr": 3,
+        "description": "Collision detection OFF for 3D circumferential milling"
+      }
+    ]
+  },
+  {
+    "nr": 24,
+    "title": "G group 24: Precontrol",
+    "effectiveness": "modal",
+    "short_name": "gg24_precontrol",
+    "entries": [
+      {
+        "id": "FFWOF",
+        "nr": 1,
+        "description": "Feedforward control OFF"
+      },
+      {
+        "id": "FFWON",
+        "nr": 2,
+        "description": "Feedforward control ON"
+      }
+    ]
+  },
+  {
+    "nr": 25,
+    "title": "G group 25: Tool orientation reference",
+    "effectiveness": "modal",
+    "short_name": "gg25_tool_orient_ref",
+    "entries": [
+      {
+        "id": "ORIWKS",
+        "nr": 1,
+        "description": "Tool orientation in workpiece coordinate system (WCS)"
+      },
+      {
+        "id": "ORIMKS",
+        "nr": 2,
+        "description": "Tool orientation in machine coordinate system (MCS)"
+      }
+    ]
+  },
+  {
+    "nr": 26,
+    "title": "G group 26: Repositioning mode for REPOS (modal)",
+    "effectiveness": "modal",
+    "short_name": "gg26_repos_mode",
+    "entries": [
+      {
+        "id": "RMB",
+        "nr": 1,
+        "description": "Repositioning to start of block"
+      },
+      {
+        "id": "RMI",
+        "nr": 2,
+        "description": "Repositioning to interrupt point"
+      },
+      {
+        "id": "RME",
+        "nr": 3,
+        "description": "Repositioning to end of block"
+      },
+      {
+        "id": "RMN",
+        "nr": 4,
+        "description": "Repositioning to the nearest path point"
+      }
+    ]
+  },
+  {
+    "nr": 27,
+    "title": "G group 27: Tool offset for change in orientation at outside corners",
+    "effectiveness": "modal",
+    "short_name": "gg27_tool_offset_change",
+    "entries": [
+      {
+        "id": "ORIC",
+        "nr": 1,
+        "description": "Orientation changes at outside corners are superimposed on the circle block to be inserted"
+      },
+      {
+        "id": "ORID",
+        "nr": 2,
+        "description": "Orientation changes are performed before the circle block"
+      }
+    ]
+  },
+  {
+    "nr": 28,
+    "title": "G group 28: Working area limitation",
+    "effectiveness": "modal",
+    "short_name": "gg28_area_limit",
+    "entries": [
+      {
+        "id": "WALIMON",
+        "nr": 1,
+        "description": "Working area limitation ON"
+      },
+      {
+        "id": "WALIMOF",
+        "nr": 2,
+        "description": "Working area limitation OFF"
+      }
+    ]
+  },
+  {
+    "nr": 29,
+    "title": "G group 29: Radius/diameter programming",
+    "effectiveness": "modal",
+    "short_name": "gg29_rad_diam_prog",
+    "entries": [
+      {
+        "id": "DIAMOF",
+        "nr": 1,
+        "description": "Modal channel-specific diameter programming OFF - Deactivation activates channel-specific radius programming."
+      },
+      {
+        "id": "DIAMON",
+        "nr": 2,
+        "description": "Modal independent channel-specific diameter programming ON - The effect is independent of the programmed dimensions mode (G90/G91)."
+      },
+      {
+        "id": "DIAM90",
+        "nr": 3,
+        "description": "Modal dependent channel-specific diameter programming ON - The effect is dependent on the programmed dimensions mode (G90/G91)."
+      },
+      {
+        "id": "DIAMCYCOF",
+        "nr": 4,
+        "description": "Modal channel-specific diameter programming during cycle processing OFF"
+      }
+    ]
+  },
+  {
+    "nr": 30,
+    "title": "G group 30: NC block compression",
+    "effectiveness": "modal",
+    "short_name": "gg30_nc_compress",
+    "entries": [
+      {
+        "id": "COMPOF",
+        "nr": 1,
+        "description": "NC block compression OFF"
+      },
+      {
+        "id": "COMPON",
+        "nr": 2,
+        "description": "Compressor function COMPON ON"
+      },
+      {
+        "id": "COMPCURV",
+        "nr": 3,
+        "description": "Compressor function COMPCURV ON"
+      },
+      {
+        "id": "COMPCAD",
+        "nr": 4,
+        "description": "Compressor function COMPCAD ON"
+      },
+      {
+        "id": "COMPSURF",
+        "nr": 5,
+        "description": "COMPSURF ON compressor function"
+      }
+    ]
+  },
+  {
+    "nr": 31,
+    "title": "G group 31: OEM G commands",
+    "effectiveness": "modal",
+    "short_name": "gg31_oem_g",
+    "entries": [
+      {
+        "id": "G810",
+        "nr": 1,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G811",
+        "nr": 2,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G812",
+        "nr": 3,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G813",
+        "nr": 4,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G814",
+        "nr": 5,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G815",
+        "nr": 6,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G816",
+        "nr": 7,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G817",
+        "nr": 8,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G818",
+        "nr": 9,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G819",
+        "nr": 10,
+        "description": "OEM G command"
+      }
+    ]
+  },
+  {
+    "nr": 32,
+    "title": "G group 32: OEM G commands",
+    "effectiveness": "modal",
+    "short_name": "gg32_oem_g",
+    "entries": [
+      {
+        "id": "G820",
+        "nr": 1,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G821",
+        "nr": 2,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G822",
+        "nr": 3,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G823",
+        "nr": 4,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G824",
+        "nr": 5,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G825",
+        "nr": 6,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G826",
+        "nr": 7,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G827",
+        "nr": 8,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G828",
+        "nr": 9,
+        "description": "OEM G command"
+      },
+      {
+        "id": "G829",
+        "nr": 10,
+        "description": "OEM G command"
+      }
+    ]
+  },
+  {
+    "nr": 33,
+    "title": "G group 33: Settable fine tool offset",
+    "effectiveness": "modal",
+    "short_name": "gg33_fine_tool_offset",
+    "entries": [
+      {
+        "id": "FTOCOF",
+        "nr": 1,
+        "description": "Online fine tool offset OFF"
+      },
+      {
+        "id": "FTOCON",
+        "nr": 2,
+        "description": "Online fine tool offset ON"
+      }
+    ]
+  },
+  {
+    "nr": 34,
+    "title": "G group 34: Tool orientation smoothing",
+    "effectiveness": "modal",
+    "short_name": "gg34_tool_orient_smooth",
+    "entries": [
+      {
+        "id": "OSOF",
+        "nr": 1,
+        "description": "Tool orientation smoothing OFF"
+      },
+      {
+        "id": "OSC",
+        "nr": 2,
+        "description": "Continuous tool orientation smoothing"
+      },
+      {
+        "id": "OSS",
+        "nr": 3,
+        "description": "Tool orientation smoothing at end of block"
+      },
+      {
+        "id": "OSSE",
+        "nr": 4,
+        "description": "Tool orientation smoothing at start and end of block"
+      },
+      {
+        "id": "OSD",
+        "nr": 5,
+        "description": "Block-internal smoothing with specification of path length"
+      },
+      {
+        "id": "OST",
+        "nr": 6,
+        "description": "Block-internal smoothing with specification of angular tolerance"
+      }
+    ]
+  },
+  {
+    "nr": 35,
+    "title": "G group 35: Punching and nibbling",
+    "effectiveness": "modal",
+    "short_name": "gg35_punch_nibble",
+    "entries": [
+      {
+        "id": "SPOF",
+        "nr": 1,
+        "description": "Stroke US, punching and nibbling OFF"
+      },
+      {
+        "id": "SON",
+        "nr": 2,
+        "description": "Nibbling ON"
+      },
+      {
+        "id": "PON",
+        "nr": 3,
+        "description": "Punching ON"
+      },
+      {
+        "id": "SONS",
+        "nr": 4,
+        "description": "Nibbling ON in interpolation cycle"
+      },
+      {
+        "id": "PONS",
+        "nr": 5,
+        "description": "Punching ON in interpolation cycle"
+      }
+    ]
+  },
+  {
+    "nr": 36,
+    "title": "G group 36: Punching with delay",
+    "effectiveness": "modal",
+    "short_name": "gg36_punch_delay",
+    "entries": [
+      {
+        "id": "PDELAYON",
+        "nr": 1,
+        "description": "Punching with delay ON"
+      },
+      {
+        "id": "PDELAYOF",
+        "nr": 2,
+        "description": "Punching with delay OFF"
+      }
+    ]
+  },
+  {
+    "nr": 37,
+    "title": "G group 37: Feedrate profile",
+    "effectiveness": "modal",
+    "short_name": "gg37_feedrate_profile",
+    "entries": [
+      {
+        "id": "FNORM",
+        "nr": 1,
+        "description": "Feedrate normal to DIN 66025"
+      },
+      {
+        "id": "FLIN",
+        "nr": 2,
+        "description": "Feed linear variable"
+      },
+      {
+        "id": "FCUB",
+        "nr": 3,
+        "description": "Feedrate variable according to cubic spline"
+      }
+    ]
+  },
+  {
+    "nr": 39,
+    "title": "G group 39: Programmable contour accuracy",
+    "effectiveness": "modal",
+    "short_name": "gg39_contour_acc",
+    "entries": [
+      {
+        "id": "CPRECOF",
+        "nr": 1,
+        "description": "Programmable contour accuracy OFF"
+      },
+      {
+        "id": "CPRECON",
+        "nr": 2,
+        "description": "Programmable contour accuracy ON"
+      }
+    ]
+  },
+  {
+    "nr": 40,
+    "title": "G group 40: Tool radius compensation constant",
+    "effectiveness": "modal",
+    "short_name": "gg40_tool_radius_const",
+    "entries": [
+      {
+        "id": "CUTCONOF",
+        "nr": 1,
+        "description": "Constant tool radius compensation OFF"
+      },
+      {
+        "id": "CUTCONON",
+        "nr": 2,
+        "description": "Constant tool radius compensation ON"
+      }
+    ]
+  },
+  {
+    "nr": 41,
+    "title": "G group 41: Interruptible thread cutting",
+    "effectiveness": "modal",
+    "short_name": "gg41_thread_interrupt",
+    "entries": [
+      {
+        "id": "LFOF",
+        "nr": 1,
+        "description": "Interruptible thread cutting OFF"
+      },
+      {
+        "id": "LFON",
+        "nr": 2,
+        "description": "Interruptible thread cutting ON"
+      }
+    ]
+  },
+  {
+    "nr": 42,
+    "title": "G group 42: Tool carrier",
+    "effectiveness": "modal",
+    "short_name": "gg42_tool_carrier",
+    "entries": [
+      {
+        "id": "TCOABS",
+        "nr": 1,
+        "description": "Determine tool length components from the current tool orientation"
+      },
+      {
+        "id": "TCOFR",
+        "nr": 2,
+        "description": "Determine tool length components from the orientation of the active frame"
+      },
+      {
+        "id": "TCOFRZ",
+        "nr": 3,
+        "description": "Determine tool orientation of an active frame on selection of tool, tool points in Z direction"
+      },
+      {
+        "id": "TCOFRY",
+        "nr": 4,
+        "description": "Determine tool orientation of an active frame on selection of tool, tool points in Y direction"
+      },
+      {
+        "id": "TCOFRX",
+        "nr": 5,
+        "description": "Determine tool orientation of an active frame on selection of tool, tool points in X direction"
+      }
+    ]
+  },
+  {
+    "nr": 43,
+    "title": "G group 43: SAR approach direction",
+    "effectiveness": "modal",
+    "short_name": "gg43_sar_approach",
+    "entries": [
+      {
+        "id": "G140",
+        "nr": 1,
+        "description": "SAR approach direction defined by G41/G42"
+      },
+      {
+        "id": "G141",
+        "nr": 2,
+        "description": "SAR approach direction to left of contour"
+      },
+      {
+        "id": "G142",
+        "nr": 3,
+        "description": "SAR approach direction to right of contour"
+      },
+      {
+        "id": "G143",
+        "nr": 4,
+        "description": "SAR approach direction tangent-dependent"
+      }
+    ]
+  },
+  {
+    "nr": 44,
+    "title": "G group 44: SAR path segmentation",
+    "effectiveness": "modal",
+    "short_name": "gg44_sar_segment",
+    "entries": [
+      {
+        "id": "G340",
+        "nr": 1,
+        "description": "Spatial approach block; in other words, infeed depth and approach in plane in one block"
+      },
+      {
+        "id": "G341",
+        "nr": 2,
+        "description": "Start with infeed on perpendicular axis (Z), then approach in plane"
+      }
+    ]
+  },
+  {
+    "nr": 45,
+    "title": "G group 45: Path reference for FGROUP axes",
+    "effectiveness": "modal",
+    "short_name": "gg45_path_ref_fgroup",
+    "entries": [
+      {
+        "id": "SPATH",
+        "nr": 1,
+        "description": "Path reference for FGROUP axes is arc length"
+      },
+      {
+        "id": "UPATH",
+        "nr": 2,
+        "description": "Path reference for FGROUP axes is curve parameter"
+      }
+    ]
+  },
+  {
+    "nr": 46,
+    "title": "G group 46: Plane selection for fast retraction",
+    "effectiveness": "modal",
+    "short_name": "gg46_plane_fast_retract",
+    "entries": [
+      {
+        "id": "LFTXT",
+        "nr": 1,
+        "description": "The plane is determined from the path tangent and the current tool orientation"
+      },
+      {
+        "id": "LFWP",
+        "nr": 2,
+        "description": "The plane is determined by the current working plane (G17/G18/G19)"
+      },
+      {
+        "id": "LFPOS",
+        "nr": 3,
+        "description": "Axial retraction to a position"
+      }
+    ]
+  },
+  {
+    "nr": 47,
+    "title": "G group 47: Mode switchover for external NC code",
+    "effectiveness": "modal",
+    "short_name": "gg47_mode_switchover",
+    "entries": [
+      {
+        "id": "G290",
+        "nr": 1,
+        "description": "Activate SINUMERIK language mode"
+      },
+      {
+        "id": "G291",
+        "nr": 2,
+        "description": "Activate ISO language mode"
+      }
+    ]
+  },
+  {
+    "nr": 48,
+    "title": "G group 48: Approach and retraction response with tool radius compensation",
+    "effectiveness": "modal",
+    "short_name": "gg48_approach_retract_trc",
+    "entries": [
+      {
+        "id": "G460",
+        "nr": 1,
+        "description": "Collision detection for approach and retraction block ON"
+      },
+      {
+        "id": "G461",
+        "nr": 2,
+        "description": "Extend border block with arc if no intersection in TRC block"
+      },
+      {
+        "id": "G462",
+        "nr": 3,
+        "description": "Extend border block with straight line if no intersection in TRC block"
+      }
+    ]
+  },
+  {
+    "nr": 49,
+    "title": "G group 49: Point-to-point motion",
+    "effectiveness": "modal",
+    "short_name": "gg49_ptp_motion",
+    "entries": [
+      {
+        "id": "CP",
+        "nr": 1,
+        "description": "Path motion"
+      },
+      {
+        "id": "PTP",
+        "nr": 2,
+        "description": "Point-to-point motion (synchronized axis motion)"
+      },
+      {
+        "id": "PTPG0",
+        "nr": 3,
+        "description": "Point-to-point motion only with G0, otherwise path motion CP"
+      },
+      {
+        "id": "PTPWOC",
+        "nr": 4,
+        "description": "Point-to-point motion without compensationary motion, which is caused by orientation changes"
+      }
+    ]
+  },
+  {
+    "nr": 50,
+    "title": "G group 50: Orientation programming",
+    "effectiveness": "modal",
+    "short_name": "gg50_orient_prog",
+    "entries": [
+      {
+        "id": "ORIEULER",
+        "nr": 1,
+        "description": "Orientation angle via Euler angle"
+      },
+      {
+        "id": "ORIRPY",
+        "nr": 2,
+        "description": "Orientation angle via RPY angle (rotation sequence XYZ)"
+      },
+      {
+        "id": "ORIVIRT1",
+        "nr": 3,
+        "description": "Orientation angle via virtual orientation axes (definition 1)"
+      },
+      {
+        "id": "ORIVIRT2",
+        "nr": 4,
+        "description": "Orientation angle via virtual orientation axes (definition 2)"
+      },
+      {
+        "id": "ORIAXPOS",
+        "nr": 5,
+        "description": "Orientation angle via virtual orientation axes with rotary axis positions"
+      },
+      {
+        "id": "ORIRPY2",
+        "nr": 6,
+        "description": "Orientation angle via RPY angle (rotation sequence ZYX)"
+      }
+    ]
+  },
+  {
+    "nr": 51,
+    "title": "G group 51: Interpolation type for orientation programming",
+    "effectiveness": "modal",
+    "short_name": "gg51_interp_type_orient",
+    "entries": [
+      {
+        "id": "ORIVECT",
+        "nr": 1,
+        "description": "Large-circle interpolation (identical to ORIPLANE)"
+      },
+      {
+        "id": "ORIAXES",
+        "nr": 2,
+        "description": "Linear interpolation of machine axes or orientation axes"
+      },
+      {
+        "id": "ORIPATH",
+        "nr": 3,
+        "description": "Tool orientation trajectory referred to path"
+      },
+      {
+        "id": "ORIPLANE",
+        "nr": 4,
+        "description": "Interpolation in plane (identical to ORIVECT)"
+      },
+      {
+        "id": "ORICONCW",
+        "nr": 5,
+        "description": "Interpolation on the peripheral surface of a taper in the clockwise direction"
+      },
+      {
+        "id": "ORICONCCW",
+        "nr": 6,
+        "description": "Interpolation on the peripheral surface of a taper in the counter-clockwise direction"
+      },
+      {
+        "id": "ORICONIO",
+        "nr": 7,
+        "description": "Interpolation on a conical peripheral surface with intermediate orientation setting"
+      },
+      {
+        "id": "ORICONTO",
+        "nr": 8,
+        "description": "Interpolation on a peripheral surface of the cone with tangential transition"
+      },
+      {
+        "id": "ORICURVE",
+        "nr": 9,
+        "description": "Interpolation with additional space curve for orientation"
+      },
+      {
+        "id": "ORIPATHS",
+        "nr": 10,
+        "description": "Tool orientation in relation to the path, kinks in the orientation characteristic are smoothed"
+      }
+    ]
+  },
+  {
+    "nr": 52,
+    "title": "G group 52: Frame rotation in relation to workpiece",
+    "effectiveness": "modal",
+    "short_name": "gg52_frame_rot_wp",
+    "entries": [
+      {
+        "id": "PAROTOF",
+        "nr": 1,
+        "description": "Frame rotation in relation to workpiece OFF"
+      },
+      {
+        "id": "PAROT",
+        "nr": 2,
+        "description": "Frame rotation in relation to workpiece ON The workpiece coordinate system is aligned on the workpiece."
+      }
+    ]
+  },
+  {
+    "nr": 53,
+    "title": "G group 53: Taking into account tool wear",
+    "effectiveness": "modal",
+    "short_name": "gg53_tool_wear",
+    "entries": [
+      {
+        "id": "TOWSTD",
+        "nr": 1,
+        "description": "Initial setting value for offsets in tool length"
+      },
+      {
+        "id": "TOWMCS",
+        "nr": 2,
+        "description": "Wear values in the machine coordinate system (MCS)"
+      },
+      {
+        "id": "TOWWCS",
+        "nr": 3,
+        "description": "Wear values in the workpiece coordinate system (WCS)"
+      },
+      {
+        "id": "TOWBCS",
+        "nr": 4,
+        "description": "Wear values in the basic coordinate system (BCS)"
+      },
+      {
+        "id": "TOWTCS",
+        "nr": 5,
+        "description": "Wear values in the tool coordinate system (toolholder ref. point T at the toolholder)"
+      },
+      {
+        "id": "TOWKCS",
+        "nr": 6,
+        "description": "Wear values in the coordinate system of the tool head for kinetic transformation (differs from machine coordinate system through tool rotation)"
+      }
+    ]
+  },
+  {
+    "nr": 54,
+    "title": "G group 54: Vector rotation for polynomial programming",
+    "effectiveness": "modal",
+    "short_name": "gg54_vector_rot_poly",
+    "entries": [
+      {
+        "id": "ORIROTA",
+        "nr": 1,
+        "description": "Vector rotation absolute"
+      },
+      {
+        "id": "ORIROTR",
+        "nr": 2,
+        "description": "Vector rotation relative"
+      },
+      {
+        "id": "ORIROTT",
+        "nr": 3,
+        "description": "Vector rotation tangential"
+      },
+      {
+        "id": "ORIROTC",
+        "nr": 4,
+        "description": "Tangential rotational vector in relation to path tangent"
+      }
+    ]
+  },
+  {
+    "nr": 55,
+    "title": "G group 55: Rapid traverse with/without linear interpolation",
+    "effectiveness": "modal",
+    "short_name": "gg55_rapid_traverse",
+    "entries": [
+      {
+        "id": "RTLION",
+        "nr": 1,
+        "description": "Rapid traverse motion with linear interpolation ON"
+      },
+      {
+        "id": "RTLIOF",
+        "nr": 2,
+        "description": "Rapid traverse motion with linear interpolation OFF (Rapid traverse motion is achieved with single-axis interpolation)"
+      }
+    ]
+  },
+  {
+    "nr": 56,
+    "title": "G group 56: Frame rotation in relation to tool",
+    "effectiveness": "modal",
+    "short_name": "gg56_frame_rot_tool",
+    "entries": [
+      {
+        "id": "TOROTOF",
+        "nr": 1,
+        "description": "Frame rotation in relation to tool OFF"
+      },
+      {
+        "id": "TOROT",
+        "nr": 2,
+        "description": "Align Z axis of the WCS by rotating the frame parallel to the tool orientation"
+      },
+      {
+        "id": "TOROTZ",
+        "nr": 3,
+        "description": "As TOROT"
+      },
+      {
+        "id": "TOROTY",
+        "nr": 4,
+        "description": "Align Y axis of the WCS by rotating the frame parallel to the tool orientation"
+      },
+      {
+        "id": "TOROTX",
+        "nr": 5,
+        "description": "Align X axis of the WCS by rotating the frame parallel to the tool orientation"
+      },
+      {
+        "id": "TOFRAME",
+        "nr": 6,
+        "description": "Align Z axis of the WCS by rotating the frame parallel to the tool orientation"
+      },
+      {
+        "id": "TOFRAMEZ",
+        "nr": 7,
+        "description": "As TOFRAME"
+      },
+      {
+        "id": "TOFRAMEY",
+        "nr": 8,
+        "description": "Align Y axis of the WCS by rotating the frame parallel to the tool orientation"
+      },
+      {
+        "id": "TOFRAMEX",
+        "nr": 9,
+        "description": "Align X axis of the WCS by rotating the frame parallel to the tool orientation"
+      }
+    ]
+  },
+  {
+    "nr": 57,
+    "title": "G group 57: Corner deceleration",
+    "effectiveness": "modal",
+    "short_name": "gg57_corner_decel",
+    "entries": [
+      {
+        "id": "FENDNORM",
+        "nr": 1,
+        "description": "Corner deceleration OFF"
+      },
+      {
+        "id": "G62",
+        "nr": 2,
+        "description": "Corner deceleration at inside corners when tool radius compensation is active (G41/G42)"
+      },
+      {
+        "id": "G621",
+        "nr": 3,
+        "description": "Corner deceleration at all corners"
+      }
+    ]
+  },
+  {
+    "nr": 58,
+    "title": "G group 59: Dynamic response mode for path interpolation",
+    "effectiveness": "modal",
+    "short_name": "gg58_dyn_resp_path",
+    "entries": [
+      {
+        "id": "DYNNORM",
+        "nr": 1,
+        "description": "Standard dynamic response"
+      },
+      {
+        "id": "DYNPOS",
+        "nr": 2,
+        "description": "Positioning mode, tapping"
+      },
+      {
+        "id": "DYNROUGH",
+        "nr": 3,
+        "description": "Roughing"
+      },
+      {
+        "id": "DYNSEMIFIN",
+        "nr": 4,
+        "description": "Rough finishing"
+      },
+      {
+        "id": "DYNFINISH",
+        "nr": 5,
+        "description": "Finishing"
+      },
+      {
+        "id": "DYNPREC",
+        "nr": 6,
+        "description": "Smooth finishing"
+      }
+    ]
+  },
+  {
+    "nr": 59,
+    "title": "G group 60: Working area limitation",
+    "effectiveness": "modal",
+    "short_name": "gg59_area_limit",
+    "entries": [
+      {
+        "id": "WALCS0",
+        "nr": 1,
+        "description": "Workpiece coordinate system working area limitation OFF"
+      },
+      {
+        "id": "WALCS1",
+        "nr": 2,
+        "description": "WCS working area limitation group 1 active"
+      },
+      {
+        "id": "WALCS2",
+        "nr": 3,
+        "description": "WCS working area limitation group 2 active"
+      },
+      {
+        "id": "WALCS3",
+        "nr": 4,
+        "description": "WCS working area limitation group 3 active"
+      },
+      {
+        "id": "WALCS4",
+        "nr": 5,
+        "description": "WCS working area limitation group 4 active"
+      },
+      {
+        "id": "WALCS5",
+        "nr": 6,
+        "description": "WCS working area limitation group 5 active"
+      },
+      {
+        "id": "WALCS6",
+        "nr": 7,
+        "description": "WCS working area limitation group 6 active"
+      },
+      {
+        "id": "WALCS7",
+        "nr": 8,
+        "description": "WCS working area limitation group 7 active"
+      },
+      {
+        "id": "WALCS8",
+        "nr": 9,
+        "description": "WCS working area limitation group 8 active"
+      },
+      {
+        "id": "WALCS9",
+        "nr": 10,
+        "description": "WCS working area limitation group 9 active"
+      },
+      {
+        "id": "WALCS10",
+        "nr": 11,
+        "description": "WCS working area limitation group 10 active"
+      }
+    ]
+  },
+  {
+    "nr": 61,
+    "title": "G group 61: Tool orientation smoothing",
+    "effectiveness": "modal",
+    "short_name": "gg61_tool_orient_smooth",
+    "entries": [
+      {
+        "id": "ORISOF",
+        "nr": 1,
+        "description": "Tool orientation smoothing OFF"
+      },
+      {
+        "id": "ORISON",
+        "nr": 2,
+        "description": "Tool orientation smoothing ON"
+      }
+    ]
+  },
+  {
+    "nr": 62,
+    "title": "G group 62: Repositioning mode for REPOS (non-modal)",
+    "effectiveness": "non-modal",
+    "short_name": "gg62_repos_non_modal",
+    "entries": [
+      {
+        "id": "RMBBL",
+        "nr": 1,
+        "description": "Repositioning to start of block"
+      },
+      {
+        "id": "RMIBL",
+        "nr": 2,
+        "description": "Repositioning to interrupt point"
+      },
+      {
+        "id": "RMEBL",
+        "nr": 3,
+        "description": "Repositioning to end of block"
+      },
+      {
+        "id": "RMNBL",
+        "nr": 4,
+        "description": "Repositioning to the nearest path point"
+      }
+    ]
+  },
+  {
+    "nr": 64,
+    "title": "G group 64: Grinding frames",
+    "effectiveness": "modal",
+    "short_name": "gg64_grinding_frames",
+    "entries": [
+      {
+        "id": "GFRAME[0]",
+        "nr": 1,
+        "description": "Grinding frame of the data management $P_GFR[0] (null frame)"
+      },
+      {
+        "id": "GFRAME[1]",
+        "nr": 1,
+        "description": "Grinding frame of the data management $P_GFR[1]"
+      },
+      {
+        "id": "GFRAME[2]",
+        "nr": 2,
+        "description": "Grinding frame of the data management $P_GFR[2]"
+      },
+      {
+        "id": "GFRAME[3]",
+        "nr": 3,
+        "description": "Grinding frame of the data management $P_GFR[3]"
+      },
+      {
+        "id": "GFRAME[4]",
+        "nr": 4,
+        "description": "Grinding frame of the data management $P_GFR[4]"
+      },
+      {
+        "id": "GFRAME[5]",
+        "nr": 5,
+        "description": "Grinding frame of the data management $P_GFR[5]"
+      },
+      {
+        "id": "GFRAME[6]",
+        "nr": 6,
+        "description": "Grinding frame of the data management $P_GFR[6]"
+      },
+      {
+        "id": "GFRAME[7]",
+        "nr": 7,
+        "description": "Grinding frame of the data management $P_GFR[7]"
+      },
+      {
+        "id": "GFRAME[8]",
+        "nr": 8,
+        "description": "Grinding frame of the data management $P_GFR[8]"
+      },
+      {
+        "id": "GFRAME[9]",
+        "nr": 9,
+        "description": "Grinding frame of the data management $P_GFR[9]"
+      },
+      {
+        "id": "GFRAME[10]",
+        "nr": 10,
+        "description": "Grinding frame of the data management $P_GFR[10]"
+      },
+      {
+        "id": "GFRAME[11]",
+        "nr": 11,
+        "description": "Grinding frame of the data management $P_GFR[11]"
+      },
+      {
+        "id": "GFRAME[12]",
+        "nr": 12,
+        "description": "Grinding frame of the data management $P_GFR[12]"
+      },
+      {
+        "id": "GFRAME[13]",
+        "nr": 13,
+        "description": "Grinding frame of the data management $P_GFR[13]"
+      },
+      {
+        "id": "GFRAME[14]",
+        "nr": 14,
+        "description": "Grinding frame of the data management $P_GFR[14]"
+      },
+      {
+        "id": "GFRAME[15]",
+        "nr": 15,
+        "description": "Grinding frame of the data management $P_GFR[15]"
+      },
+      {
+        "id": "GFRAME[16]",
+        "nr": 16,
+        "description": "Grinding frame of the data management $P_GFR[16]"
+      },
+      {
+        "id": "GFRAME[17]",
+        "nr": 17,
+        "description": "Grinding frame of the data management $P_GFR[17]"
+      },
+      {
+        "id": "GFRAME[18]",
+        "nr": 18,
+        "description": "Grinding frame of the data management $P_GFR[18]"
+      },
+      {
+        "id": "GFRAME[19]",
+        "nr": 19,
+        "description": "Grinding frame of the data management $P_GFR[19]"
+      },
+      {
+        "id": "GFRAME[20]",
+        "nr": 20,
+        "description": "Grinding frame of the data management $P_GFR[20]"
+      },
+      {
+        "id": "GFRAME[21]",
+        "nr": 21,
+        "description": "Grinding frame of the data management $P_GFR[21]"
+      },
+      {
+        "id": "GFRAME[22]",
+        "nr": 22,
+        "description": "Grinding frame of the data management $P_GFR[22]"
+      },
+      {
+        "id": "GFRAME[23]",
+        "nr": 23,
+        "description": "Grinding frame of the data management $P_GFR[23]"
+      },
+      {
+        "id": "GFRAME[24]",
+        "nr": 24,
+        "description": "Grinding frame of the data management $P_GFR[24]"
+      },
+      {
+        "id": "GFRAME[25]",
+        "nr": 25,
+        "description": "Grinding frame of the data management $P_GFR[25]"
+      },
+      {
+        "id": "GFRAME[26]",
+        "nr": 26,
+        "description": "Grinding frame of the data management $P_GFR[26]"
+      },
+      {
+        "id": "GFRAME[27]",
+        "nr": 27,
+        "description": "Grinding frame of the data management $P_GFR[27]"
+      },
+      {
+        "id": "GFRAME[28]",
+        "nr": 28,
+        "description": "Grinding frame of the data management $P_GFR[28]"
+      },
+      {
+        "id": "GFRAME[29]",
+        "nr": 29,
+        "description": "Grinding frame of the data management $P_GFR[29]"
+      },
+      {
+        "id": "GFRAME[30]",
+        "nr": 30,
+        "description": "Grinding frame of the data management $P_GFR[30]"
+      },
+      {
+        "id": "GFRAME[31]",
+        "nr": 31,
+        "description": "Grinding frame of the data management $P_GFR[31]"
+      },
+      {
+        "id": "GFRAME[32]",
+        "nr": 32,
+        "description": "Grinding frame of the data management $P_GFR[32]"
+      },
+      {
+        "id": "GFRAME[33]",
+        "nr": 33,
+        "description": "Grinding frame of the data management $P_GFR[33]"
+      },
+      {
+        "id": "GFRAME[34]",
+        "nr": 34,
+        "description": "Grinding frame of the data management $P_GFR[34]"
+      },
+      {
+        "id": "GFRAME[35]",
+        "nr": 35,
+        "description": "Grinding frame of the data management $P_GFR[35]"
+      },
+      {
+        "id": "GFRAME[36]",
+        "nr": 36,
+        "description": "Grinding frame of the data management $P_GFR[36]"
+      },
+      {
+        "id": "GFRAME[37]",
+        "nr": 37,
+        "description": "Grinding frame of the data management $P_GFR[37]"
+      },
+      {
+        "id": "GFRAME[38]",
+        "nr": 38,
+        "description": "Grinding frame of the data management $P_GFR[38]"
+      },
+      {
+        "id": "GFRAME[39]",
+        "nr": 39,
+        "description": "Grinding frame of the data management $P_GFR[39]"
+      },
+      {
+        "id": "GFRAME[40]",
+        "nr": 40,
+        "description": "Grinding frame of the data management $P_GFR[40]"
+      },
+      {
+        "id": "GFRAME[41]",
+        "nr": 41,
+        "description": "Grinding frame of the data management $P_GFR[41]"
+      },
+      {
+        "id": "GFRAME[42]",
+        "nr": 42,
+        "description": "Grinding frame of the data management $P_GFR[42]"
+      },
+      {
+        "id": "GFRAME[43]",
+        "nr": 43,
+        "description": "Grinding frame of the data management $P_GFR[43]"
+      },
+      {
+        "id": "GFRAME[44]",
+        "nr": 44,
+        "description": "Grinding frame of the data management $P_GFR[44]"
+      },
+      {
+        "id": "GFRAME[45]",
+        "nr": 45,
+        "description": "Grinding frame of the data management $P_GFR[45]"
+      },
+      {
+        "id": "GFRAME[46]",
+        "nr": 46,
+        "description": "Grinding frame of the data management $P_GFR[46]"
+      },
+      {
+        "id": "GFRAME[47]",
+        "nr": 47,
+        "description": "Grinding frame of the data management $P_GFR[47]"
+      },
+      {
+        "id": "GFRAME[48]",
+        "nr": 48,
+        "description": "Grinding frame of the data management $P_GFR[48]"
+      },
+      {
+        "id": "GFRAME[49]",
+        "nr": 49,
+        "description": "Grinding frame of the data management $P_GFR[49]"
+      },
+      {
+        "id": "GFRAME[50]",
+        "nr": 50,
+        "description": "Grinding frame of the data management $P_GFR[50]"
+      },
+      {
+        "id": "GFRAME[51]",
+        "nr": 51,
+        "description": "Grinding frame of the data management $P_GFR[51]"
+      },
+      {
+        "id": "GFRAME[52]",
+        "nr": 52,
+        "description": "Grinding frame of the data management $P_GFR[52]"
+      },
+      {
+        "id": "GFRAME[53]",
+        "nr": 53,
+        "description": "Grinding frame of the data management $P_GFR[53]"
+      },
+      {
+        "id": "GFRAME[54]",
+        "nr": 54,
+        "description": "Grinding frame of the data management $P_GFR[54]"
+      },
+      {
+        "id": "GFRAME[55]",
+        "nr": 55,
+        "description": "Grinding frame of the data management $P_GFR[55]"
+      },
+      {
+        "id": "GFRAME[56]",
+        "nr": 56,
+        "description": "Grinding frame of the data management $P_GFR[56]"
+      },
+      {
+        "id": "GFRAME[57]",
+        "nr": 57,
+        "description": "Grinding frame of the data management $P_GFR[57]"
+      },
+      {
+        "id": "GFRAME[58]",
+        "nr": 58,
+        "description": "Grinding frame of the data management $P_GFR[58]"
+      },
+      {
+        "id": "GFRAME[59]",
+        "nr": 59,
+        "description": "Grinding frame of the data management $P_GFR[59]"
+      },
+      {
+        "id": "GFRAME[60]",
+        "nr": 60,
+        "description": "Grinding frame of the data management $P_GFR[60]"
+      },
+      {
+        "id": "GFRAME[61]",
+        "nr": 61,
+        "description": "Grinding frame of the data management $P_GFR[61]"
+      },
+      {
+        "id": "GFRAME[62]",
+        "nr": 62,
+        "description": "Grinding frame of the data management $P_GFR[62]"
+      },
+      {
+        "id": "GFRAME[63]",
+        "nr": 63,
+        "description": "Grinding frame of the data management $P_GFR[63]"
+      },
+      {
+        "id": "GFRAME[64]",
+        "nr": 64,
+        "description": "Grinding frame of the data management $P_GFR[64]"
+      },
+      {
+        "id": "GFRAME[65]",
+        "nr": 65,
+        "description": "Grinding frame of the data management $P_GFR[65]"
+      },
+      {
+        "id": "GFRAME[66]",
+        "nr": 66,
+        "description": "Grinding frame of the data management $P_GFR[66]"
+      },
+      {
+        "id": "GFRAME[67]",
+        "nr": 67,
+        "description": "Grinding frame of the data management $P_GFR[67]"
+      },
+      {
+        "id": "GFRAME[68]",
+        "nr": 68,
+        "description": "Grinding frame of the data management $P_GFR[68]"
+      },
+      {
+        "id": "GFRAME[69]",
+        "nr": 69,
+        "description": "Grinding frame of the data management $P_GFR[69]"
+      },
+      {
+        "id": "GFRAME[70]",
+        "nr": 70,
+        "description": "Grinding frame of the data management $P_GFR[70]"
+      },
+      {
+        "id": "GFRAME[71]",
+        "nr": 71,
+        "description": "Grinding frame of the data management $P_GFR[71]"
+      },
+      {
+        "id": "GFRAME[72]",
+        "nr": 72,
+        "description": "Grinding frame of the data management $P_GFR[72]"
+      },
+      {
+        "id": "GFRAME[73]",
+        "nr": 73,
+        "description": "Grinding frame of the data management $P_GFR[73]"
+      },
+      {
+        "id": "GFRAME[74]",
+        "nr": 74,
+        "description": "Grinding frame of the data management $P_GFR[74]"
+      },
+      {
+        "id": "GFRAME[75]",
+        "nr": 75,
+        "description": "Grinding frame of the data management $P_GFR[75]"
+      },
+      {
+        "id": "GFRAME[76]",
+        "nr": 76,
+        "description": "Grinding frame of the data management $P_GFR[76]"
+      },
+      {
+        "id": "GFRAME[77]",
+        "nr": 77,
+        "description": "Grinding frame of the data management $P_GFR[77]"
+      },
+      {
+        "id": "GFRAME[78]",
+        "nr": 78,
+        "description": "Grinding frame of the data management $P_GFR[78]"
+      },
+      {
+        "id": "GFRAME[79]",
+        "nr": 79,
+        "description": "Grinding frame of the data management $P_GFR[79]"
+      },
+      {
+        "id": "GFRAME[80]",
+        "nr": 80,
+        "description": "Grinding frame of the data management $P_GFR[80]"
+      },
+      {
+        "id": "GFRAME[81]",
+        "nr": 81,
+        "description": "Grinding frame of the data management $P_GFR[81]"
+      },
+      {
+        "id": "GFRAME[82]",
+        "nr": 82,
+        "description": "Grinding frame of the data management $P_GFR[82]"
+      },
+      {
+        "id": "GFRAME[83]",
+        "nr": 83,
+        "description": "Grinding frame of the data management $P_GFR[83]"
+      },
+      {
+        "id": "GFRAME[84]",
+        "nr": 84,
+        "description": "Grinding frame of the data management $P_GFR[84]"
+      },
+      {
+        "id": "GFRAME[85]",
+        "nr": 85,
+        "description": "Grinding frame of the data management $P_GFR[85]"
+      },
+      {
+        "id": "GFRAME[86]",
+        "nr": 86,
+        "description": "Grinding frame of the data management $P_GFR[86]"
+      },
+      {
+        "id": "GFRAME[87]",
+        "nr": 87,
+        "description": "Grinding frame of the data management $P_GFR[87]"
+      },
+      {
+        "id": "GFRAME[88]",
+        "nr": 88,
+        "description": "Grinding frame of the data management $P_GFR[88]"
+      },
+      {
+        "id": "GFRAME[89]",
+        "nr": 89,
+        "description": "Grinding frame of the data management $P_GFR[89]"
+      },
+      {
+        "id": "GFRAME[90]",
+        "nr": 90,
+        "description": "Grinding frame of the data management $P_GFR[90]"
+      },
+      {
+        "id": "GFRAME[91]",
+        "nr": 91,
+        "description": "Grinding frame of the data management $P_GFR[91]"
+      },
+      {
+        "id": "GFRAME[92]",
+        "nr": 92,
+        "description": "Grinding frame of the data management $P_GFR[92]"
+      },
+      {
+        "id": "GFRAME[93]",
+        "nr": 93,
+        "description": "Grinding frame of the data management $P_GFR[93]"
+      },
+      {
+        "id": "GFRAME[94]",
+        "nr": 94,
+        "description": "Grinding frame of the data management $P_GFR[94]"
+      },
+      {
+        "id": "GFRAME[95]",
+        "nr": 95,
+        "description": "Grinding frame of the data management $P_GFR[95]"
+      },
+      {
+        "id": "GFRAME[96]",
+        "nr": 96,
+        "description": "Grinding frame of the data management $P_GFR[96]"
+      },
+      {
+        "id": "GFRAME[97]",
+        "nr": 97,
+        "description": "Grinding frame of the data management $P_GFR[97]"
+      },
+      {
+        "id": "GFRAME[98]",
+        "nr": 98,
+        "description": "Grinding frame of the data management $P_GFR[98]"
+      },
+      {
+        "id": "GFRAME[99]",
+        "nr": 99,
+        "description": "Grinding frame of the data management $P_GFR[99]"
+      },
+      {
+        "id": "GFRAME[100]",
+        "nr": 100,
+        "description": "Grinding frame of the data management $P_GFR[100]"
+      }
+    ]
+  }
+]

@@ -1,0 +1,6 @@
+;some default values all files can be parsed
+DEF INT bb,aa=12
+DEF REAL START_CC=10, START_CC_SPEED=0.5, EXTRUSION_MULTIPLIER=1, RETRACT_CC=1
+aa = aa+3
+bb = 9
+X=1600 Y=900 Z=0 E=0

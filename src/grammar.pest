@@ -1,0 +1,249 @@
+file                =  { SOI ~ blocks ~ newline? ~ EOI }
+blocks              =  { block ~ (newline ~ block)* }
+newline             = _{ "\n" | "\r\n" }
+WHITESPACE          = _{ " " | "\t" }
+comment             =  { ";" ~ (!newline ~ ANY)* }
+block               =  { block_number_set? ~ (definition | frame_op | control | statement*) ~ comment? }
+block_number_set    = _{ "N" ~ block_number }
+control             =  {
+    goto_statement
+  | gotob_statement
+  | gotof_statement
+  | gotoc_statement
+  | if_statement
+  | loop_statement
+  | for_statement
+  | while_statement
+  | repeat_statement
+}
+goto_statement      =  { ^"GOTO" ~ label }
+gotob_statement     =  { ^"GOTOB" ~ block_number }
+gotof_statement     =  { ^"GOTOF" ~ block_number }
+gotoc_statement     =  { ^"GOTOC" ~ condition ~ newline ~ label }
+if_statement        =  { ^"IF" ~ condition ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
+loop_statement      =  { ^"LOOP" ~ blocks ~ ^"ENDLOOP" }
+for_statement       =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ blocks ~ ^"ENDFOR" }
+while_statement     =  { ^"WHILE" ~ condition ~ blocks ~ ^"ENDWHILE" }
+repeat_statement    =  { ^"REPEAT" ~ blocks ~ ^"UNTIL" ~ condition }
+label               =  { ^"LABEL" ~ identifier }
+block_number        =  { integer }
+condition           =  { base_condition | ("(" ~ base_condition ~ ")") }
+base_condition      = _{ (expression ~ relational_operator ~ expression) | expression }
+relational_operator =  { "<=" | ">=" | "<" | ">" | "==" | "<>" }
+statement           =  {
+    g_command
+  | m_command
+  | assignment_multi
+  | assignment
+  | function_call
+  | tool_selection
+}
+
+// local variable definitions
+definition = { ^"DEF" ~ data_type ~ (assignment_multi | assignment | variable_array | variable) ~ ("," ~ (assignment_multi | assignment | variable_array | variable))* }
+data_type  = { ^"INT" | ^"REAL" | ^"BOOL" }
+
+// basic math expression interpreter
+expression =  { prefix* ~ primary ~ (op ~ prefix* ~ primary)* }
+reserved   = _{
+    ^"IF"
+  | ^"ELSE"
+  | ^"ENDIF"
+  | ^"GOTO"
+  | ^"GOTOB"
+  | ^"GOTOF"
+  | ^"GOTOC"
+  | ^"LOOP"
+  | ^"FOR"
+  | ^"WHILE"
+  | ^"REPEAT"
+  | ^"LABEL"
+  | ^"TO"
+  | ^"UNTIL"
+  | ^"ENDWHILE"
+  | ^"ENDFOR"
+}
+
+identifier = @{
+    !(reserved) ~ (ASCII_ALPHANUMERIC | "_")+ ~ !(ASCII_ALPHANUMERIC | "_")
+}
+
+variable             =  { (nc_variable | identifier) }
+variable_single_char = @{ ASCII_ALPHA }
+// must be an axis
+variable_array = { (nc_variable | identifier) ~ "[" ~ indices ~ "]" }
+indices        = { expression ~ ("," ~ expression)* }
+assignment     = {
+    (variable_single_char ~ value) // variable must be an axis
+
+  | (variable ~ "=" ~ axis_increment) // variable must be an axis, and may be a normal variable. Sort it out after parsing
+
+  | (variable ~ "=" ~ expression) // variable may be an axis, and may be a normal variable. Sort it out after parsing
+
+  | (variable_array ~ "=" ~ expression) // variable may not be an axis
+}
+axis_increment = { ^"IC" ~ "(" ~ expression ~ ")" }
+
+assignment_multi =  { variable_array ~ "=" ~ (value_array | value_repeating) }
+value_array      =  { "SET" ~ "(" ~ (expression | value_none) ~ ("," ~ (expression | value_none))* ~ ")" }
+value_repeating  =  { "REP" ~ "(" ~ expression ~ ("," ~ expression)? ~ ")" }
+value_none       =  { "" }
+value            =  { float | integer }
+op               = _{ op_add | op_sub | op_mul | op_div | op_int_div | op_mod }
+op_add           =  { "+" }
+op_sub           =  { "-" }
+op_mul           =  { "*" }
+op_div           =  { "/" }
+op_int_div       =  { "DIV" }
+op_mod           =  { "MOD" }
+prefix           = _{ neg }
+neg              =  { "-" }
+primary          =  { value | variable_array | variable | "(" ~ expression ~ ")" }
+float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* }
+integer          = @{ "-"? ~ ASCII_DIGIT+ }
+
+tool_selection = { "T" ~ "=" ~ string }
+
+// frame instructions
+frame_op     = { frame_trans | frame_scale | frame_atrans | frame_ascale }
+frame_trans  = { ^"TRANS" ~ assignment+ }
+frame_scale  = { ^"SCALE" ~ assignment+ }
+frame_atrans = { ^"ATRANS" ~ assignment+ }
+frame_ascale = { ^"ASCALE" ~ assignment+ }
+
+// function call parser
+function_call      = { identifier ~ ("(" ~ function_arguments? ~ ")")? }
+function_arguments = { ((expression | string)? ~ ",")* ~ (expression | string) }
+string             = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+// builtins, globally available names
+nc_variable = { "$" ~ identifier }
+
+m_command = { "M" ~ ASCII_DIGIT+ }
+
+// G-Code ggroups
+// This Pest grammar file is auto-generated from G-Code definitions.
+// Due to the way pest works, the sorting of the literals is important.
+
+gg01_motion                = @{ (^"POLY" | ^"OEMIPO2" | ^"OEMIPO1" | ^"INVCW" | ^"INVCCW" | ^"G35" | ^"G34" | ^"G336" | ^"G335" | ^"G332" | ^"G331" | ^"G33" | ^"G3" | ^"G2" | ^"G1" | ^"G0" | ^"CT" | ^"CSPLINE" | ^"CIP" | ^"BSPLINE" | ^"ASPLINE") ~ !(ASCII_ALPHANUMERIC) }
+gg02_wait                  = @{ (^"REPOSQA" | ^"REPOSQ" | ^"REPOSL" | ^"REPOSHA" | ^"REPOSH" | ^"REPOSA" | ^"G75" | ^"G74" | ^"G7" | ^"G63" | ^"G5" | ^"G4" | ^"G348" | ^"G347" | ^"G248" | ^"G247" | ^"G148" | ^"G147") ~ !(ASCII_ALPHANUMERIC) }
+gg03_frame_area_limit      = @{ (^"TRANS" | ^"SCALE" | ^"ROTS" | ^"ROT" | ^"MIRROR" | ^"G59" | ^"G58" | ^"G26" | ^"G25" | ^"G112" | ^"G111" | ^"G110" | ^"ATRANS" | ^"ASCALE" | ^"AROTS" | ^"AROT" | ^"AMIRROR") ~ !(ASCII_ALPHANUMERIC) }
+gg04_fifo                  = @{ (^"STOPFIFO" | ^"STARTFIFO" | ^"FIFOCTRL") ~ !(ASCII_ALPHANUMERIC) }
+gg06_plane_select          = @{ (^"G19" | ^"G18" | ^"G17") ~ !(ASCII_ALPHANUMERIC) }
+gg07_tool_radius           = @{ (^"G42" | ^"G41" | ^"G40") ~ !(ASCII_ALPHANUMERIC) }
+gg08_work_offset           = @{ (^"G599" | ^"G598" | ^"G597" | ^"G596" | ^"G595" | ^"G594" | ^"G593" | ^"G592" | ^"G591" | ^"G590" | ^"G589" | ^"G588" | ^"G587" | ^"G586" | ^"G585" | ^"G584" | ^"G583" | ^"G582" | ^"G581" | ^"G580" | ^"G579" | ^"G578" | ^"G577" | ^"G576" | ^"G575" | ^"G574" | ^"G573" | ^"G572" | ^"G571" | ^"G570" | ^"G57" | ^"G569" | ^"G568" | ^"G567" | ^"G566" | ^"G565" | ^"G564" | ^"G563" | ^"G562" | ^"G561" | ^"G560" | ^"G56" | ^"G559" | ^"G558" | ^"G557" | ^"G556" | ^"G555" | ^"G554" | ^"G553" | ^"G552" | ^"G551" | ^"G550" | ^"G55" | ^"G549" | ^"G548" | ^"G547" | ^"G546" | ^"G545" | ^"G544" | ^"G543" | ^"G542" | ^"G541" | ^"G540" | ^"G54" | ^"G539" | ^"G538" | ^"G537" | ^"G536" | ^"G535" | ^"G534" | ^"G533" | ^"G532" | ^"G531" | ^"G530" | ^"G529" | ^"G528" | ^"G527" | ^"G526" | ^"G525" | ^"G524" | ^"G523" | ^"G522" | ^"G521" | ^"G520" | ^"G519" | ^"G518" | ^"G517" | ^"G516" | ^"G515" | ^"G514" | ^"G513" | ^"G512" | ^"G511" | ^"G510" | ^"G509" | ^"G508" | ^"G507" | ^"G506" | ^"G505" | ^"G500") ~ !(ASCII_ALPHANUMERIC) }
+gg09_frame_tool_suppress   = @{ (^"SUPD" | ^"SUPA" | ^"G53" | ^"G153") ~ !(ASCII_ALPHANUMERIC) }
+gg10_exact_stop_mode       = @{ (^"G645" | ^"G644" | ^"G643" | ^"G642" | ^"G641" | ^"G64" | ^"G60") ~ !(ASCII_ALPHANUMERIC) }
+gg11_exact_stop_non_modal  = @{ (^"G9") ~ !(ASCII_ALPHANUMERIC) }
+gg12_block_change_g60_g9   = @{ (^"G603" | ^"G602" | ^"G601") ~ !(ASCII_ALPHANUMERIC) }
+gg13_wp_measure            = @{ (^"G710" | ^"G71" | ^"G700" | ^"G70") ~ !(ASCII_ALPHANUMERIC) }
+gg14_wp_measure_mode       = @{ (^"G91" | ^"G90") ~ !(ASCII_ALPHANUMERIC) }
+gg15_feed_type             = @{ (^"G973" | ^"G972" | ^"G971" | ^"G97" | ^"G962" | ^"G961" | ^"G96" | ^"G952" | ^"G95" | ^"G942" | ^"G94" | ^"G931" | ^"G93") ~ !(ASCII_ALPHANUMERIC) }
+gg16_feedrate_override     = @{ (^"CFTCP" | ^"CFIN" | ^"CFC") ~ !(ASCII_ALPHANUMERIC) }
+gg17_approach_retract_tool = @{ (^"NORM" | ^"KONTT" | ^"KONTC" | ^"KONT") ~ !(ASCII_ALPHANUMERIC) }
+gg18_corner_behavior       = @{ (^"G451" | ^"G450") ~ !(ASCII_ALPHANUMERIC) }
+gg19_curve_start_spline    = @{ (^"BTAN" | ^"BNAT" | ^"BAUTO") ~ !(ASCII_ALPHANUMERIC) }
+gg20_curve_end_spline      = @{ (^"ETAN" | ^"ENAT" | ^"EAUTO") ~ !(ASCII_ALPHANUMERIC) }
+gg21_accel_profile         = @{ (^"SOFT" | ^"DRIVE" | ^"BRISK") ~ !(ASCII_ALPHANUMERIC) }
+gg22_tool_offset_type      = @{ (^"CUT3DFS" | ^"CUT3DFF" | ^"CUT3DFD" | ^"CUT3DF" | ^"CUT3DCD" | ^"CUT3DCCD" | ^"CUT3DCC" | ^"CUT3DC" | ^"CUT2DFD" | ^"CUT2DF" | ^"CUT2DD" | ^"CUT2D") ~ !(ASCII_ALPHANUMERIC) }
+gg23_collision_monitor     = @{ (^"CDON" | ^"CDOF2" | ^"CDOF") ~ !(ASCII_ALPHANUMERIC) }
+gg24_precontrol            = @{ (^"FFWON" | ^"FFWOF") ~ !(ASCII_ALPHANUMERIC) }
+gg25_tool_orient_ref       = @{ (^"ORIWKS" | ^"ORIMKS") ~ !(ASCII_ALPHANUMERIC) }
+gg26_repos_mode            = @{ (^"RMN" | ^"RMI" | ^"RME" | ^"RMB") ~ !(ASCII_ALPHANUMERIC) }
+gg27_tool_offset_change    = @{ (^"ORID" | ^"ORIC") ~ !(ASCII_ALPHANUMERIC) }
+gg28_area_limit            = @{ (^"WALIMON" | ^"WALIMOF") ~ !(ASCII_ALPHANUMERIC) }
+gg29_rad_diam_prog         = @{ (^"DIAMON" | ^"DIAMOF" | ^"DIAMCYCOF" | ^"DIAM90") ~ !(ASCII_ALPHANUMERIC) }
+gg30_nc_compress           = @{ (^"COMPSURF" | ^"COMPON" | ^"COMPOF" | ^"COMPCURV" | ^"COMPCAD") ~ !(ASCII_ALPHANUMERIC) }
+gg31_oem_g                 = @{ (^"G819" | ^"G818" | ^"G817" | ^"G816" | ^"G815" | ^"G814" | ^"G813" | ^"G812" | ^"G811" | ^"G810") ~ !(ASCII_ALPHANUMERIC) }
+gg32_oem_g                 = @{ (^"G829" | ^"G828" | ^"G827" | ^"G826" | ^"G825" | ^"G824" | ^"G823" | ^"G822" | ^"G821" | ^"G820") ~ !(ASCII_ALPHANUMERIC) }
+gg33_fine_tool_offset      = @{ (^"FTOCON" | ^"FTOCOF") ~ !(ASCII_ALPHANUMERIC) }
+gg34_tool_orient_smooth    = @{ (^"OST" | ^"OSSE" | ^"OSS" | ^"OSOF" | ^"OSD" | ^"OSC") ~ !(ASCII_ALPHANUMERIC) }
+gg35_punch_nibble          = @{ (^"SPOF" | ^"SONS" | ^"SON" | ^"PONS" | ^"PON") ~ !(ASCII_ALPHANUMERIC) }
+gg36_punch_delay           = @{ (^"PDELAYON" | ^"PDELAYOF") ~ !(ASCII_ALPHANUMERIC) }
+gg37_feedrate_profile      = @{ (^"FNORM" | ^"FLIN" | ^"FCUB") ~ !(ASCII_ALPHANUMERIC) }
+gg39_contour_acc           = @{ (^"CPRECON" | ^"CPRECOF") ~ !(ASCII_ALPHANUMERIC) }
+gg40_tool_radius_const     = @{ (^"CUTCONON" | ^"CUTCONOF") ~ !(ASCII_ALPHANUMERIC) }
+gg41_thread_interrupt      = @{ (^"LFON" | ^"LFOF") ~ !(ASCII_ALPHANUMERIC) }
+gg42_tool_carrier          = @{ (^"TCOFRZ" | ^"TCOFRY" | ^"TCOFRX" | ^"TCOFR" | ^"TCOABS") ~ !(ASCII_ALPHANUMERIC) }
+gg43_sar_approach          = @{ (^"G143" | ^"G142" | ^"G141" | ^"G140") ~ !(ASCII_ALPHANUMERIC) }
+gg44_sar_segment           = @{ (^"G341" | ^"G340") ~ !(ASCII_ALPHANUMERIC) }
+gg45_path_ref_fgroup       = @{ (^"UPATH" | ^"SPATH") ~ !(ASCII_ALPHANUMERIC) }
+gg46_plane_fast_retract    = @{ (^"LFWP" | ^"LFTXT" | ^"LFPOS") ~ !(ASCII_ALPHANUMERIC) }
+gg47_mode_switchover       = @{ (^"G291" | ^"G290") ~ !(ASCII_ALPHANUMERIC) }
+gg48_approach_retract_trc  = @{ (^"G462" | ^"G461" | ^"G460") ~ !(ASCII_ALPHANUMERIC) }
+gg49_ptp_motion            = @{ (^"PTPWOC" | ^"PTPG0" | ^"PTP" | ^"CP") ~ !(ASCII_ALPHANUMERIC) }
+gg50_orient_prog           = @{ (^"ORIVIRT2" | ^"ORIVIRT1" | ^"ORIRPY2" | ^"ORIRPY" | ^"ORIEULER" | ^"ORIAXPOS") ~ !(ASCII_ALPHANUMERIC) }
+gg51_interp_type_orient    = @{ (^"ORIVECT" | ^"ORIPLANE" | ^"ORIPATHS" | ^"ORIPATH" | ^"ORICURVE" | ^"ORICONTO" | ^"ORICONIO" | ^"ORICONCW" | ^"ORICONCCW" | ^"ORIAXES") ~ !(ASCII_ALPHANUMERIC) }
+gg52_frame_rot_wp          = @{ (^"PAROTOF" | ^"PAROT") ~ !(ASCII_ALPHANUMERIC) }
+gg53_tool_wear             = @{ (^"TOWWCS" | ^"TOWTCS" | ^"TOWSTD" | ^"TOWMCS" | ^"TOWKCS" | ^"TOWBCS") ~ !(ASCII_ALPHANUMERIC) }
+gg54_vector_rot_poly       = @{ (^"ORIROTT" | ^"ORIROTR" | ^"ORIROTC" | ^"ORIROTA") ~ !(ASCII_ALPHANUMERIC) }
+gg55_rapid_traverse        = @{ (^"RTLION" | ^"RTLIOF") ~ !(ASCII_ALPHANUMERIC) }
+gg56_frame_rot_tool        = @{ (^"TOROTZ" | ^"TOROTY" | ^"TOROTX" | ^"TOROTOF" | ^"TOROT" | ^"TOFRAMEZ" | ^"TOFRAMEY" | ^"TOFRAMEX" | ^"TOFRAME") ~ !(ASCII_ALPHANUMERIC) }
+gg57_corner_decel          = @{ (^"G621" | ^"G62" | ^"FENDNORM") ~ !(ASCII_ALPHANUMERIC) }
+gg58_dyn_resp_path         = @{ (^"DYNSEMIFIN" | ^"DYNROUGH" | ^"DYNPREC" | ^"DYNPOS" | ^"DYNNORM" | ^"DYNFINISH") ~ !(ASCII_ALPHANUMERIC) }
+gg59_area_limit            = @{ (^"WALCS9" | ^"WALCS8" | ^"WALCS7" | ^"WALCS6" | ^"WALCS5" | ^"WALCS4" | ^"WALCS3" | ^"WALCS2" | ^"WALCS10" | ^"WALCS1" | ^"WALCS0") ~ !(ASCII_ALPHANUMERIC) }
+gg61_tool_orient_smooth    = @{ (^"ORISON" | ^"ORISOF") ~ !(ASCII_ALPHANUMERIC) }
+gg62_repos_non_modal       = @{ (^"RMNBL" | ^"RMIBL" | ^"RMEBL" | ^"RMBBL") ~ !(ASCII_ALPHANUMERIC) }
+gg64_grinding_frames       = @{ (^"GFRAME[9]" | ^"GFRAME[99]" | ^"GFRAME[98]" | ^"GFRAME[97]" | ^"GFRAME[96]" | ^"GFRAME[95]" | ^"GFRAME[94]" | ^"GFRAME[93]" | ^"GFRAME[92]" | ^"GFRAME[91]" | ^"GFRAME[90]" | ^"GFRAME[8]" | ^"GFRAME[89]" | ^"GFRAME[88]" | ^"GFRAME[87]" | ^"GFRAME[86]" | ^"GFRAME[85]" | ^"GFRAME[84]" | ^"GFRAME[83]" | ^"GFRAME[82]" | ^"GFRAME[81]" | ^"GFRAME[80]" | ^"GFRAME[7]" | ^"GFRAME[79]" | ^"GFRAME[78]" | ^"GFRAME[77]" | ^"GFRAME[76]" | ^"GFRAME[75]" | ^"GFRAME[74]" | ^"GFRAME[73]" | ^"GFRAME[72]" | ^"GFRAME[71]" | ^"GFRAME[70]" | ^"GFRAME[6]" | ^"GFRAME[69]" | ^"GFRAME[68]" | ^"GFRAME[67]" | ^"GFRAME[66]" | ^"GFRAME[65]" | ^"GFRAME[64]" | ^"GFRAME[63]" | ^"GFRAME[62]" | ^"GFRAME[61]" | ^"GFRAME[60]" | ^"GFRAME[5]" | ^"GFRAME[59]" | ^"GFRAME[58]" | ^"GFRAME[57]" | ^"GFRAME[56]" | ^"GFRAME[55]" | ^"GFRAME[54]" | ^"GFRAME[53]" | ^"GFRAME[52]" | ^"GFRAME[51]" | ^"GFRAME[50]" | ^"GFRAME[4]" | ^"GFRAME[49]" | ^"GFRAME[48]" | ^"GFRAME[47]" | ^"GFRAME[46]" | ^"GFRAME[45]" | ^"GFRAME[44]" | ^"GFRAME[43]" | ^"GFRAME[42]" | ^"GFRAME[41]" | ^"GFRAME[40]" | ^"GFRAME[3]" | ^"GFRAME[39]" | ^"GFRAME[38]" | ^"GFRAME[37]" | ^"GFRAME[36]" | ^"GFRAME[35]" | ^"GFRAME[34]" | ^"GFRAME[33]" | ^"GFRAME[32]" | ^"GFRAME[31]" | ^"GFRAME[30]" | ^"GFRAME[2]" | ^"GFRAME[29]" | ^"GFRAME[28]" | ^"GFRAME[27]" | ^"GFRAME[26]" | ^"GFRAME[25]" | ^"GFRAME[24]" | ^"GFRAME[23]" | ^"GFRAME[22]" | ^"GFRAME[21]" | ^"GFRAME[20]" | ^"GFRAME[1]" | ^"GFRAME[19]" | ^"GFRAME[18]" | ^"GFRAME[17]" | ^"GFRAME[16]" | ^"GFRAME[15]" | ^"GFRAME[14]" | ^"GFRAME[13]" | ^"GFRAME[12]" | ^"GFRAME[11]" | ^"GFRAME[10]" | ^"GFRAME[100]" | ^"GFRAME[0]") ~ !(ASCII_ALPHANUMERIC) }
+g_command                  =  {
+    gg01_motion
+  | gg02_wait
+  | gg03_frame_area_limit
+  | gg04_fifo
+  | gg06_plane_select
+  | gg07_tool_radius
+  | gg08_work_offset
+  | gg09_frame_tool_suppress
+  | gg10_exact_stop_mode
+  | gg11_exact_stop_non_modal
+  | gg12_block_change_g60_g9
+  | gg13_wp_measure
+  | gg14_wp_measure_mode
+  | gg15_feed_type
+  | gg16_feedrate_override
+  | gg17_approach_retract_tool
+  | gg18_corner_behavior
+  | gg19_curve_start_spline
+  | gg20_curve_end_spline
+  | gg21_accel_profile
+  | gg22_tool_offset_type
+  | gg23_collision_monitor
+  | gg24_precontrol
+  | gg25_tool_orient_ref
+  | gg26_repos_mode
+  | gg27_tool_offset_change
+  | gg28_area_limit
+  | gg29_rad_diam_prog
+  | gg30_nc_compress
+  | gg31_oem_g
+  | gg32_oem_g
+  | gg33_fine_tool_offset
+  | gg34_tool_orient_smooth
+  | gg35_punch_nibble
+  | gg36_punch_delay
+  | gg37_feedrate_profile
+  | gg39_contour_acc
+  | gg40_tool_radius_const
+  | gg41_thread_interrupt
+  | gg42_tool_carrier
+  | gg43_sar_approach
+  | gg44_sar_segment
+  | gg45_path_ref_fgroup
+  | gg46_plane_fast_retract
+  | gg47_mode_switchover
+  | gg48_approach_retract_trc
+  | gg49_ptp_motion
+  | gg50_orient_prog
+  | gg51_interp_type_orient
+  | gg52_frame_rot_wp
+  | gg53_tool_wear
+  | gg54_vector_rot_poly
+  | gg55_rapid_traverse
+  | gg56_frame_rot_tool
+  | gg57_corner_decel
+  | gg58_dyn_resp_path
+  | gg59_area_limit
+  | gg61_tool_orient_smooth
+  | gg62_repos_non_modal
+  | gg64_grinding_frames
+}

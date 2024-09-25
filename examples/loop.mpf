@@ -1,0 +1,48 @@
+DEF REAL x_start, y_start, z_start, x_end, y_end, x_current, y_current, raster_spacing, mes_fr, mov_fr
+
+; Initialize the program
+G90 ; Set to absolute positioning mode
+G17 
+G54  
+
+; Define the raster pattern parameters
+x_start = 920
+y_start = 950
+z_start = 1250
+x_end = 1250  
+y_end = 1050 
+raster_spacing = 1 ; Spacing between raster lines
+mov_fr = 5000
+mes_fr = 250
+
+
+M0
+G1 F=mov_fr ; Set feed rate in millimeters per minute
+G1 X=x_start Y=y_start Z=z_start 
+M0
+G1 X=x_end Y=y_end
+
+; Loop through rows
+G1 X=x_start Y=y_start
+y_current = y_start
+x_current = x_start
+G1 F=mes_fr ; Set feed rate in millimeters per minute
+M0
+IF (y_start <= y_end)
+    WHILE (y_current <= y_end)
+        IF (x_current == x_end)
+            G1 X=x_start
+            x_current = x_start
+        ELSE 
+            G1 X=x_end
+            x_current = x_end
+        ENDIF
+        ; Move up one row
+        y_current = y_current + raster_spacing
+        G1 Y = y_current
+    ENDWHILE
+ELSE
+    M30
+ENDIF
+; End the program
+M2 ; End of program

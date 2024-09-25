@@ -1,0 +1,6 @@
+G1 ;  Adsds
+G2 X3 Z100
+G3 X1 X=3 Y4.34 
+; sdf
+
+G341

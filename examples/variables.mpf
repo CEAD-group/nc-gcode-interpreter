@@ -1,0 +1,4 @@
+DEF INT aa=1, bb=3
+X=aa/bb
+aa=2
+X=aa/bb

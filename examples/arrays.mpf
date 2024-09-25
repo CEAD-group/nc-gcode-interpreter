@@ -1,0 +1,15 @@
+N10 DEF REAL FELD1[10,3]=SET(0,,,9,0,1,2,-10,-11,-12,-20)
+
+;N40 FELD1[0,0]=SET(0,1,2,-10,-11,-12,-20,-20,-20,-30, , , ,-40,-40,-50,-60,-70)
+;N50 FELD1[8,1]=SET(8.1,8.2,9.0,9.1,9.2)
+;
+;
+DEF INT FELD[2,3,4] = REP(1,24)
+FOR nn=0 TO 1
+  FOR m=0 TO 2
+    FOR o=0 TO 3
+      FELD[nn,m,o] = nn*100+m*10+o
+      X = FELD[nn,m,o]
+    ENDFOR
+  ENDFOR
+ENDFOR

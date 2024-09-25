@@ -1,0 +1,14 @@
+DEF INT n_layers = 2, layer=1
+DEF REAL size = 100 ;size of the square
+DEF REAL layer_height = 4 ;size of the square
+TRANS Z = 0.5 ; move up all z coordinates by 0.5
+G1 F=1000; Set feed rate in millimeters per minute
+G1 X0 Y500 Z0 ; move to the starting point
+WHILE (layer <= n_layers)
+    X=IC(size)
+    Y=IC(size)
+    X=IC(-size)
+    Y=IC(-size)    Z=IC(layer_height)
+    layer = layer + 1
+ENDWHILE
+M31; end of program

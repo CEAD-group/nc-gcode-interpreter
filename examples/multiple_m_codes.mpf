@@ -1,0 +1,5 @@
+G1 
+X1 M101;one m code
+X2 M102;one m code
+X3 M103 M2 M3 M4 M5; five m codes
+;X4 M1 M2 M3 M4 M5 M6; one mcode too many

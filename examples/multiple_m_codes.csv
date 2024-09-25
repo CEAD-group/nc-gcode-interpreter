@@ -1,0 +1,10 @@
+X,M,gg01_motion,comment
+,,G1,
+1.000,M101,G1,;one m code
+2.000,M102,G1,;one m code
+3.000,M103,G1,; five m codes
+3.000,M2 ,G1,; five m codes
+3.000,M3 ,G1,; five m codes
+3.000,M4 ,G1,; five m codes
+3.000,M5,G1,; five m codes
+3.000,,G1,;X4 M1 M2 M3 M4 M5 M6; one mcode too many

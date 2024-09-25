@@ -1,0 +1,4 @@
+DEF INT nn=9
+X1
+X=IC(2)
+Y=IC(0.1*nn) X=IC(2/3)
