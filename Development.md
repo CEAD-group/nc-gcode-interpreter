@@ -14,6 +14,13 @@ To compile the python module:
 maturin develop
 ```
 
+## Seup python environment
+
+```bash
+uv venv
+uv pip install polars pytest
+```
+
 
 
 ## Release
