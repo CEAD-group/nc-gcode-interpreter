@@ -17,6 +17,10 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+dependencies = [
+    "maturin>=1.7.4",
+]
+
 [project.urls]
 Homepage = "https://github.com/yourusername/nc-gcode-interpreter"
 Repository = "https://github.com/yourusername/nc-gcode-interpreter.git"
@@ -25,5 +29,3 @@ Documentation = "https://nc-gcode-interpreter.readthedocs.io/"
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"
-
-
