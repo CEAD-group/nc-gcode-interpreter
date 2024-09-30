@@ -10,44 +10,70 @@ permissions:
   contents: read
 
 jobs:
-  release:
-    name: Release - ${{ matrix.platform.release_for }}
+  build:
+    # Set the job to run on the platform specified by the matrix below
+    runs-on: ${{ matrix.runner }}
+ 
+    # Define the build matrix for cross-compilation
     strategy:
       matrix:
-        platform:
-          - os_name: Windows-x86_64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-          - os_name: Windows-arm64
-            os: windows-latest
-            target: aarch64-pc-windows-msvc
-        #   - os_name: macOS-x86_64
-        #     os: macOS-latest
-        #     target: x86_64-apple-darwin
-        #   - os_name: macOS-arm
-        #     os: macOS-latest
-        #     target: aarch64-apple-darwin
-          - os_name: Linux-x86_64
-            os: ubuntu-latest
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os_name: Linux-arm64
-            os: ubuntu-latest
+          - name: linux-arm64
+            runner: ubuntu-latest
             target: aarch64-unknown-linux-gnu
+          - name: win-amd64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: win-arm64
+            runner: windows-latest
+            target: aarch64-pc-windows-msvc
+          # - name: macos-amd64
+          #   runner: macos-latest
+          #   target: x86_64-apple-darwin
+          # - name: macos-arm64
+          #   runner: macos-latest
+          #   target: aarch64-apple-darwin
 
-    runs-on: ${{ matrix.platform.os }}
+    # The steps to run for each matrix item
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
-      - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v0
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          command: ${{ matrix.platform.command }}
-          target: ${{ matrix.platform.target }}
-          args: "--release"
-          strip: true
-      - name: Publish artifacts and release
-        uses: houseabsolute/actions-rust-release@v0
+          targets: "${{ matrix.target }}"
+
+      - name: Setup Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Binary
+        run: cargo build --verbose --locked --release --target ${{ matrix.target }}
+
+      - name: Release Binary
+        shell: bash
+        run: |
+          BIN_SUFFIX=""
+          if [[ "${{ matrix.runner }}" == "windows-latest" ]]; then
+            BIN_SUFFIX=".exe"
+          fi
+
+          # The built binary output location
+          BIN_OUTPUT="target/${{ matrix.target }}/release/${PROJECT_NAME}${BIN_SUFFIX}"
+
+          # Define a better name for the final binary
+          BIN_RELEASE="${PROJECT_NAME}-${{ matrix.name }}${BIN_SUFFIX}"
+          BIN_RELEASE_VERSIONED="${PROJECT_NAME}-${{ github.ref_name }}-${{ matrix.name }}${BIN_SUFFIX}"
+ 
+          # Move the built binary where you want it
+          mkdir -p artifacts
+          mv "${BIN_OUTPUT}" "artifacts/${BIN_RELEASE}"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          binary-name: nc-gcode-interpreter
-          target: ${{ matrix.platform.target }}
-        if: matrix.toolchain == 'stable'
+          name: ${{ matrix.name }}
+          path: artifacts/*
