@@ -145,11 +145,40 @@ jobs:
           name: wheels-sdist
           path: dist
 
+  rust-binaries:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: linux
+          - os: windows-latest
+            artifact_name: windows
+          - os: macos-latest
+            artifact_name: macos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Build release binary
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-binary-${{ matrix.artifact_name }}
+          path: target/release/${{ runner.os == 'Windows' && 'your_binary_name.exe' || 'your_binary_name' }}
+
   release:
     name: Release
     runs-on: ubuntu-latest
     if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
-    needs: [linux, windows, macos, emscripten, sdist]
+    needs: [linux, windows, macos, emscripten, sdist, rust-binaries]
     permissions:
       # Use to sign the release artifacts
       id-token: write
@@ -162,7 +191,7 @@ jobs:
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v1
         with:
-          subject-path: 'wheels-*/*'
+          subject-path: 'wheels-*/* rust-binary-*/*'
       - name: Publish to PyPI
         if: "startsWith(github.ref, 'refs/tags/')"
         uses: PyO3/maturin-action@v1
@@ -176,4 +205,5 @@ jobs:
         with:
           files: |
             wasm-wheels/*.whl
+            rust-binary-*/*
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
