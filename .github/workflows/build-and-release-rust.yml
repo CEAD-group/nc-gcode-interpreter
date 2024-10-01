@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PROJECT_NAME: "nc-gcode-interpreter"
+
 jobs:
   build:
     # Set the job to run on the platform specified by the matrix below
@@ -24,12 +27,12 @@ jobs:
           # - name: linux-arm64
           #   runner: ubuntu-latest
           #   target: aarch64-unknown-linux-gnu
-          - name: win-amd64
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-          - name: win-arm64
-            runner: windows-latest
-            target: aarch64-pc-windows-msvc
+          # - name: win-amd64
+          #   runner: windows-latest
+          #   target: x86_64-pc-windows-msvc
+          # - name: win-arm64
+          #   runner: windows-latest
+          #   target: aarch64-pc-windows-msvc
           # - name: macos-amd64
           #   runner: macos-latest
           #   target: x86_64-apple-darwin
@@ -75,10 +78,10 @@ jobs:
           # Define a better name for the final binary
           BIN_RELEASE="${PROJECT_NAME}-${{ matrix.name }}${BIN_SUFFIX}"
           BIN_RELEASE_VERSIONED="${PROJECT_NAME}-${{ github.ref_name }}-${{ matrix.name }}${BIN_SUFFIX}"
- 
+
           # Move the built binary where you want it
           mkdir -p artifacts
-          mv "${BIN_OUTPUT}" "artifacts/${BIN_RELEASE}"
+          mv "${BIN_OUTPUT}" "artifacts/${BIN_RELEASE_VERSIONED}"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
