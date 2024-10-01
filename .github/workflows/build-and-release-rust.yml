@@ -51,11 +51,11 @@ jobs:
           targets: "${{ matrix.target }}"
 
       - name: Install cross-compilation tools for Linux
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-        
+
       - name: Setup Cache
         uses: Swatinem/rust-cache@v2
 
@@ -83,8 +83,15 @@ jobs:
           mkdir -p artifacts
           mv "${BIN_OUTPUT}" "artifacts/${BIN_RELEASE_VERSIONED}"
 
+          # Save the BIN_RELEASE_VERSIONED name to a file for use in the next step
+          echo "${BIN_RELEASE_VERSIONED}" > bin_release_versioned.txt
+
+      - name: Get Binary Name
+        id: get_bin_name
+        run: echo "bin_name=$(cat bin_release_versioned.txt)" >> $GITHUB_OUTPUT
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
-          path: artifacts/*
+          name: ${{ steps.get_bin_name.outputs.bin_name }}
+          path: artifacts/${{ steps.get_bin_name.outputs.bin_name }}
