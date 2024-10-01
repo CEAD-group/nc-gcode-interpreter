@@ -51,14 +51,14 @@ jobs:
           targets: "${{ matrix.target }}"
 
       - name: Install cross-compilation tools for Linux
-        if: runner.os == 'Linux' && matrix.target == 'aarch64-unknown-linux-gnu'
+        if: runner.os == 'Linux'
         run: |
           sudo add-apt-repository ppa:deadsnakes/ppa -y
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu python3.12 python3.12-venv python3.12-dev
 
       - name: Set PYO3 cross-compilation environment
-        if: matrix.target != runner.arch && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         run: |
           echo "PYO3_CROSS_PYTHON_VERSION=3.12" >> $GITHUB_ENV
         shell: bash
