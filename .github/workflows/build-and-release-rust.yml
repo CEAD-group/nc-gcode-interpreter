@@ -22,22 +22,22 @@ jobs:
       matrix:
         include:
           - name: linux-amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - name: linux-arm64
-            runner: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-          # - name: win-amd64
-          #   runner: windows-latest
-          #   target: x86_64-pc-windows-msvc
+          # - name: linux-arm64
+          #   runner: ubuntu-24.04
+          #   target: aarch64-unknown-linux-gnu
+          - name: win-amd64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
           # - name: win-arm64
-          #   runner: windows-latest
+          #   runner: windows-2022
           #   target: aarch64-pc-windows-msvc
           # - name: macos-amd64
-          #   runner: macos-latest
+          #   runner: macos-14
           #   target: x86_64-apple-darwin
           # - name: macos-arm64
-          #   runner: macos-latest
+          #   runner: macos-14
           #   target: aarch64-apple-darwin
 
     # The steps to run for each matrix item
@@ -50,40 +50,18 @@ jobs:
         with:
           targets: "${{ matrix.target }}"
 
-      - name: Install cross-compilation tools for Linux Common
-        if: runner.os == 'Linux'
-        run: |
-          sudo add-apt-repository ppa:deadsnakes/ppa -y
-          sudo apt-get update
-          sudo apt-get install -y python3.12 python3.12-venv python3.12-dev
-
-      - name: Install cross-compilation tools for Linux ARM64
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get install -y libpython3.12-dev:arm64 gcc-aarch64-linux-gnu
-
-      - name: Set PYO3 cross-compilation environment
-        if: runner.os == 'Linux'
-        run: |
-          echo "PYO3_CROSS_PYTHON_VERSION=3.12" >> $GITHUB_ENV
-        shell: bash
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+            python-version: '3.12'
 
       - name: Setup Cache
         uses: Swatinem/rust-cache@v2
 
       - name: Build Binary
-        if: runner.name != 'linux-arm64'
         run: cargo build --verbose --locked --release --target ${{ matrix.target }}
         env:
           PYO3_CROSS_PYTHON_VERSION: 3.12
-
-      - name: Build Binary Linux ARM64
-        if: runner.name == 'linux-arm64'
-        run: cargo build --verbose --locked --release --target ${{ matrix.target }}
-        env:
-            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-            PYO3_CROSS_PYTHON_VERSION: 3.12
-            PYO3_CROSS_LIB_DIR: /usr/lib/aarch64-linux-gnu
 
       - name: Release Binary
         shell: bash
