@@ -54,7 +54,7 @@ jobs:
         if: runner.os == 'Linux' && matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu python3.12
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Set PYO3 cross-compilation environment
         if: matrix.target != runner.arch && runner.os == 'Linux'
