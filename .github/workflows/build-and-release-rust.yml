@@ -7,7 +7,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   PROJECT_NAME: "nc-gcode-interpreter"
@@ -27,12 +27,12 @@ jobs:
           - name: linux-arm64
             runner: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-          - name: win-amd64
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-          - name: win-arm64
-            runner: windows-latest
-            target: aarch64-pc-windows-msvc
+          # - name: win-amd64
+          #   runner: windows-latest
+          #   target: x86_64-pc-windows-msvc
+          # - name: win-arm64
+          #   runner: windows-latest
+          #   target: aarch64-pc-windows-msvc
           # - name: macos-amd64
           #   runner: macos-latest
           #   target: x86_64-apple-darwin
