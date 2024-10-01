@@ -91,7 +91,6 @@ jobs:
         run: echo "bin_name=$(cat bin_release_versioned.txt)" >> $GITHUB_OUTPUT
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: softprops/action-gh-release@v2
         with:
-          name: ${{ steps.get_bin_name.outputs.bin_name }}
-          path: artifacts/${{ steps.get_bin_name.outputs.bin_name }}
+          files: artifacts/${{ steps.get_bin_name.outputs.bin_name }}
