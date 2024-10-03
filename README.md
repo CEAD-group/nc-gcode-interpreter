@@ -144,3 +144,6 @@ Options:
 The Sinumerik NC programming guide is extensive, and some of it's functionality can be very convenient for  making on the fly improvements to cde. However to better uderstand, visualize and simulate the code, it is often necessary to convert it to a more structured format like CSV or a dataframe. This tool aims to provide a simple and efficient way to convert Sinumerik-flavored G-code to a structured format, making it easier to analyze and visualize the code.
 
 Only a limited subset is supported, but the tool is designed to be easily extensible to support more features in the future.
+
+## Contributing
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for more details on how to get started.
