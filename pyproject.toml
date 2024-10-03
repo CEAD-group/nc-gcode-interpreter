@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "nc-gcode-interpreter"
 version = "0.1.3"
 description = "A interpreter for NC (Numerical Control) code"
-authors = [{ name = "Your Name", email = "your.email@example.com" }]
+authors = [{ name = "CEAD Group", email = "software@ceadgroup.com" }]
 requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Rust",
@@ -16,15 +16,15 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-
 dependencies = [
     "maturin>=1.7.4",
+    "polars>=1.9.0"
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/nc-gcode-interpreter"
-Repository = "https://github.com/yourusername/nc-gcode-interpreter.git"
-Documentation = "https://nc-gcode-interpreter.readthedocs.io/"
+Homepage = "https://github.com/CEAD-group/nc-gcode-interpreter"
+Repository = "https://github.com/CEAD-group/nc-gcode-interpreter.git"
+Documentation = "https://github.com/CEAD-group/nc-gcode-interpreter/blob/main/README.md"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
