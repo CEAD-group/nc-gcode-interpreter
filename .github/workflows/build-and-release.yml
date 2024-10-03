@@ -50,7 +50,8 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter -b bin
+          # args: --release --out dist --find-interpreter -b bin
+          args: --release --out dist --find-interpreter
           sccache: 'true'
           manylinux: auto
       - name: Upload wheels
@@ -81,7 +82,8 @@ jobs:
 #         uses: PyO3/maturin-action@v1
 #         with:
 #           target: ${{ matrix.platform.target }}
-#           args: --release --out dist --find-interpreter -b bin
+#         # args: --release --out dist --find-interpreter -b bin
+#           args: --release --out dist --find-interpreter
 #           sccache: 'true'
 #           manylinux: musllinux_1_2
 #       - name: Upload wheels
@@ -109,7 +111,8 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter -b bin
+          # args: --release --out dist --find-interpreter -b bin
+          args: --release --out dist --find-interpreter
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -135,7 +138,8 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter -b bin
+          # args: --release --out dist --find-interpreter -b bin
+          args: --release --out dist --find-interpreter
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -174,7 +178,8 @@ jobs:
   #       uses: PyO3/maturin-action@v1
   #       with:
   #         target: ${{ matrix.platform.target }}
-  #         args: --release --out dist -i ${{ env.PYTHON_VERSION }} -b bin
+  #       #  args: --release --out dist -i ${{ env.PYTHON_VERSION }} -b bin
+  #         args: --release --out dist -i ${{ env.PYTHON_VERSION }}
   #         sccache: 'true'
   #         rust-toolchain: nightly
   #     - name: Upload wheels
@@ -224,39 +229,48 @@ jobs:
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
-      - name: Extract binary and rename
-        env:
-          PROJECT_NAME: ${{ env.PROJECT_NAME }}
-        run: |
-          for wheel_dir in wheels-windows-* wheels-linux-* wheels-macos-*; do
-            arch=$(echo $wheel_dir | cut -d'-' -f3)
-            os=$(echo $wheel_dir | cut -d'-' -f2)
-            find ./$wheel_dir -name "*.whl" -exec sh -c '
-              wheel_name=$(basename "$1")
-              version=$(echo $wheel_name | sed -E "s/.*-([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/")
-              unzip -d "$(dirname "$1")" "$1"
-              if [ "$2" = "windows" ]; then
-                binary_path=$(find "$(dirname "$1")" -name "*.exe")
-                if [ -n "$binary_path" ]; then
-                  mv "$binary_path" "$(dirname "$binary_path")/${PROJECT_NAME}_${version}_${2}_${3}.exe"
-                fi
-              else
-                binary_path=$(find "$(dirname "$1")" -type f -executable)
-                if [ -n "$binary_path" ]; then
-                  mv "$binary_path" "$(dirname "$binary_path")/${PROJECT_NAME}_${version}_${2}_${3}"
-                fi
-              fi
-            ' _ {} "$os" "$arch" \;
-          done
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             wheels-sdist/*.tar.gz
             wheels-windows-*/*.whl
-            wheels-windows-*/*.data/scripts/${{ env.PROJECT_NAME }}_*_windows_*.exe
             wheels-linux-*/*.whl
-            wheels-linux-*/*.data/scripts/${{ env.PROJECT_NAME }}_*_linux_*
             wheels-macos-*/*.whl
-            wheels-macos-*/*.data/scripts/${{ env.PROJECT_NAME }}_*_macos_*
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
+      # - name: Extract binary and rename
+      #   env:
+      #     PROJECT_NAME: ${{ env.PROJECT_NAME }}
+      #   run: |
+      #     for wheel_dir in wheels-windows-* wheels-linux-* wheels-macos-*; do
+      #       arch=$(echo $wheel_dir | cut -d'-' -f3)
+      #       os=$(echo $wheel_dir | cut -d'-' -f2)
+      #       find ./$wheel_dir -name "*.whl" -exec sh -c '
+      #         wheel_name=$(basename "$1")
+      #         version=$(echo $wheel_name | sed -E "s/.*-([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/")
+      #         unzip -d "$(dirname "$1")" "$1"
+      #         if [ "$2" = "windows" ]; then
+      #           binary_path=$(find "$(dirname "$1")" -name "*.exe")
+      #           if [ -n "$binary_path" ]; then
+      #             mv "$binary_path" "$(dirname "$binary_path")/${PROJECT_NAME}_${version}_${2}_${3}.exe"
+      #           fi
+      #         else
+      #           binary_path=$(find "$(dirname "$1")" -type f -executable)
+      #           if [ -n "$binary_path" ]; then
+      #             mv "$binary_path" "$(dirname "$binary_path")/${PROJECT_NAME}_${version}_${2}_${3}"
+      #           fi
+      #         fi
+      #       ' _ {} "$os" "$arch" \;
+      #     done
+      # - name: Upload to GitHub Release
+      #   uses: softprops/action-gh-release@v2
+      #   with:
+      #     files: |
+      #       wheels-sdist/*.tar.gz
+      #       wheels-windows-*/*.whl
+      #       wheels-windows-*/*.data/scripts/${{ env.PROJECT_NAME }}_*_windows_*.exe
+      #       wheels-linux-*/*.whl
+      #       wheels-linux-*/*.data/scripts/${{ env.PROJECT_NAME }}_*_linux_*
+      #       wheels-macos-*/*.whl
+      #       wheels-macos-*/*.data/scripts/${{ env.PROJECT_NAME }}_*_macos_*
+      #     prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
