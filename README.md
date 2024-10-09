@@ -64,7 +64,7 @@ Options:
   -a, --axes <AXIS>                    Override default axis identifiers (comma-separated, e.g., "X,Y,Z")
   -e, --extra-axes <EXTRA_AXIS>        Add extra axis identifiers (comma-separated, e.g., "RA1,RA2")
   -i, --initial_state <INITIAL_STATE>  Optional initial_state file to initialize state
-  -l, --iteration_limit <LIMIT>             Maximum number of iterations for loops [default: 10000]
+  -l, --iteration_limit <LIMIT>        Maximum number of iterations for loops [default: 10000]
   -f, --disable-forward-fill           Disable forward-filling of null values in axes columns
   -h, --help                           Print help
   -V, --version                        Print version
