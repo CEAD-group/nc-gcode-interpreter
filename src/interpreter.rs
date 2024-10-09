@@ -1,16 +1,15 @@
 //interpreter.rs
 use pest::Parser;
+use polars::chunked_array::ops::FillNullStrategy;
 use polars::prelude::*;
 use std::collections::HashMap;
 use std::io::{self};
-use polars::chunked_array::ops::FillNullStrategy;
 
 use crate::errors::ParsingError;
 use crate::interpret_rules::interpret_blocks;
+use crate::modal_groups::MODAL_GROUPS;
 use crate::state::{self, State};
 use crate::types::{NCParser, Rule, Value};
-use crate::modal_groups::MODAL_GROUPS;
-
 
 /// Helper function to convert PolarsError to ParsingError
 impl From<PolarsError> for ParsingError {
@@ -29,7 +28,6 @@ pub fn nc_to_dataframe(
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,
     disable_forward_fill: bool,
-
 ) -> Result<(DataFrame, state::State), ParsingError> {
     // Default axis identifiers
     const DEFAULT_AXIS_IDENTIFIERS: &[&str] = &[
@@ -37,9 +35,8 @@ pub fn nc_to_dataframe(
     ];
 
     // Use the override if provided, otherwise use the default identifiers
-    let axis_identifiers: Vec<String> = axis_identifiers.unwrap_or_else(|| {
-        DEFAULT_AXIS_IDENTIFIERS.iter().map(|&s| s.to_string()).collect()
-    });
+    let axis_identifiers: Vec<String> =
+        axis_identifiers.unwrap_or_else(|| DEFAULT_AXIS_IDENTIFIERS.iter().map(|&s| s.to_string()).collect());
 
     // Add extra axes to the existing list if provided
     let mut axis_identifiers = axis_identifiers;
@@ -65,43 +62,34 @@ pub fn nc_to_dataframe(
     // Get the column names and reorder them
     let ordered_columns = reorder_columns(
         axis_identifiers,
-        df.get_column_names().into_iter().map(|s| s.to_string()).collect()
+        df.get_column_names().into_iter().map(|s| s.to_string()).collect(),
     );
 
     // Select the columns in the specified order and return
     df = df.select(&ordered_columns).map_err(ParsingError::from)?;
 
-
-
     if !disable_forward_fill {
-
         let fill_columns: Vec<String> = df
-        .get_column_names()
-        .iter()
-        .map(|col| col.to_string())
-        .filter(|col| state.is_axis(col) || MODAL_GROUPS.contains(&col.as_str()))
-        .collect();
+            .get_column_names()
+            .iter()
+            .map(|col| col.to_string())
+            .filter(|col| state.is_axis(col) || MODAL_GROUPS.contains(&col.as_str()))
+            .collect();
 
-        
-
-    for col_name in fill_columns {
-        let column = df
-            .column(&col_name)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-        let filled_column = column
-            .fill_null(FillNullStrategy::Forward(None))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-        df.with_column(filled_column)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        for col_name in fill_columns {
+            let column = df
+                .column(&col_name)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            let filled_column = column
+                .fill_null(FillNullStrategy::Forward(None))
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            df.with_column(filled_column)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        }
     }
-    }
-
-
-
 
     Ok((df, state))
 }
-
 
 #[allow(dead_code)] // Only used in main.rs, not in lib.rs
 pub fn dataframe_to_csv(df: &mut DataFrame, path: &str) -> Result<(), PolarsError> {
@@ -125,8 +113,7 @@ pub fn dataframe_to_csv(df: &mut DataFrame, path: &str) -> Result<(), PolarsErro
         *df = exploded_df;
     }
 
-    let mut file = std::fs::File::create(path)
-        .map_err(|e| PolarsError::ComputeError(format!("{:?}", e).into()))?;
+    let mut file = std::fs::File::create(path).map_err(|e| PolarsError::ComputeError(format!("{:?}", e).into()))?;
 
     CsvWriter::new(&mut file)
         .with_float_precision(Some(3))
@@ -134,7 +121,6 @@ pub fn dataframe_to_csv(df: &mut DataFrame, path: &str) -> Result<(), PolarsErro
         .map_err(|e| PolarsError::ComputeError(format!("{:?}", e).into()))?;
     Ok(())
 }
-
 
 /// Parse file and return results as a vector of HashMaps
 fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, Value>>, ParsingError> {
@@ -162,21 +148,21 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
 
 fn results_to_dataframe(data: Vec<HashMap<String, Value>>) -> PolarsResult<DataFrame> {
     // Step 1: Collect all unique keys (column names)
-    let columns: Vec<String> = data.iter()
+    let columns: Vec<String> = data
+        .iter()
         .flat_map(|row| row.keys().cloned())
-        .collect::<std::collections::HashSet<String>>()  // Deduplicate keys
+        .collect::<std::collections::HashSet<String>>() // Deduplicate keys
         .into_iter()
         .collect();
 
     // Step 2: Initialize empty columns (vectors) for each key
-    let mut series_map: HashMap<String, Vec<Option<AnyValue>>> = columns
-        .iter()
-        .map(|key| (key.clone(), Vec::new()))
-        .collect();
+    let mut series_map: HashMap<String, Vec<Option<AnyValue>>> =
+        columns.iter().map(|key| (key.clone(), Vec::new())).collect();
 
     // Step 3: Populate the columns with data, inserting None where keys are missing
     for row in &data {
-        if row.is_empty() {  // Skip rows with no values
+        if row.is_empty() {
+            // Skip rows with no values
             continue;
         }
 
@@ -187,12 +173,16 @@ fn results_to_dataframe(data: Vec<HashMap<String, Value>>) -> PolarsResult<DataF
     }
 
     // Step 4: Convert each column to a Polars Series
-    let polars_series: Vec<Series> = columns.iter()
+    let polars_series: Vec<Series> = columns
+        .iter()
         .map(|key| {
             let column_data = series_map.remove(key).unwrap();
             Series::new(
-                key.as_str().into(),  // Convert `&String` to `PlSmallStr` using `Into::into`
-                column_data.into_iter().map(|opt| opt.unwrap_or(AnyValue::Null)).collect::<Vec<AnyValue>>(),
+                key.as_str().into(), // Convert `&String` to `PlSmallStr` using `Into::into`
+                column_data
+                    .into_iter()
+                    .map(|opt| opt.unwrap_or(AnyValue::Null))
+                    .collect::<Vec<AnyValue>>(),
             )
         })
         .collect();
@@ -202,13 +192,10 @@ fn results_to_dataframe(data: Vec<HashMap<String, Value>>) -> PolarsResult<DataF
 }
 
 /// Helper function to reorder DataFrame columns
-fn reorder_columns(
-    axis_identifiers: Vec<String>,
-    mut df_columns: Vec<String>
-) -> Vec<String> {
+fn reorder_columns(axis_identifiers: Vec<String>, mut df_columns: Vec<String>) -> Vec<String> {
     let mut ordered_columns = Vec::new();
-    df_columns.sort();  // Sort columns alphabetically
-    // Move axis columns first
+    df_columns.sort(); // Sort columns alphabetically
+                       // Move axis columns first
     for axis in axis_identifiers {
         if let Some(index) = df_columns.iter().position(|col| col == &axis) {
             ordered_columns.push(df_columns.remove(index));
@@ -226,5 +213,3 @@ fn reorder_columns(
 
     ordered_columns
 }
-
-

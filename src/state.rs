@@ -54,12 +54,12 @@ impl State {
         *self.translation.get(axis).unwrap_or(&0.0)
     }
 
-    pub fn update_axis(&mut self, key: &str, value: f32, translate:bool) -> Result<f32, ParsingError> {
+    pub fn update_axis(&mut self, key: &str, value: f32, translate: bool) -> Result<f32, ParsingError> {
         let translation_value = self.get_translation(key);
         let mut updated_value = value;
         if translate {
-            updated_value+= translation_value;
-        } 
+            updated_value += translation_value;
+        }
         self.axes.insert(key.to_string(), updated_value);
         Ok(updated_value)
     }
