@@ -19,9 +19,7 @@ impl Value {
         match self {
             Value::Str(s) => AnyValue::String(s),
             Value::Float(f) => AnyValue::Float32(*f),
-            Value::StrList(vec) => {
-                AnyValue::List(vec.iter().map(|s| s.as_str()).collect())
-            }
+            Value::StrList(vec) => AnyValue::List(vec.iter().map(|s| s.as_str()).collect()),
         }
     }
 }

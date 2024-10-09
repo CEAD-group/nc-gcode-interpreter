@@ -8,9 +8,9 @@ use std::io::{self};
 mod errors;
 mod interpret_rules;
 mod interpreter;
+mod modal_groups;
 mod state;
 mod types;
-mod modal_groups;
 
 use interpreter::{dataframe_to_csv, nc_to_dataframe};
 use std::path::PathBuf;
@@ -91,13 +91,17 @@ fn main() -> io::Result<()> {
 
     let input = std::fs::read_to_string(matches.get_one::<String>("input").unwrap())
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error reading input file: {:?}", e)))?;
-    
 
-    let initial_state = matches.get_one::<String>("initial_state")
+    let initial_state = matches
+        .get_one::<String>("initial_state")
         .map(std::fs::read_to_string)
         .transpose()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error reading initial state file: {:?}", e)))?;
-
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("Error reading initial state file: {:?}", e),
+            )
+        })?;
 
     let (mut df, _state) = nc_to_dataframe(
         &input,
@@ -105,7 +109,7 @@ fn main() -> io::Result<()> {
         axes_override.clone(),
         extra_axes,
         *iteration_limit,
-        disable_forward_fill
+        disable_forward_fill,
     )?;
 
     let mut output_path = PathBuf::from(input_path.clone());

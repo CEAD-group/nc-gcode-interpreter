@@ -139,7 +139,10 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
     let (key, value, translate) = match (variable_pair.as_rule(), expression_pair.as_rule()) {
         (Rule::variable_single_char, Rule::value) => {
             let key = variable_pair.as_str().to_string();
-            let value = expression_pair.as_str().parse::<f32>().expect("Failed to interpret value");
+            let value = expression_pair
+                .as_str()
+                .parse::<f32>()
+                .expect("Failed to interpret value");
             (key, value, true)
         }
         (Rule::variable, Rule::axis_increment) => {
@@ -495,28 +498,29 @@ fn insert_m_key(last: &mut HashMap<String, Value>, value: &str) -> Result<(), Pa
             if let Value::StrList(ref mut vec) = existing_value {
                 if vec.len() < 5 {
                     vec.push(value.to_string());
-                    return Ok(());  // Successfully added to the list
+                    return Ok(()); // Successfully added to the list
                 }
             }
         } else {
             // If the key doesn't exist, insert a new StrList with the first value
             last.insert(m_key.to_owned(), Value::StrList(vec![value.to_string()]));
-            return Ok(());  // Exit early after insertion
+            return Ok(()); // Exit early after insertion
         }
     }
-    Err(ParsingError::TooManyMCommands)  // Return error if all keys are full
+    Err(ParsingError::TooManyMCommands) // Return error if all keys are full
 }
 
 fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
     // Grammar:
-    // statement =  {
-    //      g_command
-    //    | m_command
-    //    | assignment_multi
-    //    | assignment
-    //    | function_call
-    //    | tool_selection
-    //  }
+    // statement           =  {
+    //     g_command_numbered
+    //   | m_command
+    //   | assignment_multi
+    //   | assignment
+    //   | g_command
+    //   | function_call
+    //   | tool_selection
+    // }
 
     for statement in element.into_inner() {
         let last = output.last_mut().expect("Output vector should not be empty");
@@ -527,6 +531,11 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
             }
             Rule::g_command => {
                 let (key, value) = interpret_g_command(statement);
+                last.insert(key, Value::Str(value));
+            }
+            Rule::g_command_numbered => {
+                let (key, value) =
+                    interpret_g_command(statement.into_inner().next().expect("Error parsing g_command_numbered"));
                 last.insert(key, Value::Str(value));
             }
             Rule::m_command => {

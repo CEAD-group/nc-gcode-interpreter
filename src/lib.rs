@@ -10,8 +10,8 @@ use std::collections::HashMap;
 mod errors;
 mod interpret_rules;
 mod interpreter;
-mod state;
 mod modal_groups;
+mod state;
 
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
@@ -28,12 +28,18 @@ fn nc_to_dataframe(
     iteration_limit: usize,
     disable_forward_fill: bool,
 ) -> PyResult<(PyDataFrame, HashMap<String, HashMap<String, f32>>)> {
-    let (df,state) = nc_to_dataframe_rust(input, initial_state.as_deref(), axis_identifiers, extra_axes, iteration_limit, disable_forward_fill)
-        .map_err(|e| PyErr::new::<PyValueError, _>(format!("Error creating DataFrame: {:?}", e)))?;
+    let (df, state) = nc_to_dataframe_rust(
+        input,
+        initial_state.as_deref(),
+        axis_identifiers,
+        extra_axes,
+        iteration_limit,
+        disable_forward_fill,
+    )
+    .map_err(|e| PyErr::new::<PyValueError, _>(format!("Error creating DataFrame: {:?}", e)))?;
 
     Ok((PyDataFrame(df), state.to_python_dict()))
 }
-
 
 /// Define the Python module
 #[pymodule]
