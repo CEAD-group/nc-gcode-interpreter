@@ -18,6 +18,10 @@ def create_pest_grammar(g_groups):
     grammar_parts.append(
         "// Due to the way pest works, the sorting of the literals is important."
     )
+    all_words = [
+        f'^"{entry["id"]}"' for group in g_groups for entry in group["entries"]
+    ]
+
     ggroup_names = []
     for group in g_groups:
         group_rules = []
@@ -28,7 +32,15 @@ def create_pest_grammar(g_groups):
         grammar_parts.append(
             f"{ggroup_name} = @{{({' | '.join(reversed(sorted(group_rules)))}) ~ !(ASCII_ALPHANUMERIC) }}"
         )
-    grammar_parts.append(f"g_command = {{{' | '.join(ggroup_names)}}}")
+
+    grammar_parts.append(
+        f"\ngcommand_list = @{{({' | '.join(reversed(sorted(all_words)))}) ~ !(ASCII_ALPHANUMERIC) }}"
+    )
+
+    grammar_parts.append('g_command_numbered = { &("G" ~ ASCII_DIGIT+) ~ g_command }')
+    grammar_parts.append(
+        f"g_command = {{ &gcommand_list ~ ({' | '.join(ggroup_names)})}}"
+    )
     return "\n".join(grammar_parts)
 
 
