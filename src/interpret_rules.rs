@@ -116,6 +116,39 @@ fn interpret_m_command(m_command: Pair<Rule>) -> (String, String) {
     // Return the tuple with the rule name as the column header and the specific M command as the value
     ("M".to_string(), command_str)
 }
+fn interpret_tool_selection(
+    tool_selection: Pair<Rule>,
+    output: &mut Output,
+    _state: &mut State,
+) -> Result<(), ParsingError> {
+    // Get the last HashMap from the output vector to insert the tool selection.
+    let last = output.last_mut().expect("Output vector should not be empty");
+
+    // Since `tool_selection` = { ^"T" ~ "=" ~ quoted_string }
+    // and `quoted_string` is silent, the `tool_selection` pair will directly contain the `string` pairs.
+    let mut tool_name = String::new();
+
+    // Iterate over the inner pairs to collect the strings.
+    for pair in tool_selection.into_inner() {
+        match pair.as_rule() {
+            Rule::string => {
+                tool_name.push_str(pair.as_str());
+            }
+            _ => {
+                // Handle unexpected rules.
+                return Err(ParsingError::UnexpectedRule {
+                    rule: pair.as_rule(),
+                    context: "interpret_tool_selection".to_string(),
+                });
+            }
+        }
+    }
+
+    // Insert the tool name into the output.
+    last.insert("T".to_string(), Value::Str(tool_name));
+
+    Ok(())
+}
 fn interpret_function_call(function_call: Pair<Rule>) -> (String, String) {
     // Log the interpretd function call for debugging
     //println!("Parsed function call: {:?}", function_call);
@@ -489,7 +522,6 @@ fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State
         _ => panic!("Unexpected rule: {:?}", pair.as_rule()),
     }
 }
-
 fn insert_m_key(last: &mut HashMap<String, Value>, value: &str) -> Result<(), ParsingError> {
     let m_key = "M";
     for _i in 1..=5 {
@@ -509,7 +541,6 @@ fn insert_m_key(last: &mut HashMap<String, Value>, value: &str) -> Result<(), Pa
     }
     Err(ParsingError::TooManyMCommands) // Return error if all keys are full
 }
-
 fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
     // Grammar:
     // statement           =  {
@@ -550,7 +581,7 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                     last.insert(key, Value::Float(_updated_value));
                 }
             }
-            Rule::tool_selection => println!("Tool selection: {:?}", statement),
+            Rule::tool_selection => interpret_tool_selection(statement, output, state)?,
             _ => Err(ParsingError::UnexpectedRule {
                 rule: statement.as_rule(),
                 context: "interpret_statement".to_string(),

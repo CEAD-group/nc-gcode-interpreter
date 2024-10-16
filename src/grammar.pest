@@ -2,6 +2,7 @@ file                =  { SOI ~ blocks ~ newline? ~ EOI }
 blocks              =  { block ~ (newline ~ block)* }
 newline             = _{ "\n" | "\r\n" }
 WHITESPACE          = _{ " " | "\t" }
+QUOTE               = _{ "\"" }
 comment             =  { ";" ~ (!newline ~ ANY)* }
 block               =  { block_number_set? ~ (definition | frame_op | control | statement*) ~ comment? }
 block_number_set    = _{ "N" ~ block_number }
@@ -33,11 +34,11 @@ relational_operator =  { "<=" | ">=" | "<" | ">" | "==" | "<>" }
 statement           =  {
     g_command_numbered
   | m_command
+  | tool_selection
   | assignment_multi
   | assignment
   | g_command
   | function_call
-  | tool_selection
 }
 
 // local variable definitions
@@ -103,7 +104,7 @@ primary          =  { value | variable_array | variable | "(" ~ expression ~ ")"
 float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* }
 integer          = @{ "-"? ~ ASCII_DIGIT+ }
 
-tool_selection = { "T" ~ "=" ~ string }
+tool_selection = { ^"T" ~ "=" ~ quoted_string }
 
 // frame instructions
 frame_op     = { frame_trans | frame_scale | frame_atrans | frame_ascale }
@@ -113,14 +114,15 @@ frame_atrans = { ^"ATRANS" ~ assignment+ }
 frame_ascale = { ^"ASCALE" ~ assignment+ }
 
 // function call parser
-function_call      = { identifier ~ ("(" ~ function_arguments? ~ ")")? }
-function_arguments = { ((expression | string)? ~ ",")* ~ (expression | string) }
-string             = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+function_call      =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }
+function_arguments =  { ((expression | quoted_string)? ~ ",")* ~ (expression | quoted_string) }
+quoted_string      = _{ QUOTE ~ (string)* ~ QUOTE }
+string             =  { (!"\"" ~ ANY)+ }
 
 // builtins, globally available names
 nc_variable = { "$" ~ identifier }
 
-m_command = { "M" ~ ASCII_DIGIT+ }
+m_command = { ^"M" ~ ASCII_DIGIT+ }
 
 // G-Code ggroups
 // This Pest grammar file is auto-generated from G-Code definitions.
