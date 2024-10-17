@@ -7,7 +7,7 @@ name = "nc-gcode-interpreter"
 version = "0.1.6"
 description = "A interpreter for NC (Numerical Control) code"
 authors = [{ name = "CEAD Group", email = "software@ceadgroup.com" }]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
@@ -19,6 +19,14 @@ classifiers = [
 dependencies = [
     "maturin>=1.7.4",
     "polars>=1.9.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.1.1"
+]
+test = [
+    "pytest>=8.3.3"
 ]
 
 [project.urls]

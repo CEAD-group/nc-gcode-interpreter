@@ -13,34 +13,40 @@ name: Build and Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  pull_request:
   workflow_dispatch:
+
 
 permissions:
   contents: write
 
 env:
   PROJECT_NAME: "nc-gcode-interpreter"
-
 jobs:
-  linux:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+      - name: Install Python linter
+        run: pip install ruff
+      - name: Lint Python code with ruff
+        run: ruff check .
+
+  linux-x64:
+    needs: [lint]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
         platform:
           - runner: ubuntu-latest
             target: x86_64
-        #   - runner: ubuntu-latest
-        #     target: x86
-          - runner: ubuntu-latest
-            target: aarch64
-        #   - runner: ubuntu-latest
-        #     target: armv7
-        #   - runner: ubuntu-latest
-        #     target: s390x
-        #   - runner: ubuntu-latest
-        #     target: ppc64le
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -50,7 +56,6 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          # args: --release --out dist --find-interpreter -b bin
           args: --release --out dist --find-interpreter
           sccache: 'true'
           manylinux: auto
@@ -60,47 +65,104 @@ jobs:
           name: wheels-linux-${{ matrix.platform.target }}
           path: dist
 
-#   musllinux:
-#     runs-on: ${{ matrix.platform.runner }}
-#     strategy:
-#       matrix:
-#         platform:
-#           - runner: ubuntu-latest
-#             target: x86_64
-#           - runner: ubuntu-latest
-#             target: x86
-#           - runner: ubuntu-latest
-#             target: aarch64
-#           - runner: ubuntu-latest
-#             target: armv7
-#     steps:
-#       - uses: actions/checkout@v4
-#       - uses: actions/setup-python@v5
-#         with:
-#           python-version: 3.12
-#       - name: Build wheels
-#         uses: PyO3/maturin-action@v1
-#         with:
-#           target: ${{ matrix.platform.target }}
-#         # args: --release --out dist --find-interpreter -b bin
-#           args: --release --out dist --find-interpreter
-#           sccache: 'true'
-#           manylinux: musllinux_1_2
-#       - name: Upload wheels
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: wheels-musllinux-${{ matrix.platform.target }}
-#           path: dist
+  test:
+    needs: [linux-x64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+      - name: Install py_opw_kinematics
+        run: |
+          WHL_FILE=$(ls dist/*cp312*.whl)
+          pip install "${WHL_FILE}[test]"
+      - name: Run tests with pytest
+        run: pytest
+
+  linux:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [lint, test]
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          # - runner: ubuntu-latest
+          #   target: x86
+          - runner: ubuntu-latest
+            target: aarch64
+          # - runner: ubuntu-latest
+          #   target: armv7
+          # - runner: ubuntu-latest
+          #   target: s390x
+          # - runner: ubuntu-latest
+          #   target: ppc64le
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+          manylinux: auto
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.platform.target }}
+          path: dist
+
+
+  # musllinux:
+  #   needs: [lint, test]
+  #   runs-on: ${{ matrix.platform.runner }}
+  #   strategy:
+  #     matrix:
+  #       platform:
+  #         - runner: ubuntu-latest
+  #           target: x86_64
+  #         # - runner: ubuntu-latest
+  #         #   target: x86
+  #         # - runner: ubuntu-latest
+  #         #   target: aarch64
+  #         # - runner: ubuntu-latest
+  #         #   target: armv7
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: '>=3.12'
+  #     - name: Build wheels
+  #       uses: PyO3/maturin-action@v1
+  #       with:
+  #         target: ${{ matrix.platform.target }}
+  #         args: --release --out dist --find-interpreter
+  #         sccache: 'true'
+  #         manylinux: musllinux_1_2
+  #     - name: Upload wheels
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: wheels-musllinux-${{ matrix.platform.target }}
+  #         path: dist
 
   windows:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [lint, test]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
         platform:
           - runner: windows-latest
             target: x64
-        #   - runner: windows-latest
-        #     target: x86
+          # - runner: windows-latest
+          #   target: x86
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -111,7 +173,6 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          # args: --release --out dist --find-interpreter -b bin
           args: --release --out dist --find-interpreter
           sccache: 'true'
       - name: Upload wheels
@@ -121,6 +182,8 @@ jobs:
           path: dist
 
   macos:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [lint, test]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -138,7 +201,6 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          # args: --release --out dist --find-interpreter -b bin
           args: --release --out dist --find-interpreter
           sccache: 'true'
       - name: Upload wheels
@@ -147,51 +209,15 @@ jobs:
           name: wheels-macos-${{ matrix.platform.target }}
           path: dist
 
-  # emscripten:
-  #   runs-on: ${{ matrix.platform.runner }}
-  #   strategy:
-  #     matrix:
-  #       platform:
-  #         - runner: ubuntu-latest
-  #           target: wasm32-unknown-emscripten
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with:
-  #         python-version: 3.12
-  #     - run: pip install pyodide-build
-  #     - name: Get Emscripten and Python version info
-  #       shell: bash
-  #       run: |
-  #         echo EMSCRIPTEN_VERSION=$(pyodide config get emscripten_version) >> $GITHUB_ENV
-  #         echo PYTHON_VERSION=$(pyodide config get python_version | cut -d '.' -f 1-2) >> $GITHUB_ENV
-  #         pip uninstall -y pyodide-build
-  #     - uses: mymindstorm/setup-emsdk@v12
-  #       with:
-  #         version: ${{ env.EMSCRIPTEN_VERSION }}
-  #         actions-cache-folder: emsdk-cache
-  #     - uses: actions/setup-python@v5
-  #       with:
-  #         python-version: ${{ env.PYTHON_VERSION }}
-  #     - run: pip install pyodide-build
-  #     - name: Build wheels
-  #       uses: PyO3/maturin-action@v1
-  #       with:
-  #         target: ${{ matrix.platform.target }}
-  #       #  args: --release --out dist -i ${{ env.PYTHON_VERSION }} -b bin
-  #         args: --release --out dist -i ${{ env.PYTHON_VERSION }}
-  #         sccache: 'true'
-  #         rust-toolchain: nightly
-  #     - name: Upload wheels
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: wheels-wasm
-  #         path: dist
-
   sdist:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [lint, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -206,10 +232,8 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    environment: release
     if: ${{ startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
-    # needs: [linux, musllinux, windows, macos, emscripten, sdist]
-    needs: [linux, windows, macos, sdist]
+    needs: [linux, linux-x64, windows, macos, sdist]
     permissions:
       # Use to sign the release artifacts
       id-token: write
@@ -219,6 +243,9 @@ jobs:
       attestations: write
     steps:
       - uses: actions/download-artifact@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v1
         with:
@@ -238,39 +265,3 @@ jobs:
             wheels-linux-*/*.whl
             wheels-macos-*/*.whl
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
-      # - name: Extract binary and rename
-      #   env:
-      #     PROJECT_NAME: ${{ env.PROJECT_NAME }}
-      #   run: |
-      #     for wheel_dir in wheels-windows-* wheels-linux-* wheels-macos-*; do
-      #       arch=$(echo $wheel_dir | cut -d'-' -f3)
-      #       os=$(echo $wheel_dir | cut -d'-' -f2)
-      #       find ./$wheel_dir -name "*.whl" -exec sh -c '
-      #         wheel_name=$(basename "$1")
-      #         version=$(echo $wheel_name | sed -E "s/.*-([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/")
-      #         unzip -d "$(dirname "$1")" "$1"
-      #         if [ "$2" = "windows" ]; then
-      #           binary_path=$(find "$(dirname "$1")" -name "*.exe")
-      #           if [ -n "$binary_path" ]; then
-      #             mv "$binary_path" "$(dirname "$binary_path")/${PROJECT_NAME}_${version}_${2}_${3}.exe"
-      #           fi
-      #         else
-      #           binary_path=$(find "$(dirname "$1")" -type f -executable)
-      #           if [ -n "$binary_path" ]; then
-      #             mv "$binary_path" "$(dirname "$binary_path")/${PROJECT_NAME}_${version}_${2}_${3}"
-      #           fi
-      #         fi
-      #       ' _ {} "$os" "$arch" \;
-      #     done
-      # - name: Upload to GitHub Release
-      #   uses: softprops/action-gh-release@v2
-      #   with:
-      #     files: |
-      #       wheels-sdist/*.tar.gz
-      #       wheels-windows-*/*.whl
-      #       wheels-windows-*/*.data/scripts/${{ env.PROJECT_NAME }}_*_windows_*.exe
-      #       wheels-linux-*/*.whl
-      #       wheels-linux-*/*.data/scripts/${{ env.PROJECT_NAME }}_*_linux_*
-      #       wheels-macos-*/*.whl
-      #       wheels-macos-*/*.data/scripts/${{ env.PROJECT_NAME }}_*_macos_*
-      #     prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
