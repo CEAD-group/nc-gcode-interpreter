@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "nc-gcode-interpreter"
-version = "0.1.6"
+dynamic = ["version"]
 description = "A interpreter for NC (Numerical Control) code"
 authors = [{ name = "CEAD Group", email = "software@ceadgroup.com" }]
 requires-python = ">=3.11"
