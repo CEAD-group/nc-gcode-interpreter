@@ -21,6 +21,14 @@ dependencies = [
     "polars>=1.9.0"
 ]
 
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.1.1"
+]
+test = [
+    "pytest>=8.3.3"
+]
+
 [project.urls]
 Homepage = "https://github.com/CEAD-group/nc-gcode-interpreter"
 Repository = "https://github.com/CEAD-group/nc-gcode-interpreter.git"
