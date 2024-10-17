@@ -1,7 +1,6 @@
 import pathlib
 import pytest
 from nc_gcode_interpreter import nc_to_dataframe
-from polars import DataFrame
 
 
 @pytest.fixture(
@@ -33,7 +32,7 @@ def test_mpf_file_to_csv(mpf_file, initial_state):
     """
     Test the nc_to_dataframe function with each .mpf file, using the default initial state.
     """
-    df: DataFrame = nc_to_dataframe(
+    nc_to_dataframe(
         mpf_file.read_text(),
         initial_state=initial_state,
         iteration_limit=10000,
