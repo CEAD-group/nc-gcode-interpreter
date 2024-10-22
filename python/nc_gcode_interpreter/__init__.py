@@ -68,7 +68,7 @@ _T = TypeVar("_T")
 
 
 class _classproperty(Generic[_T]):
-    def __init__(self, fget: Callable[[Type[Any]], _T]) -> None:
+    def __init__(self, fget: Callable[[Any], _T]) -> None:
         self.fget = fget
 
     def __get__(self, instance: Any, owner: Type[Any]) -> _T:
