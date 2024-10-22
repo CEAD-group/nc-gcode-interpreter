@@ -1,16 +1,17 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "nc-gcode-interpreter"
 dynamic = ["version"]
-description = "A interpreter for NC (Numerical Control) code"
+description = "A interpreter for NC (Numerical Control) GCode"
 authors = [{ name = "CEAD Group", email = "software@ceadgroup.com" }]
 requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -26,14 +27,17 @@ dev = [
     "jupyter>=1.1.1"
 ]
 test = [
-    "pytest>=8.3.3"
+    "pytest>=8.3.3",
+    "mypy"
 ]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "nc_gcode_interpreter._internal"
+python-source = "python"
+include = ["python/nc_gcode_interpreter/py.typed"]
 
 [project.urls]
 Homepage = "https://github.com/CEAD-group/nc-gcode-interpreter"
 Repository = "https://github.com/CEAD-group/nc-gcode-interpreter.git"
 Documentation = "https://github.com/CEAD-group/nc-gcode-interpreter/blob/main/README.md"
-
-[tool.maturin]
-features = ["pyo3/extension-module"]
-python-source = "python"
