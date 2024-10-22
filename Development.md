@@ -42,5 +42,5 @@ rm **/*.csv && cargo build --release && find examples -name "*.mpf" -type f -pri
 ## python test
     
 ```bash
-maturin develop --release && pytest
+maturin develop --release --uv && pytest
 ```

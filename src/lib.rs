@@ -42,7 +42,7 @@ fn nc_to_dataframe(
 }
 
 /// Define the Python module
-#[pymodule]
+#[pymodule(name = "_internal")]
 fn nc_gcode_interpreter(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nc_to_dataframe, m)?)?;
     Ok(())
