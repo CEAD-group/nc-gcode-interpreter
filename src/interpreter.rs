@@ -60,38 +60,128 @@ pub fn nc_to_dataframe(
     // Convert results to DataFrame
     let mut df = results_to_dataframe(results)?;
 
-    // Get the column names and reorder them
-    let ordered_columns = reorder_columns(
-        axis_identifiers,
-        df.get_column_names().into_iter().map(|s| s.to_string()).collect(),
-    );
-
-    // Select the columns in the specified order and return
-    df = df.select(&ordered_columns).map_err(ParsingError::from)?;
-
-    if !disable_forward_fill {
-        let fill_columns: Vec<String> = df
-            .get_column_names()
-            .iter()
-            .map(|col| col.to_string())
-            .filter(|col| state.is_axis(col) || MODAL_GROUPS.contains(&col.as_str()))
-            .collect();
-
-        for col_name in fill_columns {
-            let column = df
-                .column(&col_name)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-            let filled_column = column
-                .fill_null(FillNullStrategy::Forward(None))
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-            df.with_column(filled_column)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-        }
-    }
-
+    df = sanitize_dataframe(df, disable_forward_fill)?;
     Ok((df, state))
 }
 
+// pub fn sanitize_dataframe(
+//     df: DataFrame,
+//     disable_forward_fill: bool,
+// ) -> Result<(DataFrame), ParsingError> {
+//     // - MODAL_G_GROUPS: string, g commands that persist
+//     // - NON_MODAL_G_GROUPS: string
+//     // - "function_call": string
+//     // - "comment": string
+//     // - "T": tool changes, string
+//     // - "M": M commands, list of strings
+//     // = "N": line numbers, Type int64 Should be the first column
+//     // axis_identifiers: all other columns. Type float64
+
+pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Result<DataFrame, ParsingError> {
+    // Define expected types for specific columns
+    let mut expected_types: HashMap<String, DataType> = HashMap::new();
+
+    // MODAL_G_GROUPS and NON_MODAL_G_GROUPS should be of type String
+    let modal_g_groups: HashSet<String> = MODAL_G_GROUPS.iter().map(|s| s.to_string()).collect();
+    let non_modal_g_groups: HashSet<String> = NON_MODAL_G_GROUPS.iter().map(|s| s.to_string()).collect();
+
+    // Combine modal groups into a single set of known columns
+    let mut known_columns: HashSet<String> = modal_g_groups.union(&non_modal_g_groups).cloned().collect();
+
+    // Add these columns to the known_columns set
+    known_columns.extend(vec![
+        "function_call".to_string(),
+        "comment".to_string(),
+        "T".to_string(),
+        "M".to_string(),
+        "N".to_string(),
+    ]);
+
+    // Collect column names from the DataFrame
+    let column_names: Vec<&PlSmallStr> = df.get_column_names().into_iter().collect();
+
+    // Determine axis identifiers by excluding known columns
+    let axis_identifiers: HashSet<&PlSmallStr> = column_names
+        .iter()
+        .filter(|col| !known_columns.contains(&col.to_string()))
+        .cloned()
+        .collect();
+
+    // Assign expected types for known columns. Do this in the order they will apear in the output
+    expected_types.insert("N".to_string(), DataType::Int64); // Line numbers
+
+    // insert know axis identifiers in a nice order
+    for col in [
+        "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V", "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
+    ]
+    .iter()
+    {
+        expected_types.insert(col.to_string(), DataType::Float64);
+    }
+    // insert all axis identifiers that are not already in the known columns
+    for col in axis_identifiers.iter() {
+        if expected_types.contains_key(&col.to_string()) {
+            continue;
+        }
+        expected_types.insert(col.to_string(), DataType::Float64);
+    }
+    expected_types.insert("T".to_string(), DataType::String); // Tool changes
+    expected_types.insert("M".to_string(), DataType::List(Box::new(DataType::String))); // M Codes
+    expected_types.insert("function_call".to_string(), DataType::String); // Function calls
+    expected_types.insert("comment".to_string(), DataType::String); // Comments go last
+
+    // Iterate over each column in the DataFrame
+    for col_name in &column_names {
+        if let Some(expected_dtype) = expected_types.get(&col_name.to_string()) {
+            let current_dtype = df.column(col_name)?.dtype();
+            if current_dtype != expected_dtype {
+                // Attempt to cast the column to the expected type
+                let casted_series =
+                    df.column(col_name)?
+                        .cast(expected_dtype)
+                        .map_err(|e| ParsingError::ParseError {
+                            message: format!("Error casting column {}: {:?}", col_name, e),
+                        })?;
+                // Replace the column in the DataFrame
+                df.replace_or_add(**col_name, casted_series)
+                    .map_err(|e| ParsingError::ParseError {
+                        message: format!("Error replacing column {}: {:?}", col_name, e),
+                    })?;
+            }
+        } else {
+            // Raise an error if the column is not recognized
+            return Err(ParsingError::ParseError {
+                message: format!("Unrecognized column: {}", col_name),
+            });
+        }
+    }
+
+    let mut ordered_columns: Vec<PlSmallStr> = vec![];
+    for col_name in expected_types.keys() {
+        if column_names.contains(&&PlSmallStr::from_str(&col_name)) {
+            ordered_columns.push(PlSmallStr::from_str(&col_name));
+        }
+    }
+
+    df = df.select(ordered_columns).map_err(ParsingError::from)?;
+
+    // Forward fill if not disabled
+    if !disable_forward_fill {
+        let fill_columns: Vec<PlSmallStr> = df
+            .get_column_names()
+            .iter()
+            .filter(|col| axis_identifiers.contains(col.as_str()) || modal_g_groups.contains(col.as_str()))
+            .collect();
+
+        for col_name in fill_columns {
+            let column = df.column(&col_name)?;
+            let filled_column = column.fill_null(FillNullStrategy::Forward(None))?;
+            df.replace_or_add(&filled_column)?;
+        }
+    }
+
+    Ok(df)
+}
 #[allow(dead_code)] // Only used in main.rs, not in lib.rs
 pub fn dataframe_to_csv(df: &mut DataFrame, path: &str) -> Result<(), PolarsError> {
     // Get all column names that are of List type
@@ -192,25 +282,24 @@ fn results_to_dataframe(data: Vec<HashMap<String, Value>>) -> PolarsResult<DataF
     DataFrame::new(polars_series)
 }
 
-/// Helper function to reorder DataFrame columns
-fn reorder_columns(axis_identifiers: Vec<String>, mut df_columns: Vec<String>) -> Vec<String> {
-    let mut ordered_columns = Vec::new();
-    df_columns.sort(); // Sort columns alphabetically
-                       // Move axis columns first
-    for axis in axis_identifiers {
-        if let Some(index) = df_columns.iter().position(|col| col == &axis) {
-            ordered_columns.push(df_columns.remove(index));
-        }
-    }
+/// Function to convert DataFrame back to NC code
+pub fn dataframe_to_nc(
+    df: &DataFrame,
+    output_path: &str,
+    precision: Option<usize>,
+    ignore_comments: bool,
+    skip_duplicated_values: bool,
+) -> Result<(), ParsingError> {
+    use std::collections::HashSet;
 
-    // Append the remaining (non-axis) columns
-    ordered_columns.append(&mut df_columns);
+    // Set default precision to 3 if not provided
+    let precision = precision.unwrap_or(3);
 
-    // Ensure "comment" column is last if present
-    if let Some(index) = ordered_columns.iter().position(|col| col == "comment") {
-        let comment_column = ordered_columns.remove(index);
-        ordered_columns.push(comment_column);
-    }
+    // Open the output file for writing
+    let mut file = File::create(output_path).map_err(|e| ParsingError::ParseError {
+        message: format!("Failed to create output file: {:?}", e),
+    })?;
 
-    ordered_columns
+    // Get column names from the DataFrame
+    let column_names = df.get_column_names();
 }
