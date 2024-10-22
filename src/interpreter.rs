@@ -1,15 +1,15 @@
 //interpreter.rs
+use crate::errors::ParsingError;
+use crate::interpret_rules::interpret_blocks;
+use crate::modal_groups::{MODAL_G_GROUPS, NON_MODAL_G_GROUPS};
+use crate::state::{self, State};
+use crate::types::{NCParser, Rule, Value};
+
 use pest::Parser;
 use polars::chunked_array::ops::FillNullStrategy;
 use polars::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self};
-
-use crate::errors::ParsingError;
-use crate::interpret_rules::interpret_blocks;
-use crate::modal_groups::MODAL_GROUPS;
-use crate::state::{self, State};
-use crate::types::{NCParser, Rule, Value};
 
 /// Helper function to convert PolarsError to ParsingError
 impl From<PolarsError> for ParsingError {
@@ -19,6 +19,10 @@ impl From<PolarsError> for ParsingError {
         }
     }
 }
+
+const DEFAULT_AXIS_IDENTIFIERS: &[&str] = &[
+    "N", "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V", "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
+];
 
 /// Main function to interpret input to DataFrame
 pub fn nc_to_dataframe(
@@ -30,9 +34,6 @@ pub fn nc_to_dataframe(
     disable_forward_fill: bool,
 ) -> Result<(DataFrame, state::State), ParsingError> {
     // Default axis identifiers
-    const DEFAULT_AXIS_IDENTIFIERS: &[&str] = &[
-        "N", "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V", "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
-    ];
 
     // Use the override if provided, otherwise use the default identifiers
     let axis_identifiers: Vec<String> =
