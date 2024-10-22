@@ -9,7 +9,6 @@ use pest::Parser;
 use polars::chunked_array::ops::FillNullStrategy;
 use polars::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::io::{self};
 
 /// Helper function to convert PolarsError to ParsingError
 impl From<PolarsError> for ParsingError {
@@ -79,109 +78,96 @@ pub fn nc_to_dataframe(
 
 pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Result<DataFrame, ParsingError> {
     // Define expected types for specific columns
-    let mut expected_types: HashMap<String, DataType> = HashMap::new();
+    let mut expected_types: Vec<(&str, DataType)> = Vec::new();
 
-    // MODAL_G_GROUPS and NON_MODAL_G_GROUPS should be of type String
-    let modal_g_groups: HashSet<String> = MODAL_G_GROUPS.iter().map(|s| s.to_string()).collect();
-    let non_modal_g_groups: HashSet<String> = NON_MODAL_G_GROUPS.iter().map(|s| s.to_string()).collect();
+    // Collect MODAL_G_GROUPS and NON_MODAL_G_GROUPS into HashSet
+    let modal_g_groups: HashSet<&str> = MODAL_G_GROUPS.iter().cloned().collect();
+    let non_modal_g_groups: HashSet<&str> = NON_MODAL_G_GROUPS.iter().cloned().collect();
 
-    // Combine modal groups into a single set of known columns
-    let mut known_columns: HashSet<String> = modal_g_groups.union(&non_modal_g_groups).cloned().collect();
+    // Collect known columns by combining MODAL_G_GROUPS and NON_MODAL_G_GROUPS
+    let mut known_columns: HashSet<&str> = modal_g_groups.union(&non_modal_g_groups).cloned().collect();
+    known_columns.extend(&["function_call", "comment", "T", "M"]);
 
-    // Add these columns to the known_columns set
-    known_columns.extend(vec![
-        "function_call".to_string(),
-        "comment".to_string(),
-        "T".to_string(),
-        "M".to_string(),
-        "N".to_string(),
-    ]);
+    // Collect column names from the DataFrame as Strings (to avoid immutable borrows)
+    let column_names: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
 
-    // Collect column names from the DataFrame
-    let column_names: Vec<&PlSmallStr> = df.get_column_names().into_iter().collect();
-
-    // Determine axis identifiers by excluding known columns
-    let axis_identifiers: HashSet<&PlSmallStr> = column_names
+    // Determine axis identifiers (columns not in known_columns)
+    let axis_identifiers: HashSet<String> = column_names
         .iter()
-        .filter(|col| !known_columns.contains(&col.to_string()))
+        .filter(|col| !known_columns.contains(col.as_str()))
         .cloned()
         .collect();
 
-    // Assign expected types for known columns. Do this in the order they will apear in the output
-    expected_types.insert("N".to_string(), DataType::Int64); // Line numbers
+    // Insert all known columns into `expected_types` with their expected DataTypes (in desired order)
+    expected_types.push(("N", DataType::Int64)); // Line numbers
 
-    // insert know axis identifiers in a nice order
-    for col in [
+    // Insert G group columns as DataType::String
+    for &col in MODAL_G_GROUPS.iter().chain(NON_MODAL_G_GROUPS.iter()) {
+        expected_types.push((col, DataType::String));
+    }
+
+    // Insert specific axis columns
+    for &col in &[
         "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V", "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
-    ]
-    .iter()
-    {
-        expected_types.insert(col.to_string(), DataType::Float64);
+    ] {
+        expected_types.push((col, DataType::Float64));
     }
-    // insert all axis identifiers that are not already in the known columns
-    for col in axis_identifiers.iter() {
-        if expected_types.contains_key(&col.to_string()) {
-            continue;
-        }
-        expected_types.insert(col.to_string(), DataType::Float64);
-    }
-    expected_types.insert("T".to_string(), DataType::String); // Tool changes
-    expected_types.insert("M".to_string(), DataType::List(Box::new(DataType::String))); // M Codes
-    expected_types.insert("function_call".to_string(), DataType::String); // Function calls
-    expected_types.insert("comment".to_string(), DataType::String); // Comments go last
 
-    // Iterate over each column in the DataFrame
-    for col_name in &column_names {
-        if let Some(expected_dtype) = expected_types.get(&col_name.to_string()) {
-            let current_dtype = df.column(col_name)?.dtype();
+    // Insert all axis identifiers that are not already in `expected_types`
+    for col in &axis_identifiers {
+        if !expected_types.iter().any(|&(name, _)| name == col.as_str()) {
+            expected_types.push((col.as_str(), DataType::Float64));
+        }
+    }
+
+    // Insert other known columns
+    expected_types.push(("T", DataType::String)); // Tool changes
+    expected_types.push(("M", DataType::List(Box::new(DataType::String)))); // M Codes
+    expected_types.push(("function_call", DataType::String)); // Function calls
+    expected_types.push(("comment", DataType::String)); // Comments
+
+    // Iterate over each expected column and apply necessary type casting if available in the DataFrame
+    for (col_name, expected_dtype) in &expected_types {
+        if let Some(current_dtype) = df.column(col_name).ok().map(|c| c.dtype()) {
             if current_dtype != expected_dtype {
-                // Attempt to cast the column to the expected type
-                let casted_series =
-                    df.column(col_name)?
-                        .cast(expected_dtype)
-                        .map_err(|e| ParsingError::ParseError {
-                            message: format!("Error casting column {}: {:?}", col_name, e),
-                        })?;
-                // Replace the column in the DataFrame
-                df.replace_or_add(**col_name, casted_series)
-                    .map_err(|e| ParsingError::ParseError {
-                        message: format!("Error replacing column {}: {:?}", col_name, e),
-                    })?;
+                let casted_series = df.column(col_name)?.cast(expected_dtype)?;
+                // Mutable operation after ensuring no immutable borrow remains
+                df.replace_or_add((*col_name).into(), casted_series)?;
             }
-        } else {
-            // Raise an error if the column is not recognized
-            return Err(ParsingError::ParseError {
-                message: format!("Unrecognized column: {}", col_name),
-            });
         }
     }
 
-    let mut ordered_columns: Vec<PlSmallStr> = vec![];
-    for col_name in expected_types.keys() {
-        if column_names.contains(&&PlSmallStr::from_str(&col_name)) {
-            ordered_columns.push(PlSmallStr::from_str(&col_name));
-        }
-    }
+    // Build the list of ordered columns that are available in the DataFrame
+    let ordered_columns: Vec<String> = expected_types
+        .iter()
+        .filter(|&&(col_name, _)| column_names.contains(&col_name.to_string()))
+        .map(|&(s, _)| s.to_string())
+        .collect();
 
-    df = df.select(ordered_columns).map_err(ParsingError::from)?;
+    // Reassign the reordered DataFrame to `df`
+    df = df
+        .select(ordered_columns.iter().map(|s| PlSmallStr::from_str(s)))
+        .map_err(ParsingError::from)?;
 
-    // Forward fill if not disabled
+    // Handle forward fill if it's not disabled
     if !disable_forward_fill {
-        let fill_columns: Vec<PlSmallStr> = df
+        let fill_columns: Vec<String> = df
             .get_column_names()
             .iter()
-            .filter(|col| axis_identifiers.contains(col.as_str()) || modal_g_groups.contains(col.as_str()))
+            .map(|s| s.to_string())
+            .filter(|col| axis_identifiers.contains(col) || modal_g_groups.contains(col.as_str()))
             .collect();
 
         for col_name in fill_columns {
             let column = df.column(&col_name)?;
             let filled_column = column.fill_null(FillNullStrategy::Forward(None))?;
-            df.replace_or_add(&filled_column)?;
+            df.replace_or_add(col_name.into(), filled_column)?;
         }
     }
 
     Ok(df)
 }
+
 #[allow(dead_code)] // Only used in main.rs, not in lib.rs
 pub fn dataframe_to_csv(df: &mut DataFrame, path: &str) -> Result<(), PolarsError> {
     // Get all column names that are of List type
@@ -282,24 +268,24 @@ fn results_to_dataframe(data: Vec<HashMap<String, Value>>) -> PolarsResult<DataF
     DataFrame::new(polars_series)
 }
 
-/// Function to convert DataFrame back to NC code
-pub fn dataframe_to_nc(
-    df: &DataFrame,
-    output_path: &str,
-    precision: Option<usize>,
-    ignore_comments: bool,
-    skip_duplicated_values: bool,
-) -> Result<(), ParsingError> {
-    use std::collections::HashSet;
+// /// Function to convert DataFrame back to NC code
+// pub fn dataframe_to_nc(
+//     df: &DataFrame,
+//     output_path: &str,
+//     precision: Option<usize>,
+//     ignore_comments: bool,
+//     skip_duplicated_values: bool,
+// ) -> Result<(), ParsingError> {
+//     use std::collections::HashSet;
 
-    // Set default precision to 3 if not provided
-    let precision = precision.unwrap_or(3);
+//     // Set default precision to 3 if not provided
+//     let precision = precision.unwrap_or(3);
 
-    // Open the output file for writing
-    let mut file = File::create(output_path).map_err(|e| ParsingError::ParseError {
-        message: format!("Failed to create output file: {:?}", e),
-    })?;
+//     // Open the output file for writing
+//     let mut file = File::create(output_path).map_err(|e| ParsingError::ParseError {
+//         message: format!("Failed to create output file: {:?}", e),
+//     })?;
 
-    // Get column names from the DataFrame
-    let column_names = df.get_column_names();
-}
+//     // Get column names from the DataFrame
+//     let column_names = df.get_column_names();
+// }
