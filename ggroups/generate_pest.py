@@ -2,7 +2,7 @@
 from pathlib import Path
 import json
 
-json_file = Path(__file__).parent / "ggroups.json"
+json_file = Path(__file__).parent.parent / "python/nc_gcode_interpreter/ggroups.json"
 with open(json_file, "r") as file:
     g_groups = json.load(file)
 # %%

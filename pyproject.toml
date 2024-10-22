@@ -35,7 +35,7 @@ test = [
 features = ["pyo3/extension-module"]
 module-name = "nc_gcode_interpreter._internal"
 python-source = "python"
-include = ["python/nc_gcode_interpreter/py.typed"]
+include = ["python/nc_gcode_interpreter/py.typed", "python/nc_gcode_interpreter/ggroups.json"]
 
 [project.urls]
 Homepage = "https://github.com/CEAD-group/nc-gcode-interpreter"
