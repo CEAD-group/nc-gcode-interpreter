@@ -4,7 +4,6 @@ use crate::interpret_rules::interpret_blocks;
 use crate::modal_groups::{MODAL_G_GROUPS, NON_MODAL_G_GROUPS};
 use crate::state::{self, State};
 use crate::types::{NCParser, Rule, Value};
-
 use pest::Parser;
 use polars::chunked_array::ops::FillNullStrategy;
 use polars::prelude::*;
@@ -85,7 +84,7 @@ pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Resu
     let non_modal_g_groups: HashSet<&str> = NON_MODAL_G_GROUPS.iter().cloned().collect();
 
     // Collect known columns by combining MODAL_G_GROUPS and NON_MODAL_G_GROUPS
-    let mut known_columns: HashSet<&str> = modal_g_groups.union(&non_modal_g_groups).cloned().collect();
+    let mut known_columns: Vec<&str> = modal_g_groups.union(&non_modal_g_groups).cloned().collect();
     known_columns.extend(&["function_call", "comment", "T", "M"]);
 
     // Collect column names from the DataFrame as Strings (to avoid immutable borrows)
@@ -94,7 +93,7 @@ pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Resu
     // Determine axis identifiers (columns not in known_columns)
     let axis_identifiers: HashSet<String> = column_names
         .iter()
-        .filter(|col| !known_columns.contains(col.as_str()))
+        .filter(|col| !known_columns.contains(&col.as_str()))
         .cloned()
         .collect();
 
@@ -267,25 +266,3 @@ fn results_to_dataframe(data: Vec<HashMap<String, Value>>) -> PolarsResult<DataF
     // Step 5: Create the DataFrame
     DataFrame::new(polars_series)
 }
-
-// /// Function to convert DataFrame back to NC code
-// pub fn dataframe_to_nc(
-//     df: &DataFrame,
-//     output_path: &str,
-//     precision: Option<usize>,
-//     ignore_comments: bool,
-//     skip_duplicated_values: bool,
-// ) -> Result<(), ParsingError> {
-//     use std::collections::HashSet;
-
-//     // Set default precision to 3 if not provided
-//     let precision = precision.unwrap_or(3);
-
-//     // Open the output file for writing
-//     let mut file = File::create(output_path).map_err(|e| ParsingError::ParseError {
-//         message: format!("Failed to create output file: {:?}", e),
-//     })?;
-
-//     // Get column names from the DataFrame
-//     let column_names = df.get_column_names();
-// }
