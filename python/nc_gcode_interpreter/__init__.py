@@ -1,6 +1,7 @@
 from typing import Protocol
 import polars as pl
 from ._internal import nc_to_dataframe as _nc_to_dataframe
+from ._internal import sanitize_dataframe
 from ._internal import __doc__  # noqa: F401
 import json
 from pathlib import Path
@@ -12,7 +13,7 @@ class TextFileLike(Protocol):
     def read(self) -> str: ...
 
 
-__all__ = ["nc_to_dataframe"]
+__all__ = ["nc_to_dataframe", "sanitize_dataframe"]
 
 
 def nc_to_dataframe(
@@ -125,3 +126,57 @@ class GGroups:
             cls._load_data()
         assert cls._g_groups_by_short_name is not None
         return cls._g_groups_by_short_name[name]["effectiveness"] == "modal"
+
+
+def dataframe_to_nc(df, file_path):
+    """
+    Convert a DataFrame back to G-code.
+    """
+    df = sanitize_dataframe(df)
+    # Python prototype of df to nc conversion code
+    float_cols = [col for col in df.columns if df[col].dtype == pl.Float64]
+    int_cols = [col for col in df.columns if df[col].dtype == pl.Int64]
+    g_group_cols = [col for col in df.columns if GGroups.is_g_group(col)]
+    list_of_str_cols = [
+        col for col in df.columns if df[col].dtype == pl.List(pl.String)
+    ]
+    string_axes_cols = [col for col in df.columns if col in ["T"]]
+
+    # Replace consecutive duplicates with null values
+    df = df.with_columns(
+        [
+            pl.when(pl.col(c) == pl.col(c).shift(1))
+            .then(None)
+            .otherwise(pl.lit(f"{c}=") + pl.col(c).round(3).cast(pl.String))
+            .alias(c)
+            for c in float_cols
+        ]
+        + [
+            pl.when(pl.col(c) == pl.col(c).shift(1))
+            .then(None)
+            .otherwise(pl.lit(f"{c}=") + pl.col(c).cast(pl.String))
+            .alias(c)
+            for c in int_cols
+        ]
+        + [
+            (pl.lit(f'{c}="') + pl.col(c) + pl.lit('"')).alias(c)
+            for c in string_axes_cols
+        ]
+        + [
+            pl.when(pl.col(c) == pl.col(c).shift(1))
+            .then(None)
+            .otherwise(pl.col(c))
+            .alias(c)
+            for c in g_group_cols
+        ]
+        + [pl.col(c).list.join(separator=" ").alias(c) for c in list_of_str_cols]
+    )
+
+    # Define the columns you want to include in the output
+    columns_of_interest = df.columns
+    df_line = df.with_columns(
+        pl.concat_str(
+            [pl.col(c) for c in columns_of_interest], ignore_nulls=True, separator=" "
+        ).alias("line")
+    ).select("line")
+    df_line.write_csv(file_path, include_header=False, quote_style="never")

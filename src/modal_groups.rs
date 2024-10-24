@@ -1,4 +1,4 @@
-pub const MODAL_GROUPS: [&str; 55] = [
+pub const MODAL_G_GROUPS: [&str; 55] = [
     "gg01_motion",
     "gg04_fifo",
     "gg06_plane_select",
@@ -54,4 +54,12 @@ pub const MODAL_GROUPS: [&str; 55] = [
     "gg59_area_limit",
     "gg61_tool_orient_smooth",
     "gg64_grinding_frames",
+];
+
+pub const NON_MODAL_G_GROUPS: [&str; 5] = [
+    "gg02_wait",
+    "gg03_frame_area_limit",
+    "gg09_frame_tool_suppress",
+    "gg11_exact_stop_non_modal",
+    "gg62_repos_non_modal",
 ];
