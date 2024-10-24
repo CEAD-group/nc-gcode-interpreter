@@ -3,8 +3,8 @@ G1,,,
 G1,1.000,M101,;one m code
 G1,2.000,M102,;one m code
 G1,3.000,M103,; five m codes
-G1,3.000,M2 ,; five m codes
-G1,3.000,M3 ,; five m codes
-G1,3.000,M4 ,; five m codes
+G1,3.000,M2,; five m codes
+G1,3.000,M3,; five m codes
+G1,3.000,M4,; five m codes
 G1,3.000,M5,; five m codes
 G1,3.000,,;X4 M1 M2 M3 M4 M5 M6; one mcode too many
