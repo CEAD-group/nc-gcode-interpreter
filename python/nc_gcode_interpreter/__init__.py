@@ -135,7 +135,12 @@ def dataframe_to_nc(df, file_path):
     df = sanitize_dataframe(df)
     # Python prototype of df to nc conversion code
     float_cols = [col for col in df.columns if df[col].dtype == pl.Float64]
+    int_cols = [col for col in df.columns if df[col].dtype == pl.Int64]
     g_group_cols = [col for col in df.columns if GGroups.is_g_group(col)]
+    list_of_str_cols = [
+        col for col in df.columns if df[col].dtype == pl.List(pl.String)
+    ]
+    string_axes_cols = [col for col in df.columns if col in ["T"]]
 
     # Replace consecutive duplicates with null values
     df = df.with_columns(
@@ -149,10 +154,22 @@ def dataframe_to_nc(df, file_path):
         + [
             pl.when(pl.col(c) == pl.col(c).shift(1))
             .then(None)
+            .otherwise(pl.lit(f"{c}=") + pl.col(c).cast(pl.String))
+            .alias(c)
+            for c in int_cols
+        ]
+        + [
+            (pl.lit(f'{c}="') + pl.col(c) + pl.lit('"')).alias(c)
+            for c in string_axes_cols
+        ]
+        + [
+            pl.when(pl.col(c) == pl.col(c).shift(1))
+            .then(None)
             .otherwise(pl.col(c))
             .alias(c)
             for c in g_group_cols
         ]
+        + [pl.col(c).list.join(separator=" ").alias(c) for c in list_of_str_cols]
     )
 
     # Define the columns you want to include in the output
