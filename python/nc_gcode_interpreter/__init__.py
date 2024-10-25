@@ -147,14 +147,19 @@ def dataframe_to_nc(df, file_path):
         [
             pl.when(pl.col(c) == pl.col(c).shift(1))
             .then(None)
-            .otherwise(pl.lit(f"{c}=") + pl.col(c).round(3).cast(pl.String))
+            .otherwise(
+                pl.lit(f"{c}{'=' if len(c) > 1 else ''}")
+                + pl.col(c).round(3).cast(pl.String)
+            )
             .alias(c)
             for c in float_cols
         ]
         + [
             pl.when(pl.col(c) == pl.col(c).shift(1))
             .then(None)
-            .otherwise(pl.lit(f"{c}=") + pl.col(c).cast(pl.String))
+            .otherwise(
+                pl.lit(f"{c}{'=' if len(c) > 1 else ''}") + pl.col(c).cast(pl.String)
+            )
             .alias(c)
             for c in int_cols
         ]
