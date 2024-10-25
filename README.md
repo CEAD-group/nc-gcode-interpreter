@@ -1,43 +1,41 @@
 # NC-GCode-Interpreter
 
-A robust interpreter tailored for processing Sinumerik-flavored NC G-code, designed to convert MPF files into CSV outputs or Polars dataframes when used with Python bindings.
+A robust interpreter designed for processing Sinumerik-flavored NC G-code, capable of converting MPF files into CSV outputs or Polars DataFrames via Python bindings.
 
 ## Overview
 
-The NC-GCode-Interpreter provides a streamlined and efficient solution for interpreting G-code specifically designed with Sinumerik specifications in mind. This tool caters to both CLI users and those preferring a Python environment, ensuring versatility and ease of use in processing NC programming commands into structured formats like CSV files or Polars dataframes.
+The **NC-GCode-Interpreter** offers a streamlined and efficient solution for interpreting G-code specifically tailored to Sinumerik specifications. This tool caters to both command-line interface (CLI) users and those preferring a Python environment, ensuring versatility and ease of use in processing NC programming commands into structured formats like CSV files or Polars DataFrames.
 
 ## Features
 
 ### Supported G-code Features
 
-- **G Group Commands**: Recognizes G-code groups and modal gcode commands.
-- **Global Translations**: Supports commands like TRANS and ATRANS for adjusting coordinates globally.
-- **Looping Constructs**: Handles loops using WHILE and FOR statements.
+- **G Group Commands**: Recognizes G-code groups and modal G-code commands.
+- **Global Transformations**: Supports commands like `TRANS` and `ATRANS` for adjusting coordinates globally.
+- **Looping Constructs**: Handles loops using `WHILE` and `FOR` statements.
 - **Variable Handling**: Supports definition and manipulation of local variables.
-- **Conditional Logic**: Implements conditional execution with IF, ELSE, and ENDIF.
-- **Arithmetic Operations**: Basic operations such as addition, subtraction, multiplication, and division are supported.
+- **Conditional Logic**: Implements conditional execution with `IF`, `ELSE`, and `ENDIF`.
+- **Arithmetic Operations**: Supports basic operations such as addition, subtraction, multiplication, and division.
 - **Array Operations**: Manages arrays and allows operations on them.
-- **Incremental Changes**: Facilitates incremental changes in axes positions like X=IC(2).
+- **Incremental Changes**: Facilitates incremental changes in axes positions like `X=IC(2)`.
 
 ### Additional Functionality
 
-- **Custom Axes**: Allows users to define additional axes beyond the standard X, Y, Z.
+- **Custom Axes**: Allows users to define additional axes beyond the standard `X`, `Y`, `Z`.
 - **Initial State Configuration**: Enables the use of an initial state MPF file to set default values for multiple runs.
-- **CLI Options**: Numerous command-line options to customize the processing like axis overriding, loop limits, and more.
-
-
+- **CLI Options**: Numerous command-line options to customize the processing, such as axis overriding, loop limits, and more.
 
 ## Example Usage
 
-
 Consider this example program to generate a square in two layers:
+
 ```scheme
-;Example.MPF
-DEF INT n_layers = 2, layer=1
-DEF REAL size = 100 ;size of the square
-DEF REAL layer_height = 4 ;size of the square
-TRANS Z = 0.5 ; move up all z coordinates by 0.5
-G1 F=1000; Set feed rate in millimeters per minute
+; Example.MPF
+DEF INT n_layers = 2, layer = 1
+DEF REAL size = 100 ; size of the square
+DEF REAL layer_height = 4 ; height of each layer
+TRANS Z = 0.5 ; move up all Z coordinates by 0.5
+G1 F=1000 ; Set feed rate in millimeters per minute
 G1 X0 Y500 Z0 ; move to the starting point
 WHILE (layer <= n_layers)
     X=IC(size)
@@ -46,13 +44,12 @@ WHILE (layer <= n_layers)
     Y=IC(-size) Z=IC(layer_height)
     layer = layer + 1
 ENDWHILE
-M31; end of program
-```
+M31 ; end of program
 
 
 ### CLI Usage
 ```bash
-> cargo run -- --help
+$ cargo run -- --help
 A G-code interpreter
 
 Usage: nc-gcode-interpreter [OPTIONS] <input>
@@ -63,13 +60,13 @@ Arguments:
 Options:
   -a, --axes <AXIS>                    Override default axis identifiers (comma-separated, e.g., "X,Y,Z")
   -e, --extra-axes <EXTRA_AXIS>        Add extra axis identifiers (comma-separated, e.g., "RA1,RA2")
-  -i, --initial_state <INITIAL_STATE>  Optional initial_state file to initialize state
+  -i, --initial_state <INITIAL_STATE>  Optional initial state file to e.g. define global variables or set axis positions
   -l, --iteration_limit <LIMIT>        Maximum number of iterations for loops [default: 10000]
   -f, --disable-forward-fill           Disable forward-filling of null values in axes columns
   -h, --help                           Print help
   -V, --version                        Print version
 
-> cargo run -- Example.MPF
+$ cargo run -- Example.MPF
 ```
 
 ```csv
@@ -119,9 +116,9 @@ shape: (14, 7)
 └───────┴───────┴──────┴────────┴───────────┴─────────────┴─────────────────────────────────┘
 ```
 
-The python bindings also return the state of the program after execution, which can be used for inspection. 
+The Python bindings also return the state of the program after execution, which can be used for inspection.
 
-Additional to to convert the dataframe to a Polars dataframe, conversion of a Polars dataframe to a *.MPF (NC) program is also supported.
+Additionally, conversion from a Polars DataFrame back to an MPF (NC) program is also supported:
 
 ```bash
 python -c "\
@@ -152,7 +149,7 @@ Options:
 
 ## Why?
 
-The Sinumerik NC programming guide is extensive, and some of it's functionality can be very convenient for  making on the fly improvements to cde. However to better uderstand, visualize and simulate the code, it is often necessary to convert it to a more structured format like CSV or a dataframe. This tool aims to provide a simple and efficient way to convert Sinumerik-flavored G-code to a structured format, making it easier to analyze and visualize the code.
+The Sinumerik NC programming guide is extensive, and some of its functionality can be very convenient for making on-the-fly improvements to code. However, to better understand, visualize, and simulate the code, it is often necessary to convert it to a more structured format like CSV or a DataFrame. This tool aims to provide a simple and efficient way to convert Sinumerik-flavored G-code to a structured format, making it easier to analyze and visualize.
 
 Only a limited subset is supported, but the tool is designed to be easily extensible to support more features in the future.
 
