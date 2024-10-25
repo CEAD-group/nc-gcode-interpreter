@@ -90,6 +90,13 @@ X			,Y			,Z			,F			,M	 ,gg01_motion	,comment
 
 ### python example
 
+To install the Python bindings, run:
+```bash
+pip install nc-gcode-interpreter
+```
+
+Then, you can use the Python bindings to convert an MPF file to a DataFrame:
+
 ```bash
 python -c "\
 from nc_gcode_interpreter import nc_to_dataframe; \
