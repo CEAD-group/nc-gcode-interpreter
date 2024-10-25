@@ -124,6 +124,14 @@ The python bindings also return the state of the program after execution, which 
 Additional to to convert the dataframe to a Polars dataframe, conversion of a Polars dataframe to a *.MPF (NC) program is also supported.
 
 ```bash
+python -c "\
+from nc_gcode_interpreter import nc_to_dataframe, dataframe_to_nc; \
+from pathlib import Path; \
+df, state = nc_to_dataframe(Path('Example.MPF').open(), extra_axes=['ELX']); \
+dataframe_to_nc(df, Path('Example_out.MPF').open('w'))" 
+```
+
+```bash
 target/release/nc-gcode-interpreter --help
 A G-code interpreter
 
