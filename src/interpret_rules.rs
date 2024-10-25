@@ -111,7 +111,8 @@ fn interpret_m_command(m_command: Pair<Rule>) -> (String, String) {
     //println!("Parsed M command: {:?}", m_command);
 
     // Initially, set the command string to the entire M command (e.g., "M3")
-    let command_str = m_command.as_str().to_string();
+    // the parser should ommit trailing spaces, however, if there are any, remove them
+    let command_str = m_command.as_str().trim_end().to_string();
 
     // Return the tuple with the rule name as the column header and the specific M command as the value
     ("M".to_string(), command_str)

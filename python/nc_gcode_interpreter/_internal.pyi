@@ -35,7 +35,28 @@ def nc_to_dataframe(
     """
     ...
 
+def sanitize_dataframe(
+    df: pl.DataFrame,
+    disable_forward_fill: bool = False,
+) -> pl.DataFrame:
+    """
+    Sanitize the given DataFrame by applying the necessary type conversions and optionally filling missing values.
+
+    Parameters:
+    -----------
+    df: pl.DataFrame
+        The input DataFrame to sanitize.
+    disable_forward_fill: bool
+        Whether to disable forward-filling of missing values.
+
+    Returns:
+    --------
+    pl.DataFrame
+        The sanitized DataFrame.
+    """
+    ...
+
 # Module definition for nc_gcode_interpreter
 # Since this is an auto-generated module, the binding name corresponds to the compiled Rust module.
 
-__all__ = ["nc_to_dataframe"]
+__all__ = ["nc_to_dataframe", "sanitize_dataframe"]

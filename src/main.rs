@@ -49,7 +49,7 @@ fn main() -> io::Result<()> {
                 .short('i')
                 .long("initial_state")
                 .value_name("INITIAL_STATE")
-                .help("Optional initial_state file to initialize state")
+                .help("Optional initial state file to e.g. define global variables or set axis positions")
                 .num_args(1)
                 .value_parser(clap::value_parser!(String)),
         )
