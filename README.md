@@ -119,6 +119,9 @@ shape: (14, 7)
 └───────┴───────┴──────┴────────┴───────────┴─────────────┴─────────────────────────────────┘
 ```
 
+The python bindings also return the state of the program after execution, which can be used for inspection. 
+
+Additional to to convert the dataframe to a Polars dataframe, conversion of a Polars dataframe to a *.MPF (NC) program is also supported.
 
 ```bash
 target/release/nc-gcode-interpreter --help
