@@ -204,24 +204,6 @@ pub fn dataframe_to_nc(df: &mut DataFrame, path: &str) -> Result<(), PolarsError
 
     // Get column names
     let columns = df.get_column_names();
-
-    // df2 = df2
-    //     .clone()
-    //     .lazy()
-    //     .with_columns(
-    //         columns
-    //             .iter()
-    //             .map(|c| {
-    //                 when(col(c.as_str()).eq(col(c.as_str()).shift(lit(1))))
-    //                     .then(lit(NULL))
-    //                     .otherwise(col(c.as_str()))
-    //                     .alias(c.as_str())
-    //             })
-    //             .collect::<Vec<Expr>>(),
-    //     )
-    //     .collect()
-    //     .unwrap();
-
     let precision = 2;
     let df2 = df
         .clone()
@@ -253,11 +235,6 @@ pub fn dataframe_to_nc(df: &mut DataFrame, path: &str) -> Result<(), PolarsError
                 .collect::<Vec<Expr>>(),
         )
         .collect()?;
-
-    // let mut df3 = df2
-    //     .lazy()
-    //     .select([concat_str([col("X"), col("Y")], " ", true)])
-    //     .collect()?;
 
     let columns2 = df2.get_column_names();
 
