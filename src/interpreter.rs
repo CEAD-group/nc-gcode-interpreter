@@ -198,6 +198,85 @@ pub fn dataframe_to_csv(df: &mut DataFrame, path: &str) -> Result<(), PolarsErro
     Ok(())
 }
 
+#[allow(dead_code)] // Only used in main.rs, not in lib.rs
+pub fn dataframe_to_nc(df: &mut DataFrame, path: &str) -> Result<(), PolarsError> {
+    let file = std::fs::File::create(path).map_err(|e| PolarsError::ComputeError(format!("{:?}", e).into()))?;
+
+    // Get column names
+    let columns = df.get_column_names();
+
+    // df2 = df2
+    //     .clone()
+    //     .lazy()
+    //     .with_columns(
+    //         columns
+    //             .iter()
+    //             .map(|c| {
+    //                 when(col(c.as_str()).eq(col(c.as_str()).shift(lit(1))))
+    //                     .then(lit(NULL))
+    //                     .otherwise(col(c.as_str()))
+    //                     .alias(c.as_str())
+    //             })
+    //             .collect::<Vec<Expr>>(),
+    //     )
+    //     .collect()
+    //     .unwrap();
+
+    let precision = 2;
+    let df2 = df
+        .clone()
+        .lazy()
+        .with_columns(
+            columns
+                .iter()
+                .map(|c| match df.column(c) {
+                    Ok(col_ref) => match col_ref.dtype() {
+                        DataType::Float64 => when(col(c.as_str()).eq(col(c.as_str()).shift(lit(1))))
+                            .then(lit(NULL))
+                            .otherwise(
+                                lit(format!("{}{}", c, if c.len() > 1 { "=" } else { "" }))
+                                    + col(c.as_str()).round(precision as u32).cast(DataType::String),
+                            )
+                            .alias(c.as_str()),
+                        DataType::Int64 => when(col(c.as_str()).eq(col(c.as_str()).shift(lit(1))))
+                            .then(lit(NULL))
+                            .otherwise(
+                                lit(format!("{}{}", c, if c.len() > 1 { "=" } else { "" }))
+                                    + col(c.as_str()).cast(DataType::String),
+                            )
+                            .alias(c.as_str()),
+                        DataType::List(_) => col(c.as_str()).list().join(lit(" "), true).alias(c.as_str()),
+                        _ => col(c.as_str()).alias(c.as_str()),
+                    },
+                    Err(_) => col(c.as_str()).alias(c.as_str()),
+                })
+                .collect::<Vec<Expr>>(),
+        )
+        .collect()?;
+
+    // let mut df3 = df2
+    //     .lazy()
+    //     .select([concat_str([col("X"), col("Y")], " ", true)])
+    //     .collect()?;
+
+    let columns2 = df2.get_column_names();
+
+    let exprs = columns2
+        .iter()
+        .map(|c| col(c.as_str()).cast(DataType::String))
+        .collect::<Vec<Expr>>();
+
+    let mut df3 = df2.clone().lazy().select([concat_str(exprs, " ", true)]).collect()?;
+
+    // Write the new DataFrame to CSV
+    CsvWriter::new(file)
+        .include_header(false)
+        .with_quote_style(QuoteStyle::Never)
+        .finish(&mut df3)
+        .map_err(|e| PolarsError::ComputeError(format!("{:?}", e).into()))?;
+    Ok(())
+}
+
 /// Parse file and return results as a vector of HashMaps
 fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, Value>>, ParsingError> {
     let blocks = NCParser::parse(Rule::file, input)

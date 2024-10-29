@@ -12,7 +12,7 @@ mod modal_groups;
 mod state;
 mod types;
 
-use interpreter::{dataframe_to_csv, nc_to_dataframe};
+use interpreter::{dataframe_to_nc, nc_to_dataframe};
 use std::path::PathBuf;
 
 fn main() -> io::Result<()> {
@@ -113,8 +113,8 @@ fn main() -> io::Result<()> {
     )?;
 
     let mut output_path = PathBuf::from(input_path.clone());
-    output_path.set_extension("csv");
+    output_path.set_extension("output.mpf");
 
-    dataframe_to_csv(&mut df, output_path.to_str().unwrap())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error writing DataFrame to CSV: {:?}", e)))
+    dataframe_to_nc(&mut df, output_path.to_str().unwrap())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error writing DataFrame to MPF: {:?}", e)))
 }
