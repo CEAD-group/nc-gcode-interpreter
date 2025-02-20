@@ -1,6 +1,6 @@
 [package]
 name = "nc-gcode-interpreter"
-version = "0.0.0-dev"
+version = "0.0.10"
 edition = "2021"
 
 [lib]
