@@ -85,7 +85,7 @@ pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Resu
 
     // Collect known columns by combining MODAL_G_GROUPS and NON_MODAL_G_GROUPS
     let mut known_columns: Vec<&str> = modal_g_groups.union(&non_modal_g_groups).cloned().collect();
-    known_columns.extend(&["function_call", "comment", "T", "M"]);
+    known_columns.extend(&["non_returning_function_call", "comment", "T", "M"]);
 
     // Collect column names from the DataFrame as Strings (to avoid immutable borrows)
     let column_names: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
@@ -122,7 +122,7 @@ pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Resu
     // Insert other known columns
     expected_types.push(("T", DataType::String)); // Tool changes
     expected_types.push(("M", DataType::List(Box::new(DataType::String)))); // M Codes
-    expected_types.push(("function_call", DataType::String)); // Function calls
+    expected_types.push(("non_returning_function_call", DataType::String)); // Function calls
     expected_types.push(("comment", DataType::String)); // Comments
 
     // Iterate over each expected column and apply necessary type casting if available in the DataFrame
