@@ -41,6 +41,9 @@ pub enum ParsingError {
     #[error("too many M commands in a single block, a maximum of 5 is allowed")]
     TooManyMCommands,
 
+    #[error("arithmetic error: {message}")]
+    ArithmeticError { message: String },
+
     #[error(transparent)]
     IOError(#[from] std::io::Error),
 

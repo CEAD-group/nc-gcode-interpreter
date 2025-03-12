@@ -29,6 +29,7 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
                 })
         }),
         Rule::expression => evaluate_expression(inner_pair, state),
+        Rule::arith_fun => evaluate_arithmetic_function(inner_pair, state),
         _ => {
             // panic!("Unexpected rule: {:?}", inner_pair.as_rule());
             Err(ParsingError::UnexpectedRule {
@@ -36,6 +37,39 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
                 context: "interpret_primary".to_string(),
             })
         }
+    }
+}
+fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f32, ParsingError> {
+    let mut pairs = pair.into_inner();
+    let func_name = pairs.next().expect("Expected function name");
+    let args_pair = pairs.next().expect("Expected function arguments");
+    
+    // Parse arguments
+    let mut args = Vec::new();
+    for arg in args_pair.into_inner() {
+        if arg.as_rule() == Rule::expression {
+            args.push(evaluate_expression(arg, state)?);
+        }
+    }
+
+    // Apply the function
+    match func_name.as_str() {
+        "SIN" => Ok(args[0].sin()),
+        "COS" => Ok(args[0].cos()),
+        "TAN" => Ok(args[0].tan()),
+        "ASIN" => Ok(args[0].asin()),
+        "ACOS" => Ok(args[0].acos()),
+        "ATAN2" => Ok(args[1].atan2(args[0])),
+        "SQRT" => Ok(args[0].sqrt()),
+        "ABS" => Ok(args[0].abs()),
+        "POT" => Ok(args[0].powi(2)),
+        "TRUNC" => Ok(args[0].trunc()),
+        "ROUND" => Ok(args[0].round()),
+        "LN" => Ok(args[0].ln()),
+        "EXP" => Ok(args[0].exp()),
+        _ => Err(ParsingError::ParseError {
+            message: format!("Unknown arithmetic function: {}", func_name.as_str()),
+        }),
     }
 }
 fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f32, ParsingError> {
@@ -150,14 +184,14 @@ fn interpret_tool_selection(
 
     Ok(())
 }
-fn interpret_function_call(function_call: Pair<Rule>) -> (String, String) {
+fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (String, String) {
     // Log the interpretd function call for debugging
     //println!("Parsed function call: {:?}", function_call);
 
     let command_str = function_call.as_str().to_string();
 
     // Return the tuple with the rule name as the column header and the specific function call as the value
-    ("function_call".to_string(), command_str)
+    ("non_returning_function_call".to_string(), command_str)
 }
 fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(String, f32), ParsingError> {
     let mut inner_pairs = element.into_inner();
@@ -550,15 +584,15 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
     //   | assignment_multi
     //   | assignment
     //   | g_command
-    //   | function_call
+    //   | non_returning_function_call
     //   | tool_selection
     // }
 
     for statement in element.into_inner() {
         let last = output.last_mut().expect("Output vector should not be empty");
         match statement.as_rule() {
-            Rule::function_call => {
-                let (key, value) = interpret_function_call(statement);
+            Rule::non_returning_function_call => {
+                let (key, value) = interpret_non_returning_function_call(statement);
                 last.insert(key, Value::Str(value));
             }
             Rule::g_command => {
