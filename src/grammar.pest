@@ -21,7 +21,7 @@ goto_statement      =  { ^"GOTO" ~ label }
 gotob_statement     =  { ^"GOTOB" ~ block_number }
 gotof_statement     =  { ^"GOTOF" ~ block_number }
 gotoc_statement     =  { ^"GOTOC" ~ condition ~ newline ~ label }
-if_statement        =  { ^"IF" ~ condition ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
+if_statement        =  { ^"IF" ~ condition ~ comment? ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
 loop_statement      =  { ^"LOOP" ~ blocks ~ ^"ENDLOOP" }
 for_statement       =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ blocks ~ ^"ENDFOR" }
 while_statement     =  { ^"WHILE" ~ condition ~ blocks ~ ^"ENDWHILE" }
@@ -30,7 +30,7 @@ label               =  { ^"LABEL" ~ identifier }
 block_number        =  { integer }
 condition           =  { base_condition | ("(" ~ base_condition ~ ")") }
 base_condition      = _{ (expression ~ relational_operator ~ expression) | expression }
-relational_operator =  { "<=" | ">=" | "<" | ">" | "==" | "<>" }
+relational_operator =  { "<=" | ">=" | "==" | "<>" | "<" | ">" }
 statement           =  {
     g_command_numbered
   | m_command
@@ -38,7 +38,7 @@ statement           =  {
   | assignment_multi
   | assignment
   | g_command
-  | function_call
+  | non_returning_function_call
 }
 
 // local variable definitions
@@ -100,9 +100,11 @@ op_int_div       =  { "DIV" }
 op_mod           =  { "MOD" }
 prefix           = _{ neg }
 neg              =  { "-" }
-primary          =  { value | variable_array | variable | "(" ~ expression ~ ")" }
+primary          =  { arith_fun | value | variable_array | variable | "(" ~ expression ~ ")" }
 float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* }
 integer          = @{ "-"? ~ ASCII_DIGIT+ }
+arith_fun        = { arith_fun_name ~ "(" ~ function_arguments ~ ")" }
+arith_fun_name   = { "SIN" | "COS" | "TAN" | "ASIN" | "ACOS" | "ATAN2" | "SQRT" | "ABS" | "POT" | "TRUNC" | "ROUND" | "LN" | "EXP" }
 
 tool_selection = { ^"T" ~ "=" ~ quoted_string }
 
@@ -114,10 +116,10 @@ frame_atrans = { ^"ATRANS" ~ assignment+ }
 frame_ascale = { ^"ASCALE" ~ assignment+ }
 
 // function call parser
-function_call      =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }
-function_arguments =  { ((expression | quoted_string)? ~ ",")* ~ (expression | quoted_string) }
-quoted_string      = _{ QUOTE ~ (string)* ~ QUOTE }
-string             =  { (!"\"" ~ ANY)+ }
+non_returning_function_call =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }
+function_arguments          =  { ((expression | quoted_string)? ~ ",")* ~ (expression | quoted_string) }
+quoted_string               = _{ QUOTE ~ (string)* ~ QUOTE }
+string                      =  { (!"\"" ~ ANY)+ }
 
 // builtins, globally available names
 nc_variable = { "$" ~ identifier }
