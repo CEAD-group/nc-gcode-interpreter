@@ -529,6 +529,31 @@ fn interpret_statement_for(element: Pair<Rule>, output: &mut Output, state: &mut
     }
     Ok(())
 }
+fn interpret_statement_repeat_until(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
+    let mut pairs = element.into_inner();
+    let blocks = pairs.next().expect("Expected blocks, got none");
+    let condition = pairs.next().expect("Expected condition, got none");
+    
+    let mut loop_count = 0;
+    loop {
+        // Execute the blocks at least once
+        interpret_blocks(blocks.clone(), output, state)?;
+        loop_count += 1;
+
+        // Check iteration limit
+        if loop_count >= state.iteration_limit {
+            return Err(ParsingError::LoopLimit {
+                limit: state.iteration_limit.to_string(),
+            });
+        }
+
+        // Check if condition is met to exit loop
+        if evaluate_condition(condition.clone(), state)? {
+            break;
+        }
+    }
+    Ok(())
+}
 fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
     // a control only has one child, one of
     // control             =  {
@@ -540,7 +565,7 @@ fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State
     //   | loop_statement
     //   | for_statement
     //   | while_statement
-    //   | repeat_statement
+    //   | repeat_until_statement
     // }
     let mut pairs = element.into_inner();
     let pair = pairs.next().expect("Expected a pair, got none");
@@ -553,7 +578,7 @@ fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State
         // Rule::loop_statement => println!("Loop statement: {:?}", pair),
         Rule::for_statement => interpret_statement_for(pair, output, state),
         Rule::while_statement => interpret_statement_while(pair, output, state),
-        // Rule::repeat_statement => println!("Repeat statement: {:?}", pair),
+        Rule::repeat_until_statement => interpret_statement_repeat_until(pair, output, state),
         _ => panic!("Unexpected rule: {:?}", pair.as_rule()),
     }
 }

@@ -15,23 +15,23 @@ control             =  {
   | loop_statement
   | for_statement
   | while_statement
-  | repeat_statement
+  | repeat_until_statement
 }
-goto_statement      =  { ^"GOTO" ~ label }
-gotob_statement     =  { ^"GOTOB" ~ block_number }
-gotof_statement     =  { ^"GOTOF" ~ block_number }
-gotoc_statement     =  { ^"GOTOC" ~ condition ~ newline ~ label }
-if_statement        =  { ^"IF" ~ condition ~ comment? ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
-loop_statement      =  { ^"LOOP" ~ blocks ~ ^"ENDLOOP" }
-for_statement       =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ blocks ~ ^"ENDFOR" }
-while_statement     =  { ^"WHILE" ~ condition ~ blocks ~ ^"ENDWHILE" }
-repeat_statement    =  { ^"REPEAT" ~ blocks ~ ^"UNTIL" ~ condition }
-label               =  { ^"LABEL" ~ identifier }
-block_number        =  { integer }
-condition           =  { base_condition | ("(" ~ base_condition ~ ")") }
-base_condition      = _{ (expression ~ relational_operator ~ expression) | expression }
-relational_operator =  { "<=" | ">=" | "==" | "<>" | "<" | ">" }
-statement           =  {
+goto_statement         =  { ^"GOTO" ~ label }
+gotob_statement        =  { ^"GOTOB" ~ block_number }
+gotof_statement        =  { ^"GOTOF" ~ block_number }
+gotoc_statement        =  { ^"GOTOC" ~ condition ~ newline ~ label }
+if_statement           =  { ^"IF" ~ condition ~ comment? ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
+loop_statement         =  { ^"LOOP" ~ blocks ~ ^"ENDLOOP" }
+for_statement          =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ blocks ~ ^"ENDFOR" }
+while_statement        =  { ^"WHILE" ~ condition ~ blocks ~ ^"ENDWHILE" }
+repeat_until_statement =  { ^"REPEAT" ~ blocks ~ ^"UNTIL" ~ condition }
+label                  =  { ^"LABEL" ~ identifier }
+block_number           =  { integer }
+condition              =  { base_condition | ("(" ~ base_condition ~ ")") }
+base_condition         = _{ (expression ~ relational_operator ~ expression) | expression }
+relational_operator    =  { "<=" | ">=" | "==" | "<>" | "<" | ">" }
+statement              =  {
     g_command_numbered
   | m_command
   | tool_selection

@@ -14,7 +14,7 @@ To compile the python module:
 maturin develop
 ```
 
-## Seup python environment
+## Setup python environment
 
 ```bash
 uv venv
@@ -33,7 +33,7 @@ maturing develop --release
 
 ## Super simple test
 
-There are a bunc of csv files in the examples directory.  To test the tool on all of them (use git to check changes)
+There are a bunch of csv files in the examples directory. To test the tool on all of them (use git to check changes)
 
 ```bash
 rm **/*.csv && cargo build --release && find examples -name "*.mpf" -type f -print0 | xargs -0 -I {} sh -c './target/release/nc-gcode-interpreter --initial_state=examples/defaults.mpf "$1" || echo "Failed to process $1" >&2' sh {}
