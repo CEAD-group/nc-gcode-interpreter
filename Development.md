@@ -17,8 +17,8 @@ maturin develop
 ## Setup python environment
 
 ```bash
-uv venv
-uv pip install pip polars pytest
+uv venv -p 3.12
+uv synv --all-extras
 ```
 
 
