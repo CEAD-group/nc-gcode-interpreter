@@ -67,7 +67,7 @@ reserved   = _{
 }
 
 identifier = @{
-    !(reserved) ~ (ASCII_ALPHANUMERIC | "_")+ ~ !(ASCII_ALPHANUMERIC | "_")
+    !(reserved) ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 variable             =  { (nc_variable | identifier) }
@@ -101,8 +101,8 @@ op_mod           =  { "MOD" }
 prefix           = _{ neg }
 neg              =  { "-" }
 primary          =  { arith_fun | value | variable_array | variable | "(" ~ expression ~ ")" }
-float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* }
-integer          = @{ "-"? ~ ASCII_DIGIT+ }
+float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* ~ !ASCII_ALPHA } // Ensure floats are not followed by letters
+integer          = @{ "-"? ~ ASCII_DIGIT+ ~ !ASCII_ALPHA } // Ensure integers are not followed by letters
 arith_fun        = { arith_fun_name ~ "(" ~ function_arguments ~ ")" }
 arith_fun_name   = { "SIN" | "COS" | "TAN" | "ASIN" | "ACOS" | "ATAN2" | "SQRT" | "ABS" | "POT" | "TRUNC" | "ROUND" | "LN" | "EXP" }
 

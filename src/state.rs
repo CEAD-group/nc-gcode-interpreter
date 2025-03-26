@@ -51,7 +51,7 @@ impl State {
     }
 
     pub fn get_translation(&self, axis: &str) -> f32 {
-        *self.translation.get(axis).unwrap_or(&0.0)
+        *self.translation.get(axis).unwrap_or(& 0.0)
     }
 
     pub fn update_axis(&mut self, key: &str, value: f32, translate: bool) -> Result<f32, ParsingError> {

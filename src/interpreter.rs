@@ -202,25 +202,18 @@ pub fn dataframe_to_csv(df: &mut DataFrame, path: &str) -> Result<(), PolarsErro
 fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, Value>>, ParsingError> {
     let file = NCParser::parse(Rule::file, input)
         .map_err(|e| {
-            // Get line and column info from pest error
             let (line, _col) = match &e.line_col {
                 pest::error::LineColLocation::Pos(pos) => *pos,
                 pest::error::LineColLocation::Span(start, _) => *start,
             };
 
-            // Get the problematic line from the input
             let preview = input
                 .lines()
                 .nth(line - 1)
                 .unwrap_or("(could not retrieve line)")
                 .to_string();
             
-            ParsingError::ParsingContext {
-                line_no: line,
-                preview,
-                context: "initial file parsing".to_string(),
-                message: format!("{}", e),
-            }
+            ParsingError::with_context(line, preview, "initial file parsing".to_string(), format!("{}", e))
         })?
         .next()
         .ok_or_else(|| ParsingError::ParseError {
