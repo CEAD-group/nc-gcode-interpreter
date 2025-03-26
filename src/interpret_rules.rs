@@ -470,19 +470,75 @@ fn evaluate_relational_operator(operator: Pair<Rule>, lhs: f32, rhs: f32) -> Res
 }
 fn interpret_statement_if(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
     let mut pairs = element.into_inner();
-    let pair = pairs.next().expect("Expected a pair, got none");
-    let result: bool = match pair.as_rule() {
-        Rule::condition => evaluate_condition(pair, state)?,
-        _ => panic!("Unexpected rule: {:?}", pair.as_rule()),
-    };
-    let true_branch = pairs.next().expect("Expected a true branch, got none");
-    if result {
-        interpret_blocks(true_branch, output, state)
-    } else if let Some(else_branch) = pairs.next() {
-        interpret_blocks(else_branch, output, state)
-    } else {
-        Ok(())
+
+    // Match the condition
+    let condition = pairs.next().ok_or_else(|| ParsingError::InvalidElementCount {
+        expected: 1,
+        actual: 0,
+    })?;
+    if condition.as_rule() != Rule::condition {
+        return Err(ParsingError::UnexpectedRule {
+            rule: condition.as_rule(),
+            context: "interpret_statement_if".to_string(),
+        });
     }
+
+    // Optionally match a comment
+    let mut comment: Option<Pair<Rule>> = None;
+    if let Some(next_pair) = pairs.peek() {
+        if next_pair.as_rule() == Rule::comment {
+            comment = Some(pairs.next().unwrap());
+        }
+    }
+
+    // Match the true block
+    let true_block = pairs.next().ok_or_else(|| ParsingError::InvalidElementCount {
+        expected: 1,
+        actual: 0,
+    })?;
+    if true_block.as_rule() != Rule::blocks {
+        return Err(ParsingError::UnexpectedRule {
+            rule: true_block.as_rule(),
+            context: "interpret_statement_if".to_string(),
+        });
+    }
+
+    // Optionally match the false block
+    let false_block = if let Some(next_pair) = pairs.next() {
+        if next_pair.as_rule() == Rule::blocks {
+            Some(next_pair)
+        } else {
+            return Err(ParsingError::UnexpectedRule {
+                rule: next_pair.as_rule(),
+                context: "interpret_statement_if".to_string(),
+            });
+        }
+    } else {
+        None
+    };
+
+    // Ensure no extra rules are present
+    if pairs.next().is_some() {
+        return Err(ParsingError::InvalidElementCount {
+            expected: 3,
+            actual: 4,
+        });
+    }
+
+    // Handle the comment
+    if let Some(comment_pair) = comment {
+        let last = output.last_mut().expect("Output vector should not be empty");
+        last.insert("comment".to_string(), Value::Str(comment_pair.as_str().to_string()));
+    }
+
+    // Evaluate the condition and execute the appropriate block
+    if evaluate_condition(condition, state)? {
+        interpret_blocks(true_block, output, state)?;
+    } else if let Some(false_block) = false_block {
+        interpret_blocks(false_block, output, state)?;
+    }
+
+    Ok(())
 }
 fn interpret_statement_while(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
     let mut pairs = element.into_inner();
@@ -537,7 +593,38 @@ fn interpret_statement_for(element: Pair<Rule>, output: &mut Output, state: &mut
 }
 fn interpret_statement_repeat_until(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
     let mut pairs = element.into_inner();
-    let blocks = pairs.next().expect("Expected blocks, got none");
+    let first_pair = pairs.next().expect("Expected a pair, got none");
+    let blocks;
+    match first_pair.as_rule() {
+        Rule::comment => {
+            let last = output.last_mut().expect("Output vector should not be empty");
+            last.insert("comment".to_string(), Value::Str(first_pair.as_str().to_string()));
+
+            // The next rule are the block
+            match pairs.next().expect("Expected a pair, got none").as_rule() {
+                Rule::blocks => {
+                    blocks = first_pair;
+                }
+                _ => {
+                    return Err(ParsingError::UnexpectedRule {
+                        rule: first_pair.as_rule(),
+                        context: "interpret_statement_repeat_until".to_string(),
+                    });
+                }
+            }
+        }
+        Rule::blocks => {
+            blocks = first_pair;
+        }
+        _ => {
+            return Err(ParsingError::UnexpectedRule {
+                rule: first_pair.as_rule(),
+                context: "interpret_statement_repeat_until".to_string(),
+            });
+        }
+    }
+    
+    
     let condition = pairs.next().expect("Expected condition, got none");
     
     let mut loop_count = 0;
