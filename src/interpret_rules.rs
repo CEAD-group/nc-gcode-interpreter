@@ -318,15 +318,38 @@ fn interpret_value_array(pair: Pair<Rule>, state: &mut State) -> Result<Vec<Opti
     Ok(values)
 }
 fn interpret_variable(pair: Pair<Rule>) -> Result<String, ParsingError> {
-    let inner = pair.into_inner().next().ok_or(ParsingError::ExpectedPair)?;
+    let line_no = pair.line_col().0;
+    let preview = pair.as_str().to_string();
+    
+    let inner = pair.into_inner().next().ok_or(ParsingError::ParsingContext {
+        line_no,
+        preview: preview.clone(),
+        context: "variable parsing".to_string(),
+        message: "Expected inner pair, found none".to_string(),
+    })?;
+    
     match inner.as_rule() {
-        Rule::identifier => interpret_identifier(inner),
-        _ => Err(ParsingError::UnexpectedRule {
-            rule: inner.as_rule(),
-            context: "interpret_variable".to_string(),
+        Rule::identifier => interpret_identifier(inner).map_err(|e| {
+            // Convert the UnexpectedRule error into a ParsingContext error
+            match e {
+                ParsingError::UnexpectedRule { rule, context: _ } => ParsingError::ParsingContext {
+                    line_no,
+                    preview,
+                    context: "variable parsing".to_string(),
+                    message: format!("Unexpected rule '{:?}' in identifier", rule),
+                },
+                _ => e,
+            }
+        }),
+        rule => Err(ParsingError::ParsingContext {
+            line_no,
+            preview,
+            context: "variable parsing".to_string(),
+            message: format!("Expected identifier, found '{:?}'", rule),
         }),
     }
 }
+
 fn interpret_variable_array(inner: Pair<Rule>, state: &mut State) -> Result<Vec<String>, ParsingError> {
     // variable_array = { (nc_variable | identifier) ~ "[" ~ indices ~ "]" }
     let mut inner_pairs = inner.into_inner();
@@ -385,12 +408,17 @@ fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f32>, Pa
     Ok(indices)
 }
 fn interpret_identifier(pair: Pair<Rule>) -> Result<String, ParsingError> {
+    let line_no = pair.line_col().0;
+    let preview = pair.as_str().to_string();
+    
     if pair.as_rule() == Rule::identifier {
         Ok(pair.as_str().to_string())
     } else {
-        Err(ParsingError::UnexpectedRule {
-            rule: pair.as_rule(),
-            context: "interpret_identifier".to_string(),
+        Err(ParsingError::ParsingContext {
+            line_no,
+            preview,
+            context: "identifier parsing".to_string(),
+            message: format!("Found '{:?}' but expected an identifier", pair.as_rule()),
         })
     }
 }
@@ -703,9 +731,12 @@ fn interpret_block_number(element: Pair<Rule>, output: &mut Output) {
 }
 fn interpret_block(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
     let original_block = element.as_str().to_string();
+    let line_no = element.line_col().0;
+    let preview = original_block.lines().next().unwrap_or("").to_string();
+    
     output.push(HashMap::new());
+    
     for item in element.into_inner() {
-        let last = output.last_mut().expect("Output vector should not be empty");
         if let Err(error) = match item.as_rule() {
             Rule::block_number => {
                 interpret_block_number(item, output);
@@ -713,6 +744,7 @@ fn interpret_block(element: Pair<Rule>, output: &mut Output, state: &mut State) 
             }
             Rule::statement => interpret_statement(item, output, state),
             Rule::comment => {
+                let last = output.last_mut().expect("Output vector should not be empty");
                 last.insert("comment".to_string(), Value::Str(item.as_str().to_string()));
                 Ok(())
             }
@@ -725,7 +757,8 @@ fn interpret_block(element: Pair<Rule>, output: &mut Output, state: &mut State) 
             }),
         } {
             return Err(ParsingError::AnnotatedError {
-                block: original_block,
+                line_no,
+                preview,
                 source: Box::new(error),
             });
         }
@@ -733,13 +766,35 @@ fn interpret_block(element: Pair<Rule>, output: &mut Output, state: &mut State) 
     Ok(())
 }
 pub fn interpret_blocks(blocks: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
-    assert_eq!(
-        blocks.as_rule(),
-        Rule::blocks,
-        "Expected blocks pair to be of type Rule::blocks"
-    );
+    if blocks.as_rule() != Rule::blocks {
+        let preview = blocks.as_str().lines().next().unwrap_or("").to_string();
+        let line_no = blocks.line_col().0;
+        return Err(ParsingError::RuleAssertion {
+            line_no,
+            preview,
+            expected: Rule::blocks,
+            actual: blocks.as_rule(),
+        });
+    }
+
     for block in blocks.into_inner() {
-        interpret_block(block.clone(), output, state)?
+        if let Err(e) = interpret_block(block.clone(), output, state) {
+            // Unwrap all nested errors to get to the root cause
+            match e {
+                ParsingError::AnnotatedError { source, .. } => match *source {
+                    ParsingError::ParsingContext { line_no, preview, context, message } => {
+                        return Err(ParsingError::ParsingContext {
+                            line_no,
+                            preview,
+                            context,
+                            message,
+                        })
+                    },
+                    other => return Err(other),
+                },
+                other => return Err(other),
+            }
+        }
     }
     Ok(())
 }

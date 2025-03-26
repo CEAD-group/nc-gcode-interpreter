@@ -90,8 +90,8 @@ fn main() -> io::Result<()> {
     let disable_forward_fill = matches.get_flag("disable_forward_fill");
 
     let input = std::fs::read_to_string(matches.get_one::<String>("input").unwrap())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error reading input file: {:?}", e)))?;
-
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error reading input file: {}", e)))?;
+        
     let initial_state = matches
         .get_one::<String>("initial_state")
         .map(std::fs::read_to_string)
@@ -99,22 +99,29 @@ fn main() -> io::Result<()> {
         .map_err(|e| {
             io::Error::new(
                 io::ErrorKind::Other,
-                format!("Error reading initial state file: {:?}", e),
+                format!("Error reading initial state file: {}", e),
             )
         })?;
 
-    let (mut df, _state) = nc_to_dataframe(
+    match nc_to_dataframe(
         &input,
         initial_state.as_deref(),
         axes_override.clone(),
         extra_axes,
         *iteration_limit,
         disable_forward_fill,
-    )?;
+    ) {
+        Ok((mut df, _state)) => {
+            let mut output_path = PathBuf::from(input_path.clone());
+            output_path.set_extension("csv");
 
-    let mut output_path = PathBuf::from(input_path.clone());
-    output_path.set_extension("csv");
-
-    dataframe_to_csv(&mut df, output_path.to_str().unwrap())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error writing DataFrame to CSV: {:?}", e)))
+            dataframe_to_csv(&mut df, output_path.to_str().unwrap())
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))
+        }
+        Err(e) => {
+            // Print error directly to stderr for better formatting
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    }
 }

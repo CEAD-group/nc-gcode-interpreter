@@ -1,60 +1,82 @@
-//errors.rs
 use thiserror::Error;
-
-use crate::types::Rule; // Import Parser trait here
+use crate::types::Rule;
 
 #[derive(Error, Debug)]
 pub enum ParsingError {
-    #[error("expected a pair, got none")]
+    #[error("Expected a pair, got none")]
     ExpectedPair,
 
-    #[error("unexpected axis for translation: {axis}, expected one of the configured axes {axes}")]
+    #[error("Unexpected axis '{axis}'. Valid axes are: {axes}")]
     UnexpectedAxis { axis: String, axes: String },
 
-    #[error("cannot define a variable named: {name}, as it is conflicts with one of the axis names")]
+    #[error("Cannot define a variable named '{name}', as it conflicts with one of the axis names")]
     AxisUsedAsVariable { name: String },
 
-    #[error("unexpected rule: '{rule:?}' encountered in {context}")]
+    #[error("Unexpected rule '{rule:?}' encountered in {context}")]
     UnexpectedRule { rule: Rule, context: String },
 
-    #[error("parse error: {message}")]
+    #[error("Parse error: {message}")]
     ParseError { message: String },
 
-    #[error("unexpected operator: {operator}")]
+    #[error("Unexpected operator: {operator}")]
     UnexpectedOperator { operator: String },
 
-    #[error("invalid number of elements in condition")]
+    #[error("Invalid number of elements in condition")]
     InvalidCondition,
 
-    #[error("expected {expected} elements in the statement, found {actual}")]
+    #[error("Expected {expected} elements in the statement, found {actual}")]
     InvalidElementCount { expected: usize, actual: usize },
 
-    #[error("unknown variable: {variable}")]
+    #[error("Unknown variable: {variable}")]
     UnknownVariable { variable: String },
 
-    #[error("missing inner element in {context}")]
+    #[error("Missing inner element in {context}")]
     MissingInnerElement { context: String },
 
-    #[error("loop limit of {limit} reached. Check the input for infinite loops or increase the limit")]
+    #[error("Loop limit of {limit} reached. Check the input for infinite loops or increase the limit")]
     LoopLimit { limit: String },
 
-    #[error("too many M commands in a single block, a maximum of 5 is allowed")]
+    #[error("Too many M commands in a single block, a maximum of 5 is allowed")]
     TooManyMCommands,
 
-    #[error("arithmetic error: {message}")]
+    #[error("Arithmetic error: {message}")]
     ArithmeticError { message: String },
 
     #[error(transparent)]
     IOError(#[from] std::io::Error),
 
-    #[error("Error in block '{block}': {source}")]
+    #[error("Error in block at line {line_no}:\n{preview}\n\nCaused by: {source}")]
     AnnotatedError {
-        block: String,
+        line_no: usize,
+        preview: String,
         #[source]
         source: Box<ParsingError>,
     },
-    // Add more error variants as needed
+
+    #[error("Parse error on line {line_no}:\n{preview}\n\nExpected {expected:?}, got {actual:?}")]
+    RuleAssertion {
+        line_no: usize,
+        preview: String,
+        expected: Rule,
+        actual: Rule,
+    },
+
+    #[error(r#"
+Parse error in {context} on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: 
+{message}
+"#)]
+    ParsingContext {
+        line_no: usize,
+        preview: String,
+        context: String,
+        message: String,
+    },
 }
+
 impl From<ParsingError> for std::io::Error {
     fn from(err: ParsingError) -> std::io::Error {
         std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
