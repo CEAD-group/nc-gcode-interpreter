@@ -24,6 +24,7 @@ def nc_to_dataframe(
     extra_axes: list[str] | None = None,
     iteration_limit: int = 10000,
     disable_forward_fill: bool = False,
+    axis_index_map: dict[str, int] | None = None,
 ) -> tuple[pl.DataFrame, dict]:
     """
     Parses Sinumerik-flavored NC G-code and converts it into a Polars DataFrame along with the final state.
@@ -46,6 +47,9 @@ def nc_to_dataframe(
         The maximum number of iterations to process, to prevent infinite loops in the G-code [default: 10000].
     disable_forward_fill: bool, optional
         If True, disables forward-filling of null values in axes columns in the resulting DataFrame.
+    axis_index_map: dict[str, int] | None, optional
+        A mapping from axis identifiers (e.g., 'E') to numeric indices (e.g., 4) for array assignments like FL[E]=10.
+        This allows user-configurable mapping of axis names to indices. Example: {'E': 4, 'X': 0}.
 
     Returns:
     --------
@@ -86,6 +90,7 @@ def nc_to_dataframe(
         extra_axes,
         iteration_limit,
         disable_forward_fill,
+        axis_index_map,
     )
     return df, state
 

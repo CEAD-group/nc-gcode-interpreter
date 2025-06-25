@@ -1,0 +1,5 @@
+gg01_motion,X,comment
+,,; Reduce the acceleration of the E axis to 50% of the programmed value
+G1,50.000,
+G1,4.000,
+G1,123.000,

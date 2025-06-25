@@ -1,0 +1,4 @@
+DEF REAL R0=0
+G1 X=R0
+R0 = 10
+G1 X=R0

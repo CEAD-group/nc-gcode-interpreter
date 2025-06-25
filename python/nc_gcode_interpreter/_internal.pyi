@@ -9,6 +9,7 @@ def nc_to_dataframe(
     extra_axes: Optional[List[str]] = None,
     iteration_limit: int = 10000,
     disable_forward_fill: bool = False,
+    axis_index_map: Optional[Dict[str, int]] = None,
 ) -> Tuple[pl.DataFrame, Dict[str, Dict[str, float]]]:
     """
     Convert G-code to a DataFrame representation along with the state information.
@@ -27,6 +28,8 @@ def nc_to_dataframe(
         The maximum number of iterations to process.
     disable_forward_fill: bool
         Whether to disable forward-filling of values.
+    axis_index_map: Optional[Dict[str, int]]
+        An optional mapping of axis identifiers to their corresponding indices.
 
     Returns:
     --------

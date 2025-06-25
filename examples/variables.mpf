@@ -1,4 +1,6 @@
-DEF INT aa=1, bb=3
+DEF INT aa=1, bb=3, total=1
 X=aa/bb
 aa=2
 X=aa/bb
+total=aa+bb
+X=total

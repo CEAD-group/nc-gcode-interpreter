@@ -14,11 +14,11 @@ To compile the python module:
 maturin develop
 ```
 
-## Seup python environment
+## Setup python environment
 
 ```bash
-uv venv
-uv pip install pip polars pytest
+uv venv -p 3.12
+uv synv --all-extras
 ```
 
 
@@ -27,16 +27,16 @@ uv pip install pip polars pytest
 
 ```bash
 cargo build --release
-maturing develop --release
+maturing develop --release --uv
 ```
 
 
 ## Super simple test
 
-There are a bunc of csv files in the examples directory.  To test the tool on all of them (use git to check changes)
+There are a bunch of csv files in the examples directory. To test the tool on all of them (use git to check changes)
 
 ```bash
-rm **/*.csv && cargo build --release && find examples -name "*.mpf" -type f -print0 | xargs -0 -I {} sh -c './target/release/nc-gcode-interpreter --initial_state=examples/defaults.mpf "$1" || echo "Failed to process $1" >&2' sh {}
+rm **/*.csv && cargo build --release && find examples -name "*.mpf" -type f -print0 | xargs -0 -I {} sh -c './target/release/nc-gcode-interpreter --axis-index-map E:4 --initial_state=examples/defaults.mpf "$1" || echo "Failed to process $1" >&2' sh {}
 ```
 
 ## python test

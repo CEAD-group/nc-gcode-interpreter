@@ -30,6 +30,7 @@ pub fn nc_to_dataframe(
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,
     disable_forward_fill: bool,
+    axis_index_map: Option<HashMap<String, usize>>, // axis identifier to index mapping
 ) -> Result<(DataFrame, state::State), ParsingError> {
     // Default axis identifiers
 
@@ -43,8 +44,8 @@ pub fn nc_to_dataframe(
         axis_identifiers.extend(extra_axes);
     }
 
-    // Process the defaults file first, if provided. This will set up the initial state
-    let mut state = state::State::new(axis_identifiers.clone(), iteration_limit);
+    // Pass axis_index_map to State::new
+    let mut state = state::State::new(axis_identifiers.clone(), iteration_limit, axis_index_map);
     if let Some(initial_state) = initial_state {
         if let Err(error) = interpret_file(initial_state, &mut state) {
             eprintln!("Error while parsing defaults: {:?}", error);
@@ -52,7 +53,7 @@ pub fn nc_to_dataframe(
         }
     }
 
-    // Now interpret the main input
+    // Now interpret the main input using the axis_index_map from state
     let results = interpret_file(input, &mut state)?;
 
     // Convert results to DataFrame
@@ -85,7 +86,7 @@ pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Resu
 
     // Collect known columns by combining MODAL_G_GROUPS and NON_MODAL_G_GROUPS
     let mut known_columns: Vec<&str> = modal_g_groups.union(&non_modal_g_groups).cloned().collect();
-    known_columns.extend(&["function_call", "comment", "T", "M"]);
+    known_columns.extend(&["non_returning_function_call", "comment", "T", "M"]);
 
     // Collect column names from the DataFrame as Strings (to avoid immutable borrows)
     let column_names: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
@@ -122,7 +123,7 @@ pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Resu
     // Insert other known columns
     expected_types.push(("T", DataType::String)); // Tool changes
     expected_types.push(("M", DataType::List(Box::new(DataType::String)))); // M Codes
-    expected_types.push(("function_call", DataType::String)); // Function calls
+    expected_types.push(("non_returning_function_call", DataType::String)); // Function calls
     expected_types.push(("comment", DataType::String)); // Comments
 
     // Iterate over each expected column and apply necessary type casting if available in the DataFrame
@@ -200,25 +201,34 @@ pub fn dataframe_to_csv(df: &mut DataFrame, path: &str) -> Result<(), PolarsErro
 
 /// Parse file and return results as a vector of HashMaps
 fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, Value>>, ParsingError> {
-    let blocks = NCParser::parse(Rule::file, input)
-        .map_err(|e| ParsingError::ParseError {
-            message: format!("Parse error: {:?}", e),
+    // Store input for error messages
+    state.set_input(input.to_string());
+
+    // Initialize results with an empty HashMap
+    let mut results = vec![HashMap::new()];
+
+    let file = NCParser::parse(Rule::file, input)
+        .map_err(|e| {
+            let (line, _col) = match &e.line_col {
+                pest::error::LineColLocation::Pos(pos) => *pos,
+                pest::error::LineColLocation::Span(start, _) => *start,
+            };
+            let preview = state.get_line(line).unwrap_or("(could not retrieve line)").to_string();
+            ParsingError::with_context(line, preview, "initial file parsing".to_string(), format!("{}", e))
         })?
         .next()
         .ok_or_else(|| ParsingError::ParseError {
-            message: String::from("No blocks found"),
-        })?
+            message: "No blocks found".to_string(),
+        })?;
+
+    let blocks = file
         .into_inner()
         .next()
         .ok_or_else(|| ParsingError::ParseError {
-            message: String::from("No inner blocks found"),
+            message: "No inner blocks found".to_string(),
         })?;
 
-    let mut results = Vec::new();
-    interpret_blocks(blocks, &mut results, state).map_err(|e| ParsingError::ParseError {
-        message: format!("Parse blocks error: {:?}", e),
-    })?;
-
+    interpret_blocks(blocks, &mut results, state)?;
     Ok(results)
 }
 

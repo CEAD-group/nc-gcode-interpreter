@@ -1,0 +1,7 @@
+DEF INT MY_VAR=3
+ACC[E]=50; Reduce the acceleration of the E axis to 50% of the programmed value
+ACC[MY_VAR]=123
+G1 X=ACC[E]
+ACC[4]=4
+X=ACC[E]
+X=ACC[3]

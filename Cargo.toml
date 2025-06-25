@@ -8,12 +8,12 @@ name = "nc_gcode_interpreter"
 crate-type = ["cdylib"]
 
 [dependencies]
-csv = "1.3.0"
-pest = "2.7.6"
-pest_derive = "2.7.6"
-thiserror = "1.0.56"
-clap = { version = "4.0", features = ["derive"] }
-pyo3 = { version = "0.22.3" }
+csv = "1.3.1"
+pest = "2.8.1"
+pest_derive = "2.8.1"
+thiserror = "1.0.69"
+clap = { version = "4.5", features = ["derive"] }
+pyo3 = { version = "0.22.6" }
 polars = { version = "0.43.1", features = ["csv"] }
 
 pyo3-polars = "0.17.0"

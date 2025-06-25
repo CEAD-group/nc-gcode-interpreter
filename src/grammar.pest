@@ -15,30 +15,30 @@ control             =  {
   | loop_statement
   | for_statement
   | while_statement
-  | repeat_statement
+  | repeat_until_statement
 }
-goto_statement      =  { ^"GOTO" ~ label }
-gotob_statement     =  { ^"GOTOB" ~ block_number }
-gotof_statement     =  { ^"GOTOF" ~ block_number }
-gotoc_statement     =  { ^"GOTOC" ~ condition ~ newline ~ label }
-if_statement        =  { ^"IF" ~ condition ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
-loop_statement      =  { ^"LOOP" ~ blocks ~ ^"ENDLOOP" }
-for_statement       =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ blocks ~ ^"ENDFOR" }
-while_statement     =  { ^"WHILE" ~ condition ~ blocks ~ ^"ENDWHILE" }
-repeat_statement    =  { ^"REPEAT" ~ blocks ~ ^"UNTIL" ~ condition }
-label               =  { ^"LABEL" ~ identifier }
-block_number        =  { integer }
-condition           =  { base_condition | ("(" ~ base_condition ~ ")") }
-base_condition      = _{ (expression ~ relational_operator ~ expression) | expression }
-relational_operator =  { "<=" | ">=" | "<" | ">" | "==" | "<>" }
-statement           =  {
+goto_statement         =  { ^"GOTO" ~ label }
+gotob_statement        =  { ^"GOTOB" ~ block_number }
+gotof_statement        =  { ^"GOTOF" ~ block_number }
+gotoc_statement        =  { ^"GOTOC" ~ condition ~ newline ~ label }
+if_statement           =  { ^"IF" ~ condition ~ comment? ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
+loop_statement         =  { ^"LOOP" ~ blocks ~ ^"ENDLOOP" }
+for_statement          =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ blocks ~ ^"ENDFOR" }
+while_statement        =  { ^"WHILE" ~ condition ~ blocks ~ ^"ENDWHILE" }
+repeat_until_statement =  { ^"REPEAT" ~ blocks ~ ^"UNTIL" ~ condition }
+label                  =  { ^"LABEL" ~ identifier }
+block_number           =  { integer }
+condition              =  { base_condition | ("(" ~ base_condition ~ ")") }
+base_condition         = _{ (expression ~ relational_operator ~ expression) | expression }
+relational_operator    =  { "<=" | ">=" | "==" | "<>" | "<" | ">" }
+statement              =  {
     g_command_numbered
   | m_command
   | tool_selection
   | assignment_multi
   | assignment
   | g_command
-  | function_call
+  | non_returning_function_call
 }
 
 // local variable definitions
@@ -67,11 +67,20 @@ reserved   = _{
 }
 
 identifier = @{
-    !(reserved) ~ (ASCII_ALPHANUMERIC | "_")+ ~ !(ASCII_ALPHANUMERIC | "_")
+    !(reserved ~ !ASCII_ALPHANUMERIC)
+    ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*
 }
 
 variable             =  { (nc_variable | identifier) }
-variable_single_char = @{ ASCII_ALPHA }
+variable_single_char = @{
+    "X" | "Y" | "Z"
+  | "A" | "B" | "C"
+  | "U" | "V" | "W"
+  | "I" | "J" | "K"
+  | "T" | "S" | "F"
+  | "D" | "H" | "E"
+}
+
 // must be an axis
 variable_array = { (nc_variable | identifier) ~ "[" ~ indices ~ "]" }
 indices        = { expression ~ ("," ~ expression)* }
@@ -100,9 +109,11 @@ op_int_div       =  { "DIV" }
 op_mod           =  { "MOD" }
 prefix           = _{ neg }
 neg              =  { "-" }
-primary          =  { value | variable_array | variable | "(" ~ expression ~ ")" }
-float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* }
-integer          = @{ "-"? ~ ASCII_DIGIT+ }
+primary          =  { arith_fun | value | variable_array | variable | "(" ~ expression ~ ")" }
+float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* ~ !ASCII_ALPHA } // Ensure floats are not followed by letters
+integer          = @{ "-"? ~ ASCII_DIGIT+ ~ !ASCII_ALPHA } // Ensure integers are not followed by letters
+arith_fun        = { arith_fun_name ~ "(" ~ function_arguments ~ ")" }
+arith_fun_name   = { "SIN" | "COS" | "TAN" | "ASIN" | "ACOS" | "ATAN2" | "SQRT" | "ABS" | "POT" | "TRUNC" | "ROUND" | "LN" | "EXP" }
 
 tool_selection = { ^"T" ~ "=" ~ quoted_string }
 
@@ -114,10 +125,10 @@ frame_atrans = { ^"ATRANS" ~ assignment+ }
 frame_ascale = { ^"ASCALE" ~ assignment+ }
 
 // function call parser
-function_call      =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }
-function_arguments =  { ((expression | quoted_string)? ~ ",")* ~ (expression | quoted_string) }
-quoted_string      = _{ QUOTE ~ (string)* ~ QUOTE }
-string             =  { (!"\"" ~ ANY)+ }
+non_returning_function_call =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }
+function_arguments          =  { ((expression | quoted_string)? ~ ",")* ~ (expression | quoted_string) }
+quoted_string               = _{ QUOTE ~ (string)* ~ QUOTE }
+string                      =  { (!"\"" ~ ANY)+ }
 
 // builtins, globally available names
 nc_variable = { "$" ~ identifier }

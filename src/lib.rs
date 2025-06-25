@@ -20,7 +20,7 @@ use interpreter::nc_to_dataframe as nc_to_dataframe_rust;
 use interpreter::sanitize_dataframe as sanitize_dataframe_rust;
 
 #[pyfunction]
-#[pyo3(signature = (input, initial_state = None, axis_identifiers = None, extra_axes = None,iteration_limit = 10000, disable_forward_fill = false))]
+#[pyo3(signature = (input, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None))]
 fn nc_to_dataframe(
     input: &str,
     initial_state: Option<String>,
@@ -28,6 +28,7 @@ fn nc_to_dataframe(
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,
     disable_forward_fill: bool,
+    axis_index_map: Option<HashMap<String, usize>>,
 ) -> PyResult<(PyDataFrame, HashMap<String, HashMap<String, f32>>)> {
     let (df, state) = nc_to_dataframe_rust(
         input,
@@ -36,6 +37,7 @@ fn nc_to_dataframe(
         extra_axes,
         iteration_limit,
         disable_forward_fill,
+        axis_index_map, // Pass through
     )
     .map_err(|e| PyErr::new::<PyValueError, _>(format!("Error creating DataFrame: {:?}", e)))?;
 
