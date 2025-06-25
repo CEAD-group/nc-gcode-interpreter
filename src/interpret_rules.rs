@@ -480,7 +480,7 @@ fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f32>, Pa
                 
                 if state.is_axis(&expr_str) {
                     let (line_no, preview) = get_error_context(&inner, state);
-                    let index = state.get_axis_index(&expr_str, line_no, preview)?;
+                    let index = state.get_axis_index(&expr_str, line_no, &preview)?;
                     indices.push(index as f32);
                 } else {
                     let value = evaluate_expression(inner, state)?;
