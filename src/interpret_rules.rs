@@ -12,22 +12,34 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
         Rule::value => {
             return Ok(inner_pair.as_str().parse::<f32>().expect("Failed to interpret value"));
         }
-        Rule::variable => interpret_variable(inner_pair).and_then(|key| {
-            state
-                .symbol_table
-                .get(&key)
-                .cloned()
-                .ok_or(ParsingError::UnknownVariable { variable: key })
-        }),
-        Rule::variable_array => interpret_variable_array(inner_pair, state).and_then(|keys| {
-            state
-                .symbol_table
-                .get(&keys[keys.len() - 1])
-                .cloned()
-                .ok_or(ParsingError::UnknownVariable {
-                    variable: keys[keys.len() - 1].clone(),
-                })
-        }),
+        Rule::variable => {
+            let (line_no, preview) = get_error_context(&inner_pair, state);
+            interpret_variable(inner_pair, state).and_then(|key| {
+                state
+                    .symbol_table
+                    .get(&key)
+                    .cloned()
+                    .ok_or(ParsingError::UnknownVariable { 
+                        line_no,
+                        preview,
+                        variable: key 
+                    })
+            })
+        },
+        Rule::variable_array => {
+            let (line_no, preview) = get_error_context(&inner_pair, state);
+            interpret_variable_array(inner_pair, state).and_then(|keys| {
+                state
+                    .symbol_table
+                    .get(&keys[keys.len() - 1])
+                    .cloned()
+                    .ok_or(ParsingError::UnknownVariable {
+                        line_no,
+                        preview,
+                        variable: keys[keys.len() - 1].clone(),
+                    })
+            })
+        },
         Rule::expression => evaluate_expression(inner_pair, state),
         Rule::arith_fun => evaluate_arithmetic_function(inner_pair, state),
         _ => {
@@ -214,14 +226,14 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
             (key, value, true)
         }
         (Rule::variable, Rule::axis_increment) => {
-            let key = interpret_variable(variable_pair.clone())?;
+            let key = interpret_variable(variable_pair.clone(), state)?;
             let value = interpret_axis_increment(expression_pair, state, key.clone())?;
             (key, value, false)
         }
         (Rule::variable, Rule::expression) => {
-            let key = interpret_variable(variable_pair.clone())?;
+            let key = interpret_variable(variable_pair.clone(), state)?;
             let value = evaluate_expression(expression_pair, state)?;
-            (key, value, true)
+            (key, value, false)
         }
         (Rule::variable_array, Rule::expression) => {
             let keys = interpret_variable_array(variable_pair, state)?;
@@ -317,15 +329,14 @@ fn interpret_value_array(pair: Pair<Rule>, state: &mut State) -> Result<Vec<Opti
 
     Ok(values)
 }
-fn interpret_variable(pair: Pair<Rule>) -> Result<String, ParsingError> {
+fn interpret_variable(pair: Pair<Rule>, state: &State) -> Result<String, ParsingError> {
     let inner = pair.clone().into_inner().next()
         .ok_or_else(|| annotate_error(&pair, "variable parsing", 
-            "Expected inner pair, found none".to_string()))?;
-    
+            "Expected inner pair, found none".to_string(), state))?;
     match inner.as_rule() {
-        Rule::identifier => interpret_identifier(inner),
+        Rule::identifier => Ok(inner.as_str().to_string()),
         _ => Err(annotate_error(&pair, "variable parsing",
-            format!("Expected identifier, found '{:?}'", inner.as_rule()))),
+            format!("Expected identifier, found '{:?}'", inner.as_rule()), state)),
     }
 }
 fn interpret_variable_array(inner: Pair<Rule>, state: &mut State) -> Result<Vec<String>, ParsingError> {
@@ -423,7 +434,7 @@ fn interpret_definition(element: Pair<Rule>, state: &mut State) -> Result<(), Pa
                 interpret_assignment_multi(pair, state)?;
             }
             Rule::variable => {
-                let key = interpret_variable(pair)?;
+                let key = interpret_variable(pair, state)?;
                 state.symbol_table.insert(key, 0.0);
             }
             Rule::variable_array => {
@@ -812,15 +823,20 @@ fn interpret_block_number(element: Pair<Rule>, output: &mut Output) {
     };
     last.insert("N".to_string(), Value::Str(value.to_string()));
 }
-fn get_error_context(pair: &Pair<Rule>) -> (usize, String) {
-    let line_no = pair.line_col().0;
-    let preview = pair.as_str().lines().next().unwrap_or("").to_string();
+fn get_error_context(pair: &Pair<Rule>, state: &State) -> (usize, String) {
+    let (line_no, _) = pair.line_col();
+    let preview = state.get_line(line_no).unwrap_or("(could not retrieve line)").to_string();
     (line_no, preview)
 }
 
-fn annotate_error(pair: &Pair<Rule>, context: &str, message: String) -> ParsingError {
-    let (line_no, preview) = get_error_context(pair);
-    ParsingError::with_context(line_no, preview, context.to_string(), message)
+fn annotate_error(pair: &Pair<Rule>, context: &str, message: String, state: &State) -> ParsingError {
+    let (line_no, preview) = get_error_context(pair, state);
+    ParsingError::with_context(
+        line_no,
+        preview,
+        context.to_string(),
+        message,
+    )
 }
 
 fn interpret_block(
@@ -828,25 +844,33 @@ fn interpret_block(
     output: &mut Output,
     state: &mut State,
 ) -> Result<(), ParsingError> {
-    output.push(HashMap::new());
-    for item in element.into_inner() {
-        match item.as_rule() {
-            Rule::block_number => {
-                interpret_block_number(item, output);
+    match element.as_rule() {
+        Rule::block => {
+            // Create a new HashMap for this block
+            output.push(HashMap::new());
+            
+            for item in element.into_inner() {
+                match item.as_rule() {
+                    Rule::statement => interpret_statement(item, output, state)?,
+                    Rule::block_number => interpret_block_number(item, output),
+                    Rule::control => interpret_control(item, output, state)?,
+                    Rule::definition => interpret_definition(item, state)?,
+                    Rule::frame_op => interpret_frame_op(item, state)?,
+                    Rule::comment => {
+                        let last = output.last_mut().expect("Output vector should not be empty");
+                        last.insert("comment".to_string(), Value::Str(item.as_str().to_string()));
+                    },
+                    _ => return Err(annotate_error(&item, "block interpretation", 
+                        format!("Unexpected rule: {:?}", item.as_rule()), state)),
+                }
             }
-            Rule::statement => interpret_statement(item, output, state)?,
-            Rule::comment => {
-                let last = output.last_mut().expect("Output vector should not be empty");
-                last.insert("comment".to_string(), Value::Str(item.as_str().to_string()));
-            }
-            Rule::control => interpret_control(item, output, state)?,
-            Rule::definition => interpret_definition(item, state)?,
-            Rule::frame_op => interpret_frame_op(item, state)?,
-            _ => return Err(annotate_error(&item, "block interpretation", 
-                format!("Unexpected rule: {:?}", item.as_rule()))),
+            Ok(())
+        }
+        _ => {
+            return Err(annotate_error(&element, "blocks interpretation",
+                format!("Expected blocks, found {:?}", element.as_rule()), state));
         }
     }
-    Ok(())
 }
 
 pub fn interpret_blocks(
@@ -854,12 +878,16 @@ pub fn interpret_blocks(
     output: &mut Output,
     state: &mut State,
 ) -> Result<(), ParsingError> {
-    if blocks.as_rule() != Rule::blocks {
-        return Err(annotate_error(&blocks, "blocks interpretation",
-            format!("Expected blocks, found {:?}", blocks.as_rule())));
+    match blocks.as_rule() {
+        Rule::blocks => {
+            for block in blocks.into_inner() {
+                interpret_block(block, output, state)?;
+            }
+            Ok(())
+        }
+        _ => {
+            return Err(annotate_error(&blocks, "blocks interpretation",
+                format!("Expected blocks, found {:?}", blocks.as_rule()), state));
+        }
     }
-    for block in blocks.into_inner() {
-        interpret_block(block, output, state)?;
-    }
-    Ok(())
 }

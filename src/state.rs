@@ -10,6 +10,7 @@ pub struct State {
     pub axis_identifiers: Vec<String>,
     pub iteration_limit: usize,
     pub axis_index_map: Option<HashMap<String, usize>>, // NEW: axis identifier to index mapping
+    input: String, // Store the original input for error messages
 }
 
 impl State {
@@ -29,10 +30,11 @@ impl State {
         State {
             axes: HashMap::new(),
             symbol_table: symbols,
-            translation,
+            translation: HashMap::new(),
             axis_identifiers,
             iteration_limit,
-            axis_index_map, // NEW
+            axis_index_map,
+            input: String::new(),
         }
     }
 
@@ -64,6 +66,14 @@ impl State {
         }
         self.axes.insert(key.to_string(), updated_value);
         Ok(updated_value)
+    }
+
+    pub fn set_input(&mut self, input: String) {
+        self.input = input;
+    }
+
+    pub fn get_line(&self, line_no: usize) -> Option<&str> {
+        self.input.lines().nth(line_no - 1)
     }
 
     #[allow(dead_code)]

@@ -201,19 +201,19 @@ pub fn dataframe_to_csv(df: &mut DataFrame, path: &str) -> Result<(), PolarsErro
 
 /// Parse file and return results as a vector of HashMaps
 fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, Value>>, ParsingError> {
+    // Store input for error messages
+    state.set_input(input.to_string());
+
+    // Initialize results with an empty HashMap
+    let mut results = vec![HashMap::new()];
+
     let file = NCParser::parse(Rule::file, input)
         .map_err(|e| {
             let (line, _col) = match &e.line_col {
                 pest::error::LineColLocation::Pos(pos) => *pos,
                 pest::error::LineColLocation::Span(start, _) => *start,
             };
-
-            let preview = input
-                .lines()
-                .nth(line - 1)
-                .unwrap_or("(could not retrieve line)")
-                .to_string();
-            
+            let preview = state.get_line(line).unwrap_or("(could not retrieve line)").to_string();
             ParsingError::with_context(line, preview, "initial file parsing".to_string(), format!("{}", e))
         })?
         .next()
@@ -228,7 +228,6 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
             message: "No inner blocks found".to_string(),
         })?;
 
-    let mut results = Vec::new();
     interpret_blocks(blocks, &mut results, state)?;
     Ok(results)
 }
