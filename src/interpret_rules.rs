@@ -16,9 +16,7 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
             let (line_no, preview) = get_error_context(&inner_pair, state);
             interpret_variable(inner_pair, state).and_then(|key| {
                 state
-                    .symbol_table
-                    .get(&key)
-                    .cloned()
+                    .get_variable(&key)
                     .ok_or(ParsingError::UndefinedVariable { 
                         line_no,
                         preview,
@@ -30,9 +28,7 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
             let (line_no, preview) = get_error_context(&inner_pair, state);
             interpret_variable_array(inner_pair, state).and_then(|keys| {
                 state
-                    .symbol_table
-                    .get(&keys[keys.len() - 1])
-                    .cloned()
+                    .get_variable(&keys[keys.len() - 1])
                     .ok_or(ParsingError::UnknownVariable {
                         line_no,
                         preview,
@@ -480,7 +476,7 @@ fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f32>, Pa
                 
                 if state.is_axis(&expr_str) {
                     let (line_no, preview) = get_error_context(&inner, state);
-                    let index = state.get_axis_index(&expr_str, line_no, preview)?;
+                    let index = state.get_axis_index(&expr_str, line_no, &preview)?;
                     indices.push(index as f32);
                 } else {
                     let value = evaluate_expression(inner, state)?;
@@ -887,8 +883,8 @@ fn interpret_statement(
             Rule::assignment => {
                 let (key, value) = interpret_assignment(statement, state)?;
                 if state.is_axis(&key) {
-                    let _updated_value = state.update_axis(&key, value, true)?;
-                    last.insert(key, Value::Float(_updated_value));
+                    let updated_value = state.update_axis(&key, value, true)?;
+                    last.insert(key.clone(), Value::Float(updated_value));
                 }
             }
             Rule::tool_selection => interpret_tool_selection(statement, output, state)?,

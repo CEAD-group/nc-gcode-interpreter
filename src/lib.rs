@@ -51,7 +51,8 @@ fn sanitize_dataframe(df: PyDataFrame, disable_forward_fill: bool) -> PyResult<P
     let rust_df = df.into();
 
     // Call the Rust function to sanitize the DataFrame
-    let sanitized_df = sanitize_dataframe_rust(rust_df, disable_forward_fill)
+    // For the Python interface, don't worry about axes when sanitizing
+    let sanitized_df = sanitize_dataframe_rust(rust_df, disable_forward_fill, None)
         .map_err(|e| PyErr::new::<PyValueError, _>(format!("Error sanitizing DataFrame: {:?}", e)))?;
 
     // Return the sanitized DataFrame back to Python

@@ -18,7 +18,7 @@ impl From<PolarsError> for ParsingError {
     }
 }
 
-const DEFAULT_AXIS_IDENTIFIERS: &[&str] = &[
+pub const DEFAULT_AXIS_IDENTIFIERS: &[&str] = &[
     "N", "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V", "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
 ];
 
@@ -59,7 +59,7 @@ pub fn nc_to_dataframe(
     // Convert results to DataFrame
     let mut df = results_to_dataframe(results)?;
 
-    df = sanitize_dataframe(df, disable_forward_fill)?;
+    df = sanitize_dataframe(df, disable_forward_fill, Some(axis_identifiers))?;
     Ok((df, state))
 }
 
@@ -76,7 +76,7 @@ pub fn nc_to_dataframe(
 //     // = "N": line numbers, Type int64 Should be the first column
 //     // axis_identifiers: all other columns. Type float64
 
-pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Result<DataFrame, ParsingError> {
+pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool, axes: Option<Vec<String>>) -> Result<DataFrame, ParsingError> {
     // Define expected types for specific columns
     let mut expected_types: Vec<(&str, DataType)> = Vec::new();
 
@@ -91,12 +91,17 @@ pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Resu
     // Collect column names from the DataFrame as Strings (to avoid immutable borrows)
     let column_names: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
 
-    // Determine axis identifiers (columns not in known_columns)
-    let axis_identifiers: HashSet<String> = column_names
-        .iter()
-        .filter(|col| !known_columns.contains(&col.as_str()))
-        .cloned()
-        .collect();
+    // Use provided axes if available, otherwise determine from column names
+    let axis_identifiers: HashSet<String> = if let Some(axes) = axes {
+        axes.into_iter().collect()
+    } else {
+        // Fall back to determining axes from column names if none provided
+        column_names
+            .iter()
+            .filter(|col| !known_columns.contains(&col.as_str()))
+            .cloned()
+            .collect()
+    };
 
     // Insert all known columns into `expected_types` with their expected DataTypes (in desired order)
     expected_types.push(("N", DataType::Int64)); // Line numbers
@@ -151,15 +156,26 @@ pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Resu
 
     // Handle forward fill if it's not disabled
     if !disable_forward_fill {
-        let fill_columns: Vec<String> = df
+        // First, get all modal G groups
+        let mut fill_columns: Vec<String> = df
             .get_column_names()
             .iter()
             .map(|s| s.to_string())
-            .filter(|col| axis_identifiers.contains(col) || modal_g_groups.contains(col.as_str()))
+            .filter(|col| modal_g_groups.contains(col.as_str()))
             .collect();
+        
+        // Then add all axes that exist in our DataFrame
+        let axis_columns: Vec<String> = axis_identifiers
+            .iter()
+            .filter(|col| df.get_column_names().iter().any(|name| name == col))
+            .cloned()
+            .collect();
+        fill_columns.extend(axis_columns);
 
+        // Apply forward fill to all relevant columns
         for col_name in fill_columns {
             let column = df.column(&col_name)?;
+            // Forward fill with no limit, preserve the last value throughout
             let filled_column = column.fill_null(FillNullStrategy::Forward(None))?;
             df.replace_or_add(col_name.into(), filled_column)?;
         }

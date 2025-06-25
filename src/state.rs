@@ -3,12 +3,15 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct State {
+    /// The current values of all axes in the state
     pub axes: HashMap<String, f32>,
     pub symbol_table: HashMap<String, f32>,
     pub translation: HashMap<String, f32>,
     pub axis_identifiers: Vec<String>,
     pub iteration_limit: usize,
     pub axis_index_map: Option<HashMap<String, usize>>,
+    /// Whether to automatically initialize undefined variables to 0.0
+    pub auto_init_variables: bool,
     /// Store line offsets for efficient error reporting
     line_offsets: Vec<usize>,
     /// Store the input text for error messages
@@ -33,11 +36,13 @@ impl State {
             translation.insert(axis.clone(), 0.0);
         }
 
-        // Validate axis_index_map if provided
+        // Add any axes from the index map that aren't in the identifiers list
+        let mut axis_identifiers = axis_identifiers;
         if let Some(map) = &axis_index_map {
             for axis in map.keys() {
-                if !axis_identifiers.contains(&axis.to_uppercase()) {
-                    panic!("Axis '{}' in axis_index_map is not a valid axis", axis);
+                let upper_axis = axis.to_uppercase();
+                if !axis_identifiers.contains(&upper_axis) {
+                    axis_identifiers.push(upper_axis);
                 }
             }
         }
@@ -49,9 +54,24 @@ impl State {
             axis_identifiers,
             iteration_limit,
             axis_index_map,
+            auto_init_variables: false,
             line_offsets: Vec::new(),
             input: String::new(),
         }
+    }
+
+    /// Initialize variables with given values
+    #[allow(dead_code)]
+    pub fn init_variables(&mut self, variables: HashMap<String, f32>) {
+        self.symbol_table.extend(variables);
+    }
+    
+    /// Try to get a variable value, optionally initializing it to 0.0 if auto_init is enabled
+    pub fn get_variable(&mut self, name: &str) -> Option<f32> {
+        if !self.symbol_table.contains_key(name) && self.auto_init_variables {
+            self.symbol_table.insert(name.to_string(), 0.0);
+        }
+        self.symbol_table.get(name).copied()
     }
 
     /// Sets the input text and pre-calculates line offsets for efficient access
