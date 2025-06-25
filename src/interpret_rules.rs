@@ -836,6 +836,7 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
                     });
                 }
             }
+            Ok(())
         }
         Rule::frame_atrans => {
             for pair in pair.into_inner() {
@@ -850,6 +851,7 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
                     });
                 }
             }
+            Ok(())
         }
         _ => {
             return Err(ParsingError::UnexpectedRule {
@@ -861,7 +863,6 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
             })
         }
     }
-    Ok(())
 }
 fn interpret_block_number(element: Pair<Rule>, output: &mut Output) {
     let mut pairs = element.into_inner();
