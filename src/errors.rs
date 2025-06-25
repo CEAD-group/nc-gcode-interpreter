@@ -108,6 +108,20 @@ Array indices must be non-negative and within the valid range."#)]
         axis: String,
         index: usize,
     },
+    #[error(r#"
+Invalid function call on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: Function {name} expects {expected} argument(s), but received {actual}.
+"#)]
+    InvalidFunctionArity {
+        line_no: usize,
+        preview: String,
+        name: String,
+        expected: usize,
+        actual: usize,
+    },
 }
 
 impl ParsingError {

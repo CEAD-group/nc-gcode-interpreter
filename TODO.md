@@ -19,7 +19,7 @@
 - [x] PRESETON(E,0)
 - [] TRAILON(ELX,Y,1); set one axis to trail another with a certain offset
 - [x] Check if lower case axis names should be matched. Can a variable be named x,y, or z or does that conflict with the axis names? --> indeed it does conflict
-- [] Check if EXL10 is a valid variable command or that it should relaly be ELX=10 (does direct assignment only work for single letter variables?)
+- [] Check if EXL10 is a valid variable command or that it should really be ELX=10 (does direct assignment only work for single letter variables?)
 - [x] Parse statements like FL[E] = 10 or ACC[E] = 10; (set feedrate for E axis). Here E refers to an index in the array FL, which is a feedrate array, and not the value of the axis. Thus E is both a variable refering to the axis number of E, and simultaneously E is also used to update the axis value.
 
 

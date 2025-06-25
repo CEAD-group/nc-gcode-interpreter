@@ -55,9 +55,26 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
     }
 }
 fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f32, ParsingError> {
+    let (line_no, preview) = get_error_context(&pair, state);
     let mut pairs = pair.into_inner();
-    let func_name = pairs.next().expect("Expected function name");
-    let args_pair = pairs.next().expect("Expected function arguments");
+    
+    // Get function name
+    let func_name = pairs.next()
+        .ok_or_else(|| ParsingError::ParsingContext {
+            line_no,
+            preview: preview.clone(),
+            context: "function evaluation".to_string(),
+            message: "Missing function name".to_string(),
+        })?;
+    
+    // Get arguments pair
+    let args_pair = pairs.next()
+        .ok_or_else(|| ParsingError::ParsingContext {
+            line_no,
+            preview: preview.clone(),
+            context: "function evaluation".to_string(),
+            message: "Missing function arguments".to_string(),
+        })?;
     
     // Parse arguments
     let mut args = Vec::new();
@@ -67,21 +84,74 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
         }
     }
 
+    // Helper to validate argument count
+    let check_args = |expected: usize| -> Result<(), ParsingError> {
+        if args.len() != expected {
+            return Err(ParsingError::InvalidFunctionArity {
+                line_no,
+                preview: preview.clone(),
+                name: func_name.as_str().to_string(),
+                expected,
+                actual: args.len(),
+            });
+        }
+        Ok(())
+    };
+
     // Apply the function
     match func_name.as_str() {
-        "SIN" => Ok(args[0].sin()),
-        "COS" => Ok(args[0].cos()),
-        "TAN" => Ok(args[0].tan()),
-        "ASIN" => Ok(args[0].asin()),
-        "ACOS" => Ok(args[0].acos()),
-        "ATAN2" => Ok(args[1].atan2(args[0])),
-        "SQRT" => Ok(args[0].sqrt()),
-        "ABS" => Ok(args[0].abs()),
-        "POT" => Ok(args[0].powi(2)),
-        "TRUNC" => Ok(args[0].trunc()),
-        "ROUND" => Ok(args[0].round()),
-        "LN" => Ok(args[0].ln()),
-        "EXP" => Ok(args[0].exp()),
+        "SIN" => {
+            check_args(1)?;
+            Ok(args[0].sin())
+        },
+        "COS" => {
+            check_args(1)?;
+            Ok(args[0].cos())
+        },
+        "TAN" => {
+            check_args(1)?;
+            Ok(args[0].tan())
+        },
+        "ASIN" => {
+            check_args(1)?;
+            Ok(args[0].asin())
+        },
+        "ACOS" => {
+            check_args(1)?;
+            Ok(args[0].acos())
+        },
+        "ATAN2" => {
+            check_args(2)?;
+            Ok(args[1].atan2(args[0]))
+        },
+        "SQRT" => {
+            check_args(1)?;
+            Ok(args[0].sqrt())
+        },
+        "ABS" => {
+            check_args(1)?;
+            Ok(args[0].abs())
+        },
+        "POT" => {
+            check_args(1)?;
+            Ok(args[0].powi(2))
+        },
+        "TRUNC" => {
+            check_args(1)?;
+            Ok(args[0].trunc())
+        },
+        "ROUND" => {
+            check_args(1)?;
+            Ok(args[0].round())
+        },
+        "LN" => {
+            check_args(1)?;
+            Ok(args[0].ln())
+        },
+        "EXP" => {
+            check_args(1)?;
+            Ok(args[0].exp())
+        },
         _ => Err(ParsingError::ParseError {
             message: format!("Unknown arithmetic function: {}", func_name.as_str()),
         }),
