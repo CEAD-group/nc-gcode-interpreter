@@ -27,7 +27,7 @@ uv synv --all-extras
 
 ```bash
 cargo build --release
-maturing develop --release
+maturing develop --release --uv
 ```
 
 
