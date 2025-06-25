@@ -372,6 +372,15 @@ fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f32>, Pa
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::expression => {
+                // Try to resolve axis identifier to index if possible
+                if let Some(axis_index_map) = &state.axis_index_map {
+                    // If the expression is a single identifier and matches an axis, use the mapping
+                    let expr_str = inner.as_str().trim();
+                    if axis_index_map.contains_key(expr_str) {
+                        indices.push(axis_index_map[expr_str] as f32);
+                        continue;
+                    }
+                }
                 let value = evaluate_expression(inner, state)?;
                 indices.push(value);
             }
@@ -468,7 +477,11 @@ fn evaluate_relational_operator(operator: Pair<Rule>, lhs: f32, rhs: f32) -> Res
         }),
     }
 }
-fn interpret_statement_if(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
+fn interpret_statement_if(
+    element: Pair<Rule>,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
     let mut pairs = element.into_inner();
 
     // Match the condition
@@ -540,7 +553,11 @@ fn interpret_statement_if(element: Pair<Rule>, output: &mut Output, state: &mut 
 
     Ok(())
 }
-fn interpret_statement_while(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
+fn interpret_statement_while(
+    element: Pair<Rule>,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
     let mut pairs = element.into_inner();
     let condition = pairs.next().expect("Expected a pair, got none");
     let blocks = pairs.next().expect("Expected a pair, got none");
@@ -556,7 +573,11 @@ fn interpret_statement_while(element: Pair<Rule>, output: &mut Output, state: &m
     }
     Ok(())
 }
-fn interpret_statement_for(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
+fn interpret_statement_for(
+    element: Pair<Rule>,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
     let mut pairs = element.into_inner();
 
     // Parse and execute the assignment statement
@@ -591,7 +612,11 @@ fn interpret_statement_for(element: Pair<Rule>, output: &mut Output, state: &mut
     }
     Ok(())
 }
-fn interpret_statement_repeat_until(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
+fn interpret_statement_repeat_until(
+    element: Pair<Rule>,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
     let mut pairs = element.into_inner();
     let first_pair = pairs.next().expect("Expected a pair, got none");
     let blocks;
@@ -623,43 +648,27 @@ fn interpret_statement_repeat_until(element: Pair<Rule>, output: &mut Output, st
             });
         }
     }
-    
-    
     let condition = pairs.next().expect("Expected condition, got none");
-    
     let mut loop_count = 0;
     loop {
-        // Execute the blocks at least once
         interpret_blocks(blocks.clone(), output, state)?;
         loop_count += 1;
-
-        // Check iteration limit
         if loop_count >= state.iteration_limit {
             return Err(ParsingError::LoopLimit {
                 limit: state.iteration_limit.to_string(),
             });
         }
-
-        // Check if condition is met to exit loop
         if evaluate_condition(condition.clone(), state)? {
             break;
         }
     }
     Ok(())
 }
-fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
-    // a control only has one child, one of
-    // control             =  {
-    //     goto_statement
-    //   | gotob_statement
-    //   | gotof_statement
-    //   | gotoc_statement
-    //   | if_statement
-    //   | loop_statement
-    //   | for_statement
-    //   | while_statement
-    //   | repeat_until_statement
-    // }
+fn interpret_control(
+    element: Pair<Rule>,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
     let mut pairs = element.into_inner();
     let pair = pairs.next().expect("Expected a pair, got none");
     match pair.as_rule() {
@@ -685,6 +694,11 @@ fn insert_m_key(last: &mut HashMap<String, Value>, value: &str) -> Result<(), Pa
                     vec.push(value.to_string());
                     return Ok(()); // Successfully added to the list
                 }
+            } else {
+                // If the key exists but is not a list, return an error
+                return Err(ParsingError::ParseError {
+                    message: format!("M command key '{}' is not a list", m_key),
+                });
             }
         } else {
             // If the key doesn't exist, insert a new StrList with the first value
@@ -694,7 +708,11 @@ fn insert_m_key(last: &mut HashMap<String, Value>, value: &str) -> Result<(), Pa
     }
     Err(ParsingError::TooManyMCommands) // Return error if all keys are full
 }
-fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
+fn interpret_statement(
+    element: Pair<Rule>,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
     // Grammar:
     // statement           =  {
     //     g_command_numbered
@@ -805,9 +823,12 @@ fn annotate_error(pair: &Pair<Rule>, context: &str, message: String) -> ParsingE
     ParsingError::with_context(line_no, preview, context.to_string(), message)
 }
 
-fn interpret_block(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
+fn interpret_block(
+    element: Pair<Rule>,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
     output.push(HashMap::new());
-    
     for item in element.into_inner() {
         match item.as_rule() {
             Rule::block_number => {
@@ -828,12 +849,15 @@ fn interpret_block(element: Pair<Rule>, output: &mut Output, state: &mut State) 
     Ok(())
 }
 
-pub fn interpret_blocks(blocks: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
+pub fn interpret_blocks(
+    blocks: Pair<Rule>,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
     if blocks.as_rule() != Rule::blocks {
         return Err(annotate_error(&blocks, "blocks interpretation",
             format!("Expected blocks, found {:?}", blocks.as_rule())));
     }
-
     for block in blocks.into_inner() {
         interpret_block(block, output, state)?;
     }

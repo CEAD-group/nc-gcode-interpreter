@@ -30,6 +30,7 @@ pub fn nc_to_dataframe(
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,
     disable_forward_fill: bool,
+    axis_index_map: Option<HashMap<String, usize>>, // axis identifier to index mapping
 ) -> Result<(DataFrame, state::State), ParsingError> {
     // Default axis identifiers
 
@@ -43,8 +44,8 @@ pub fn nc_to_dataframe(
         axis_identifiers.extend(extra_axes);
     }
 
-    // Process the defaults file first, if provided. This will set up the initial state
-    let mut state = state::State::new(axis_identifiers.clone(), iteration_limit);
+    // Pass axis_index_map to State::new
+    let mut state = state::State::new(axis_identifiers.clone(), iteration_limit, axis_index_map);
     if let Some(initial_state) = initial_state {
         if let Err(error) = interpret_file(initial_state, &mut state) {
             eprintln!("Error while parsing defaults: {:?}", error);
@@ -52,7 +53,7 @@ pub fn nc_to_dataframe(
         }
     }
 
-    // Now interpret the main input
+    // Now interpret the main input using the axis_index_map from state
     let results = interpret_file(input, &mut state)?;
 
     // Convert results to DataFrame
@@ -229,7 +230,6 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
 
     let mut results = Vec::new();
     interpret_blocks(blocks, &mut results, state)?;
-
     Ok(results)
 }
 

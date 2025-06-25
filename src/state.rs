@@ -9,11 +9,12 @@ pub struct State {
     pub translation: HashMap<String, f32>,
     pub axis_identifiers: Vec<String>,
     pub iteration_limit: usize,
+    pub axis_index_map: Option<HashMap<String, usize>>, // NEW: axis identifier to index mapping
 }
 
 impl State {
     // Constructor for State to initialize the HashMaps with default values
-    pub fn new(axis_identifiers: Vec<String>, iteration_limit: usize) -> Self {
+    pub fn new(axis_identifiers: Vec<String>, iteration_limit: usize, axis_index_map: Option<HashMap<String, usize>>) -> Self {
         let mut symbols = HashMap::new();
         // Inserting default values
         symbols.insert("TRUE".to_string(), 1.0);
@@ -31,6 +32,7 @@ impl State {
             translation,
             axis_identifiers,
             iteration_limit,
+            axis_index_map, // NEW
         }
     }
 

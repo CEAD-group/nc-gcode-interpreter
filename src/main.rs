@@ -3,6 +3,7 @@
 extern crate pest_derive;
 
 use clap::{Arg, ArgAction, Command};
+use std::collections::HashMap;
 use std::io::{self};
 
 mod errors;
@@ -70,6 +71,14 @@ fn main() -> io::Result<()> {
                 .help("Disable forward-filling of null values in axes columns")
                 .action(ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("axis_index_map")
+                .long("axis-index-map")
+                .value_name("AXIS_INDEX_MAP")
+                .help("Axis index mapping, e.g. 'E:4,X:0' (comma-separated)")
+                .num_args(1)
+                .value_parser(clap::value_parser!(String)),
+        )
         .get_matches();
 
     // Retrieve the input file
@@ -84,6 +93,20 @@ fn main() -> io::Result<()> {
     let extra_axes: Option<Vec<String>> = matches
         .get_one::<String>("extra_axes")
         .map(|s| s.split(',').map(|axis| axis.trim().to_string()).collect());
+
+    // Parse axis_index_map argument if provided
+    let axis_index_map: Option<HashMap<String, usize>> = matches
+        .get_one::<String>("axis_index_map")
+        .map(|s| {
+            s.split(',')
+                .filter_map(|pair| {
+                    let mut parts = pair.split(':');
+                    let key = parts.next()?.trim().to_string();
+                    let value = parts.next()?.trim().parse::<usize>().ok()?;
+                    Some((key, value))
+                })
+                .collect::<HashMap<_, _>>()
+        });
 
     let iteration_limit = matches.get_one::<usize>("iteration_limit").unwrap();
 
@@ -110,6 +133,7 @@ fn main() -> io::Result<()> {
         extra_axes,
         *iteration_limit,
         disable_forward_fill,
+        axis_index_map, // Pass axis_index_map from CLI
     ) {
         Ok((mut df, _state)) => {
             let mut output_path = PathBuf::from(input_path.clone());

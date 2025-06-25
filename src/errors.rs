@@ -15,7 +15,9 @@ Details: {message}
         context: String,
         message: String,
     },
-    #[error("Unknown variable: {variable}")]
+    #[error("Unknown variable or missing axis-to-index mapping: {variable}.\n\
+This error may occur if you are assigning to an array at index '{variable}', but no axis-to-index mapping was provided for this axis.\n\
+To fix this, pass an appropriate axis_index_map (e.g., axis_index_map={{ '{variable}': 4 }}) to the interpreter.")]
     UnknownVariable { variable: String },
     #[error("Unexpected rule '{rule:?}' encountered in {context}")]
     UnexpectedRule { rule: crate::types::Rule, context: String },
