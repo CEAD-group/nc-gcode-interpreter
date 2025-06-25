@@ -20,14 +20,27 @@ Parse error in array indexing on line {line_no}
 ----------------------------------------
 Line: {preview}
 
-Details: Unknown variable or missing axis-to-index mapping: {variable}.
-This error may occur if you are assigning to an array at index '{variable}', but no axis-to-index mapping was provided for this axis.
-To fix this, pass an appropriate axis_index_map (e.g., axis_index_map={{ '{variable}': 4 }}) to the interpreter.
+Details: Invalid array index '{variable}'.
+This error occurs when using a variable as an array index, but the variable is not defined.
 "#)]
     UnknownVariable { 
         line_no: usize,
         preview: String,
         variable: String 
+    },
+    #[error(r#"
+Parse error in assignment on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: Undefined variable '{name}'.
+This error occurs when using an undefined variable in an expression.
+To fix this, make sure to define the variable before using it.
+"#)]
+    UndefinedVariable {
+        line_no: usize,
+        preview: String,
+        name: String,
     },
     #[error(r#"
 Unexpected rule '{rule:?}' encountered in {context} on line {line_no}

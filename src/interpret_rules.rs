@@ -19,10 +19,10 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
                     .symbol_table
                     .get(&key)
                     .cloned()
-                    .ok_or(ParsingError::UnknownVariable { 
+                    .ok_or(ParsingError::UndefinedVariable { 
                         line_no,
                         preview,
-                        variable: key 
+                        name: key 
                     })
             })
         },
@@ -43,12 +43,12 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
         Rule::expression => evaluate_expression(inner_pair, state),
         Rule::arith_fun => evaluate_arithmetic_function(inner_pair, state),
         _ => {
-            // panic!("Unexpected rule: {:?}", inner_pair.as_rule());
+            let (line_no, preview) = get_error_context(&inner_pair, state);
             Err(ParsingError::UnexpectedRule {
                 rule: inner_pair.as_rule(),
                 context: "interpret_primary".to_string(),
-                line_no: inner_pair.line_col().0,
-                preview: state.get_line(inner_pair.line_col().0).unwrap_or("").to_string(),
+                line_no,
+                preview,
                 message: format!("Unexpected rule in interpret_primary: {:?}", inner_pair.as_rule()),
             })
         }
@@ -578,10 +578,10 @@ fn interpret_statement_if(
         } else {
             return Err(ParsingError::UnexpectedRule {
                 rule: next_pair.as_rule(),
-                context: "interpret_statement_if".to_string(),
+                context: "interpret_statement_if::else".to_string(),
                 line_no: next_pair.line_col().0,
                 preview: state.get_line(next_pair.line_col().0).unwrap_or("").to_string(),
-                message: format!("Unexpected rule in interpret_statement_if: {:?}", next_pair.as_rule()),
+                message: format!("Unexpected rule in else block: {:?}", next_pair.as_rule()),
             });
         }
     } else {
