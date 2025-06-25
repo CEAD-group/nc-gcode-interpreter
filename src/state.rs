@@ -116,19 +116,19 @@ impl State {
     }
 
     /// Gets the array index for an axis, if a mapping exists
-    pub fn get_axis_index(&self, axis: &str, line_no: usize, preview: String) -> Result<usize, ParsingError> {
+    pub fn get_axis_index(&self, axis: &str, line_no: usize, preview: &str) -> Result<usize, ParsingError> {
         if let Some(map) = &self.axis_index_map {
             map.get(axis)
                 .copied()
                 .ok_or_else(|| ParsingError::MissingAxisMapping {
                     line_no,
-                    preview,
+                    preview: preview.to_string(),
                     axis: axis.to_string(),
                 })
         } else {
             Err(ParsingError::MissingAxisMapping {
                 line_no,
-                preview,
+                preview: preview.to_string(),
                 axis: axis.to_string(),
             })
         }
