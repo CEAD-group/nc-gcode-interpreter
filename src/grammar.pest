@@ -67,11 +67,20 @@ reserved   = _{
 }
 
 identifier = @{
-    !(reserved) ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* ~ !(ASCII_ALPHANUMERIC | "_")
+    !(reserved ~ !ASCII_ALPHANUMERIC)
+    ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*
 }
 
 variable             =  { (nc_variable | identifier) }
-variable_single_char = @{ ASCII_ALPHA }
+variable_single_char = @{
+    "X" | "Y" | "Z"
+  | "A" | "B" | "C"
+  | "U" | "V" | "W"
+  | "I" | "J" | "K"
+  | "T" | "S" | "F"
+  | "D" | "H" | "E"
+}
+
 // must be an axis
 variable_array = { (nc_variable | identifier) ~ "[" ~ indices ~ "]" }
 indices        = { expression ~ ("," ~ expression)* }
