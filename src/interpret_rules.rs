@@ -406,19 +406,20 @@ fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f32>, Pa
         match inner.as_rule() {
             Rule::expression => {
                 // Try to resolve axis identifier to index if possible
-                let expr_str = inner.as_str().trim();
-                if state.is_axis(expr_str) {
+                let expr_str = inner.as_str().trim().to_string();
+                
+                if state.is_axis(&expr_str) {
                     let (line_no, preview) = get_error_context(&inner, state);
-                    let index = state.get_axis_index(expr_str, line_no, preview)?;
+                    let index = state.get_axis_index(&expr_str, line_no, preview)?;
                     indices.push(index as f32);
                 } else {
-                    let value = evaluate_expression(inner.clone(), state)?;
+                    let value = evaluate_expression(inner, state)?;
                     // Validate the index value
                     if value < 0.0 || value.fract() != 0.0 {
                         return Err(ParsingError::InvalidAxisIndex {
                             line_no: pair_line_no,
                             preview: pair_preview,
-                            axis: expr_str.to_string(),
+                            axis: expr_str,
                             index: value as usize,
                         });
                     }
@@ -429,10 +430,10 @@ fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f32>, Pa
                 let (line_no, preview) = get_error_context(&inner, state);
                 return Err(ParsingError::UnexpectedRule {
                     rule: inner.as_rule(),
-                    context: "interpret_indices".to_string(),
+                    context: "array index expression".to_string(),
                     line_no,
                     preview,
-                    message: format!("Unexpected rule in interpret_indices: {:?}", inner.as_rule()),
+                    message: "Expected a valid array index expression".to_string(),
                 });
             }
         }
