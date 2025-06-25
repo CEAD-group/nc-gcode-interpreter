@@ -36,7 +36,7 @@ maturing develop --release --uv
 There are a bunch of csv files in the examples directory. To test the tool on all of them (use git to check changes)
 
 ```bash
-rm **/*.csv && cargo build --release && find examples -name "*.mpf" -type f -print0 | xargs -0 -I {} sh -c './target/release/nc-gcode-interpreter --initial_state=examples/defaults.mpf "$1" || echo "Failed to process $1" >&2' sh {}
+rm **/*.csv && cargo build --release && find examples -name "*.mpf" -type f -print0 | xargs -0 -I {} sh -c './target/release/nc-gcode-interpreter --axis-index-map E:4 --initial_state=examples/defaults.mpf "$1" || echo "Failed to process $1" >&2' sh {}
 ```
 
 ## python test
