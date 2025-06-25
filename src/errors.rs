@@ -41,8 +41,19 @@ To fix this, pass an appropriate axis_index_map (e.g., axis_index_map={{ '{varia
     UnexpectedOperator { operator: String },
     #[error("Loop limit of {limit} reached")]
     LoopLimit { limit: String },
-    #[error("Too many M commands in a single block")]
-    TooManyMCommands,
+    #[error(r#"
+Too many M commands in a single block on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: {message}
+To fix this, ensure that each block contains at most one M command.
+"#)]
+    TooManyMCommands {
+        line_no: usize,
+        preview: String,
+        message: String,
+    },
     #[error("Unexpected axis '{axis}'. Valid axes are: {axes}")]
     UnexpectedAxis { axis: String, axes: String },
     #[error("Cannot define a variable named '{name}', as it conflicts with an axis name")]

@@ -695,7 +695,7 @@ fn interpret_control(
         _ => panic!("Unexpected rule: {:?}", pair.as_rule()),
     }
 }
-fn insert_m_key(last: &mut HashMap<String, Value>, value: &str) -> Result<(), ParsingError> {
+fn insert_m_key(last: &mut HashMap<String, Value>, value: &str, line_no: usize, preview: String) -> Result<(), ParsingError> {
     let m_key = "M";
     for _i in 1..=5 {
         if let Some(existing_value) = last.get_mut(m_key) {
@@ -717,7 +717,11 @@ fn insert_m_key(last: &mut HashMap<String, Value>, value: &str) -> Result<(), Pa
             return Ok(()); // Exit early after insertion
         }
     }
-    Err(ParsingError::TooManyMCommands) // Return error if all keys are full
+    Err(ParsingError::TooManyMCommands {
+        line_no,
+        preview,
+        message: "Too many M commands in a single block".to_string(),
+    })
 }
 fn interpret_statement(
     element: Pair<Rule>,
@@ -752,9 +756,10 @@ fn interpret_statement(
                 last.insert(key, Value::Str(value));
             }
             Rule::m_command => {
+                let (line_no, preview) = get_error_context(&statement, state);
                 let (_key, value) = interpret_m_command(statement);
                 // there are 5 M codes allowed in a block. Store them in separate columns in the output
-                insert_m_key(last, &value)?;
+                insert_m_key(last, &value, line_no, preview)?;
             }
             Rule::assignment => {
                 let (key, value) = interpret_assignment(statement, state)?;
