@@ -47,6 +47,9 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
             Err(ParsingError::UnexpectedRule {
                 rule: inner_pair.as_rule(),
                 context: "interpret_primary".to_string(),
+                line_no: inner_pair.line_col().0,
+                preview: state.get_line(inner_pair.line_col().0).unwrap_or("").to_string(),
+                message: format!("Unexpected rule in interpret_primary: {:?}", inner_pair.as_rule()),
             })
         }
     }
@@ -111,11 +114,14 @@ fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f32,
                 inner_pairs.next().expect("Expected a primary expression after 'neg'"),
                 state,
             )?,
-            Rule::primary => interpret_primary(inner_pair, state)?,
+            Rule::primary => interpret_primary(inner_pair.clone(), state)?,
             // _ => panic!("Unexpected rule: {:?}", inner_pair.as_rule()),
             _ => Err(ParsingError::UnexpectedRule {
                 rule: inner_pair.as_rule(),
                 context: "evaluate_expression::rhs".to_string(),
+                line_no: inner_pair.line_col().0,
+                preview: state.get_line(inner_pair.line_col().0).unwrap_or("").to_string(),
+                message: format!("Unexpected rule in evaluate_expression::rhs: {:?}", inner_pair.as_rule()),
             })?,
         };
 
@@ -137,6 +143,9 @@ fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f32,
             _ => Err(ParsingError::UnexpectedRule {
                 rule: operator_rule,
                 context: "evaluate_expression::operator".to_string(),
+                line_no: inner_pair.line_col().0,
+                preview: state.get_line(inner_pair.line_col().0).unwrap_or("").to_string(),
+                message: format!("Unexpected operator rule: {:?}", operator_rule),
             })?,
         }
     }
@@ -186,6 +195,9 @@ fn interpret_tool_selection(
                 return Err(ParsingError::UnexpectedRule {
                     rule: pair.as_rule(),
                     context: "interpret_tool_selection".to_string(),
+                    line_no: pair.line_col().0,
+                    preview: String::from("(state not available)"),
+                    message: format!("Unexpected rule in interpret_tool_selection: {:?}", pair.as_rule()),
                 });
             }
         }
@@ -244,6 +256,9 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
             return Err(ParsingError::UnexpectedRule {
                 rule: expression_pair.as_rule(),
                 context: "interpret_assignment".to_string(),
+                line_no: expression_pair.line_col().0,
+                preview: state.get_line(expression_pair.line_col().0).unwrap_or("").to_string(),
+                message: format!("Unexpected rule in interpret_assignment: {:?}", expression_pair.as_rule()),
             })
         }
     };
@@ -258,14 +273,15 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
 }
 fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) -> Result<f32, ParsingError> {
     // axis_increment = { "IC" ~ "(" ~ expression ~ ")" }
-    let inner_pair = pair
-        .into_inner()
-        .next()
-        .expect("Expected an expression inside axis_increment, found none");
+    let pair_clone = pair.clone();
+    let inner_pair = pair.into_inner().next().expect("Expected an expression inside axis_increment, found none");
     if inner_pair.as_rule() != Rule::expression {
         return Err(ParsingError::UnexpectedRule {
             rule: inner_pair.as_rule(),
             context: "interpret_axis_increment::axis_increment".to_string(),
+            line_no: pair_clone.line_col().0,
+            preview: state.get_line(pair_clone.line_col().0).unwrap_or("").to_string(),
+            message: format!("Unexpected rule in interpret_axis_increment: {:?}", inner_pair.as_rule()),
         });
     }
     let increment = evaluate_expression(inner_pair, state)?;
@@ -322,6 +338,9 @@ fn interpret_value_array(pair: Pair<Rule>, state: &mut State) -> Result<Vec<Opti
                 return Err(ParsingError::UnexpectedRule {
                     rule: inner.as_rule(),
                     context: "interpret_value_array".to_string(),
+                    line_no: inner.line_col().0,
+                    preview: state.get_line(inner.line_col().0).unwrap_or("").to_string(),
+                    message: format!("Unexpected rule in interpret_value_array: {:?}", inner.as_rule()),
                 })
             }
         }
@@ -399,6 +418,9 @@ fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f32>, Pa
                 return Err(ParsingError::UnexpectedRule {
                     rule: inner.as_rule(),
                     context: "interpret_indices".to_string(),
+                    line_no: inner.line_col().0,
+                    preview: state.get_line(inner.line_col().0).unwrap_or("").to_string(),
+                    message: format!("Unexpected rule in interpret_indices: {:?}", inner.as_rule()),
                 })
             }
         }
@@ -449,6 +471,9 @@ fn interpret_definition(element: Pair<Rule>, state: &mut State) -> Result<(), Pa
             _ => Err(ParsingError::UnexpectedRule {
                 rule: pair.as_rule(),
                 context: "interpret_definition".to_string(),
+                line_no: pair.line_col().0,
+                preview: state.get_line(pair.line_col().0).unwrap_or("").to_string(),
+                message: format!("Unexpected rule in interpret_definition: {:?}", pair.as_rule()),
             })?,
         }
     }
@@ -504,6 +529,9 @@ fn interpret_statement_if(
         return Err(ParsingError::UnexpectedRule {
             rule: condition.as_rule(),
             context: "interpret_statement_if".to_string(),
+            line_no: condition.line_col().0,
+            preview: state.get_line(condition.line_col().0).unwrap_or("").to_string(),
+            message: format!("Unexpected rule in interpret_statement_if: {:?}", condition.as_rule()),
         });
     }
 
@@ -524,6 +552,9 @@ fn interpret_statement_if(
         return Err(ParsingError::UnexpectedRule {
             rule: true_block.as_rule(),
             context: "interpret_statement_if".to_string(),
+            line_no: true_block.line_col().0,
+            preview: state.get_line(true_block.line_col().0).unwrap_or("").to_string(),
+            message: format!("Unexpected rule in interpret_statement_if: {:?}", true_block.as_rule()),
         });
     }
 
@@ -535,6 +566,9 @@ fn interpret_statement_if(
             return Err(ParsingError::UnexpectedRule {
                 rule: next_pair.as_rule(),
                 context: "interpret_statement_if".to_string(),
+                line_no: next_pair.line_col().0,
+                preview: state.get_line(next_pair.line_col().0).unwrap_or("").to_string(),
+                message: format!("Unexpected rule in interpret_statement_if: {:?}", next_pair.as_rule()),
             });
         }
     } else {
@@ -645,6 +679,9 @@ fn interpret_statement_repeat_until(
                     return Err(ParsingError::UnexpectedRule {
                         rule: first_pair.as_rule(),
                         context: "interpret_statement_repeat_until".to_string(),
+                        line_no: first_pair.line_col().0,
+                        preview: state.get_line(first_pair.line_col().0).unwrap_or("").to_string(),
+                        message: format!("Unexpected rule in interpret_statement_repeat_until: {:?}", first_pair.as_rule()),
                     });
                 }
             }
@@ -656,6 +693,9 @@ fn interpret_statement_repeat_until(
             return Err(ParsingError::UnexpectedRule {
                 rule: first_pair.as_rule(),
                 context: "interpret_statement_repeat_until".to_string(),
+                line_no: first_pair.line_col().0,
+                preview: state.get_line(first_pair.line_col().0).unwrap_or("").to_string(),
+                message: format!("Unexpected rule in interpret_statement_repeat_until: {:?}", first_pair.as_rule()),
             });
         }
     }
@@ -772,6 +812,9 @@ fn interpret_statement(
             _ => Err(ParsingError::UnexpectedRule {
                 rule: statement.as_rule(),
                 context: "interpret_statement".to_string(),
+                line_no: statement.line_col().0,
+                preview: state.get_line(statement.line_col().0).unwrap_or("").to_string(),
+                message: format!("Unexpected rule in interpret_statement: {:?}", statement.as_rule()),
             })?,
         }
     }
@@ -812,6 +855,9 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
             return Err(ParsingError::UnexpectedRule {
                 rule: pair.as_rule(),
                 context: "interpret_frame_op".to_string(),
+                line_no: pair.line_col().0,
+                preview: state.get_line(pair.line_col().0).unwrap_or("").to_string(),
+                message: format!("Unexpected rule in interpret_frame_op: {:?}", pair.as_rule()),
             })
         }
     }

@@ -29,8 +29,20 @@ To fix this, pass an appropriate axis_index_map (e.g., axis_index_map={{ '{varia
         preview: String,
         variable: String 
     },
-    #[error("Unexpected rule '{rule:?}' encountered in {context}")]
-    UnexpectedRule { rule: crate::types::Rule, context: String },
+    #[error(r#"
+Unexpected rule '{rule:?}' encountered in {context} on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: {message}
+"#)]
+    UnexpectedRule {
+        rule: crate::types::Rule,
+        context: String,
+        line_no: usize,
+        preview: String,
+        message: String,
+    },
     #[error("Parse error: {message}")]
     ParseError { message: String },
     #[error("Expected {expected} elements, found {actual}")]
