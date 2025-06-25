@@ -399,29 +399,41 @@ fn interpret_variable_array(inner: Pair<Rule>, state: &mut State) -> Result<Vec<
 }
 fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f32>, ParsingError> {
     let mut indices = Vec::new();
+    // Get error context before consuming pair
+    let (pair_line_no, pair_preview) = get_error_context(&pair, state);
+    
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::expression => {
                 // Try to resolve axis identifier to index if possible
-                if let Some(axis_index_map) = &state.axis_index_map {
-                    // If the expression is a single identifier and matches an axis, use the mapping
-                    let expr_str = inner.as_str().trim();
-                    if axis_index_map.contains_key(expr_str) {
-                        indices.push(axis_index_map[expr_str] as f32);
-                        continue;
+                let expr_str = inner.as_str().trim();
+                if state.is_axis(expr_str) {
+                    let (line_no, preview) = get_error_context(&inner, state);
+                    let index = state.get_axis_index(expr_str, line_no, preview)?;
+                    indices.push(index as f32);
+                } else {
+                    let value = evaluate_expression(inner.clone(), state)?;
+                    // Validate the index value
+                    if value < 0.0 || value.fract() != 0.0 {
+                        return Err(ParsingError::InvalidAxisIndex {
+                            line_no: pair_line_no,
+                            preview: pair_preview,
+                            axis: expr_str.to_string(),
+                            index: value as usize,
+                        });
                     }
+                    indices.push(value);
                 }
-                let value = evaluate_expression(inner, state)?;
-                indices.push(value);
             }
             _ => {
+                let (line_no, preview) = get_error_context(&inner, state);
                 return Err(ParsingError::UnexpectedRule {
                     rule: inner.as_rule(),
                     context: "interpret_indices".to_string(),
-                    line_no: inner.line_col().0,
-                    preview: state.get_line(inner.line_col().0).unwrap_or("").to_string(),
+                    line_no,
+                    preview,
                     message: format!("Unexpected rule in interpret_indices: {:?}", inner.as_rule()),
-                })
+                });
             }
         }
     }

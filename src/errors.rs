@@ -70,6 +70,31 @@ To fix this, ensure that each block contains at most one M command.
     UnexpectedAxis { axis: String, axes: String },
     #[error("Cannot define a variable named '{name}', as it conflicts with an axis name")]
     AxisUsedAsVariable { name: String },
+    #[error(r#"
+Missing axis mapping on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: No mapping found for axis '{axis}' in array indexing operation.
+To fix this, provide an axis_index_map that includes '{axis}'."#)]
+    MissingAxisMapping {
+        line_no: usize,
+        preview: String,
+        axis: String,
+    },
+    #[error(r#"
+Invalid axis mapping on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: Invalid index {index} for axis '{axis}' in array indexing operation.
+Array indices must be non-negative and within the valid range."#)]
+    InvalidAxisIndex {
+        line_no: usize,
+        preview: String,
+        axis: String,
+        index: usize,
+    },
 }
 
 impl ParsingError {
