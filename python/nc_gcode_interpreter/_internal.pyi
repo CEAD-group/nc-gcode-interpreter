@@ -10,6 +10,7 @@ def nc_to_dataframe(
     iteration_limit: int = 10000,
     disable_forward_fill: bool = False,
     axis_index_map: Optional[Dict[str, int]] = None,
+    allow_undefined_variables: bool = False,
 ) -> Tuple[pl.DataFrame, Dict[str, Dict[str, float]]]:
     """
     Convert G-code to a DataFrame representation along with the state information.
@@ -30,6 +31,8 @@ def nc_to_dataframe(
         Whether to disable forward-filling of values.
     axis_index_map: Optional[Dict[str, int]]
         An optional mapping of axis identifiers to their corresponding indices.
+    allow_undefined_variables: bool
+        Whether to allow undefined variables in the input. If set to True, undefined variables will be initialized to 0.0.
 
     Returns:
     --------
