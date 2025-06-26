@@ -79,6 +79,12 @@ fn main() -> io::Result<()> {
                 .num_args(1)
                 .value_parser(clap::value_parser!(String)),
         )
+        .arg(
+            Arg::new("allow_undefined_variables")
+                .long("allow-undefined-variables")
+                .help("Allow undefined variables in the input file (this will initialize these variables as 0.0), default is false")
+                .action(ArgAction::SetTrue),
+        )
         .get_matches();
 
     // Retrieve the input file
@@ -125,7 +131,9 @@ fn main() -> io::Result<()> {
                 format!("Error reading initial state file: {}", e),
             )
         })?;
-
+        
+    let allow_undefined_variables = matches.get_flag("allow_undefined_variables");
+    
     match nc_to_dataframe(
         &input,
         initial_state.as_deref(),
@@ -133,7 +141,8 @@ fn main() -> io::Result<()> {
         extra_axes,
         *iteration_limit,
         disable_forward_fill,
-        axis_index_map, // Pass axis_index_map from CLI
+        axis_index_map, 
+        allow_undefined_variables,
     ) {
         Ok((mut df, _state)) => {
             let mut output_path = PathBuf::from(input_path.clone());

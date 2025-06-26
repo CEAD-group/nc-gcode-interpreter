@@ -9,6 +9,7 @@ pub struct State {
     pub axis_identifiers: Vec<String>,
     pub iteration_limit: usize,
     pub axis_index_map: Option<HashMap<String, usize>>,
+    pub allow_undefined_variables: bool,
     /// Store line offsets for efficient error reporting
     line_offsets: Vec<usize>,
     /// Store the input text for error messages
@@ -23,7 +24,7 @@ impl State {
     /// * `axis_identifiers` - List of valid axis names (e.g., ["X", "Y", "Z", "E"])
     /// * `iteration_limit` - Maximum number of iterations for loops
     /// * `axis_index_map` - Optional mapping of axis names to array indices (e.g., {"E": 4})
-    pub fn new(axis_identifiers: Vec<String>, iteration_limit: usize, axis_index_map: Option<HashMap<String, usize>>) -> Self {
+    pub fn new(axis_identifiers: Vec<String>, iteration_limit: usize, axis_index_map: Option<HashMap<String, usize>>, allow_undefined_variables: bool) -> Self {
         let mut symbols = HashMap::new();
         symbols.insert("TRUE".to_string(), 1.0);
         symbols.insert("FALSE".to_string(), 0.0);
@@ -49,6 +50,7 @@ impl State {
             axis_identifiers,
             iteration_limit,
             axis_index_map,
+            allow_undefined_variables,
             line_offsets: Vec::new(),
             input: String::new(),
         }

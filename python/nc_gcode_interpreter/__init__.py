@@ -25,6 +25,7 @@ def nc_to_dataframe(
     iteration_limit: int = 10000,
     disable_forward_fill: bool = False,
     axis_index_map: dict[str, int] | None = None,
+    allow_undefined_variables: bool = False,
 ) -> tuple[pl.DataFrame, dict]:
     """
     Parses Sinumerik-flavored NC G-code and converts it into a Polars DataFrame along with the final state.
@@ -50,6 +51,8 @@ def nc_to_dataframe(
     axis_index_map: dict[str, int] | None, optional
         A mapping from axis identifiers (e.g., 'E') to numeric indices (e.g., 4) for array assignments like FL[E]=10.
         This allows user-configurable mapping of axis names to indices. Example: {'E': 4, 'X': 0}.
+    allow_undefined_variables: bool, optional
+        If True, allows undefined variables to be used in expressions with a value of 0 [default: False].
 
     Returns:
     --------
@@ -91,6 +94,7 @@ def nc_to_dataframe(
         iteration_limit,
         disable_forward_fill,
         axis_index_map,
+        allow_undefined_variables,
     )
     return df, state
 
