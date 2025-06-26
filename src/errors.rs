@@ -35,7 +35,10 @@ Line: {preview}
 
 Details: Undefined variable '{name}'.
 This error occurs when using an undefined variable in an expression.
-To fix this, make sure to define the variable before using it.
+To fix this, make sure to define the variable before using it. This can 
+be done by adding common definitions to an initial state file, or by
+setting the `allow_undefined_variables` flag to true (this will initialize
+undefined variables to 0.0).
 "#)]
     UndefinedVariable {
         line_no: usize,

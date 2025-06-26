@@ -15,29 +15,38 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
         Rule::variable => {
             let (line_no, preview) = get_error_context(&inner_pair, state);
             interpret_variable(inner_pair, state).and_then(|key| {
-                state
-                    .symbol_table
-                    .get(&key)
-                    .cloned()
-                    .ok_or(ParsingError::UndefinedVariable { 
+                if let Some(value) = state.symbol_table.get(&key).cloned() {
+                    Ok(value)
+                } else if state.allow_undefined_variables {
+                    eprintln!("Warning: Variable '{}' is undefined, initializing to 0.0", key);
+                    state.symbol_table.insert(key, 0.0);
+                    Ok(0.0)
+                } else {
+                    Err(ParsingError::UndefinedVariable { 
                         line_no,
                         preview,
                         name: key 
                     })
+                }
             })
         },
         Rule::variable_array => {
             let (line_no, preview) = get_error_context(&inner_pair, state);
             interpret_variable_array(inner_pair, state).and_then(|keys| {
-                state
-                    .symbol_table
-                    .get(&keys[keys.len() - 1])
-                    .cloned()
-                    .ok_or(ParsingError::UnknownVariable {
+                let key = &keys[keys.len() - 1];
+                if let Some(value) = state.symbol_table.get(key).cloned() {
+                    Ok(value)
+                } else if state.allow_undefined_variables {
+                    eprintln!("Warning: Variable array element '{}' is undefined, initializing to 0.0", key);
+                    state.symbol_table.insert(key.clone(), 0.0);
+                    Ok(0.0)
+                } else {
+                    Err(ParsingError::UnknownVariable {
                         line_no,
                         preview,
-                        variable: keys[keys.len() - 1].clone(),
+                        variable: key.clone(),
                     })
+                }
             })
         },
         Rule::expression => evaluate_expression(inner_pair, state),

@@ -31,6 +31,7 @@ pub fn nc_to_dataframe(
     iteration_limit: usize,
     disable_forward_fill: bool,
     axis_index_map: Option<HashMap<String, usize>>, // axis identifier to index mapping
+    allow_undefined_variables: bool,
 ) -> Result<(DataFrame, state::State), ParsingError> {
     // Default axis identifiers
 
@@ -44,8 +45,7 @@ pub fn nc_to_dataframe(
         axis_identifiers.extend(extra_axes);
     }
 
-    // Pass axis_index_map to State::new
-    let mut state = state::State::new(axis_identifiers.clone(), iteration_limit, axis_index_map);
+    let mut state = state::State::new(axis_identifiers.clone(), iteration_limit, axis_index_map, allow_undefined_variables);
     if let Some(initial_state) = initial_state {
         if let Err(error) = interpret_file(initial_state, &mut state) {
             eprintln!("Error while parsing defaults: {:?}", error);
