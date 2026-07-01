@@ -1,0 +1,6 @@
+; Bare TRANS deletes the programmable frame (translation resets to zero)
+X1
+TRANS X100
+X2
+TRANS
+X3

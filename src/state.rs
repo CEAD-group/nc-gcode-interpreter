@@ -116,6 +116,14 @@ impl State {
         *self.translation.get(axis).unwrap_or(&0.0)
     }
 
+    /// Resets all translation values to zero (bare `TRANS` deletes the
+    /// programmable frame)
+    pub fn reset_translations(&mut self) {
+        for value in self.translation.values_mut() {
+            *value = 0.0;
+        }
+    }
+
     /// Updates an axis value in local coordinates (without translation).
     /// Returns the machine coordinate (local + translation) for output purposes.
     pub fn update_axis(&mut self, key: &str, local_value: f32) -> Result<f32, ParsingError> {

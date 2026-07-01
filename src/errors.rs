@@ -112,6 +112,20 @@ Array indices must be non-negative and within the valid range."#)]
         index: usize,
     },
     #[error(r#"
+Unsupported statement on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: {statement} is not supported by this interpreter.
+{hint}
+"#)]
+    UnsupportedStatement {
+        line_no: usize,
+        preview: String,
+        statement: String,
+        hint: String,
+    },
+    #[error(r#"
 Invalid function call on line {line_no}
 ----------------------------------------
 Line: {preview}
