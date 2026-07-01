@@ -1,0 +1,22 @@
+; Spline interpolation: ASPLINE / BSPLINE / CSPLINE with PW, SD, PL
+; PW (point weight), SD (spline degree) and PL (parameter interval length)
+; are block addresses: they appear in the output but are not axes
+; (no TRANS offset) and are not forward-filled (a point weight belongs
+; to the point it is programmed with).
+
+G1 X0 Y0 F1000
+
+; B spline of degree 2, control points with individual weights
+BSPLINE SD=2
+X10 Y20 PW=2
+X30 Y40
+X50 Y10 PW=0.5
+X60 Y20
+
+; Akima spline with natural start and tangential end condition
+ASPLINE BNAT ETAN
+X70 Y30
+X80 Y0
+
+G1 X90 Y0
+M30

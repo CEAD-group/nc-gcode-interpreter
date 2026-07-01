@@ -18,6 +18,7 @@ The **NC-GCode-Interpreter** offers a streamlined and efficient solution for int
 - **Arithmetic Operations**: Supports basic operations such as addition, subtraction, multiplication, and division.
 - **Array Operations**: Manages arrays and allows operations on them.
 - **Incremental Changes**: Facilitates incremental changes in axes positions like `X=IC(2)`.
+- **Spline Programming**: `ASPLINE`, `BSPLINE` and `CSPLINE` blocks with their start/end conditions (`BAUTO`/`BNAT`/`BTAN`, `EAUTO`/`ENAT`/`ETAN`) and the spline block addresses `PW` (point weight), `SD` (spline degree) and `PL` (parameter interval length). Block addresses appear as output columns; unlike axes they receive no `TRANS` offset and are not forward-filled, since e.g. a point weight only applies to the point it is programmed with.
 
 ### Additional Functionality
 
