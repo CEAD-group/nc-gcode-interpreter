@@ -1,0 +1,10 @@
+; Trigonometric functions work in degrees (NC programming manual,
+; "Operators and arithmetic functions"). ATAN2's angular reference is
+; its second argument; the result is in degrees.
+X=SIN(30) ;= 0.5
+X=COS(60) ;= 0.5
+X=TAN(45) ;= 1
+X=ASIN(0.5) ;= 30
+X=ACOS(0.5) ;= 60
+X=ATAN2(30.5, 80.1) ;= 20.8455 (manual 4.1.3.1 example)
+X=SQRT(POT(3)+POT(4)) ;= 5

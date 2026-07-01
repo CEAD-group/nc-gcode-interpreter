@@ -1,0 +1,12 @@
+; Operator priority per the NC programming manual ("Priority of the
+; operations"): *, /, DIV, MOD before +, -; equal priority left to right;
+; parentheses override.
+X=2+3*4 ;= 14
+X=10-2*3 ;= 4
+X=10-6/2 ;= 7
+X=2+6 DIV 4 ;= 3
+X=1+7 MOD 4 ;= 4
+X=(2+3)*4 ;= 20
+X=-2+3 ;= 1
+X=2*-3 ;= -6
+X=100-10*2+5 ;= 85
