@@ -132,7 +132,7 @@ pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Resu
             if current_dtype != expected_dtype {
                 let casted_series = df.column(col_name)?.cast(expected_dtype)?;
                 // Mutable operation after ensuring no immutable borrow remains
-                df.replace_or_add((*col_name).into(), casted_series.take_materialized_series())?;
+                df.with_column(casted_series)?;
             }
         }
     }
@@ -161,7 +161,7 @@ pub fn sanitize_dataframe(mut df: DataFrame, disable_forward_fill: bool) -> Resu
         for col_name in fill_columns {
             let column = df.column(&col_name)?;
             let filled_column = column.fill_null(FillNullStrategy::Forward(None))?;
-            df.replace_or_add(col_name.into(), filled_column.take_materialized_series())?;
+            df.with_column(filled_column)?;
         }
     }
 
@@ -186,7 +186,13 @@ pub fn dataframe_to_csv(df: &mut DataFrame, path: &str) -> Result<(), PolarsErro
 
     // Explode all list columns
     if !list_columns.is_empty() {
-        let exploded_df = df.explode(list_columns)?;
+        let exploded_df = df.explode(
+            list_columns,
+            ExplodeOptions {
+                empty_as_null: true,
+                keep_nulls: true,
+            },
+        )?;
         *df = exploded_df;
     }
 
@@ -276,5 +282,6 @@ fn results_to_dataframe(data: Vec<HashMap<String, Value>>) -> PolarsResult<DataF
 
         
     // Step 5: Create the DataFrame
-    DataFrame::new(polars_series)
+    let height = polars_series.first().map_or(0, |c| c.len());
+    DataFrame::new(height, polars_series)
 }
