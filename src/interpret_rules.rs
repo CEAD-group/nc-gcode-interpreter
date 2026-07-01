@@ -296,6 +296,7 @@ fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (String, 
     // Return the tuple with the rule name as the column header and the specific function call as the value
     ("non_returning_function_call".to_string(), command_str)
 }
+
 fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(String, f32), ParsingError> {
     let mut inner_pairs = element.into_inner();
 
@@ -307,29 +308,31 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
         .next()
         .ok_or_else(|| ParsingError::InvalidElementCount { expected: 2, actual: 1 })?;
 
-    let (key, value, translate) = match (variable_pair.as_rule(), expression_pair.as_rule()) {
+    // All axis values are now stored as LOCAL coordinates.
+    // Translation is applied at output time, not storage time.
+    let (key, local_value) = match (variable_pair.as_rule(), expression_pair.as_rule()) {
         (Rule::variable_single_char, Rule::value) => {
             let key = variable_pair.as_str().to_string();
             let value = expression_pair
                 .as_str()
                 .parse::<f32>()
                 .expect("Failed to interpret value");
-            (key, value, true)
+            (key, value)
         }
         (Rule::variable, Rule::axis_increment) => {
             let key = interpret_variable(variable_pair.clone(), state)?;
             let value = interpret_axis_increment(expression_pair, state, key.clone())?;
-            (key, value, false)
+            (key, value)
         }
         (Rule::variable, Rule::expression) => {
             let key = interpret_variable(variable_pair.clone(), state)?;
             let value = evaluate_expression(expression_pair, state)?;
-            (key, value, false)
+            (key, value)
         }
         (Rule::variable_array, Rule::expression) => {
             let keys = interpret_variable_array(variable_pair, state)?;
             let value = evaluate_expression(expression_pair, state)?;
-            (keys[keys.len() - 1].clone(), value, true)
+            (keys[keys.len() - 1].clone(), value)
         }
         _ => {
             return Err(ParsingError::UnexpectedRule {
@@ -343,15 +346,17 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
     };
 
     if state.is_axis(&key) {
-        state.update_axis(&key, value, translate)?;
+        state.update_axis(&key, local_value)?;
     } else {
-        state.symbol_table.insert(key.clone(), value);
+        state.symbol_table.insert(key.clone(), local_value);
     }
 
-    Ok((key, value))
+    Ok((key, local_value))
 }
 fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) -> Result<f32, ParsingError> {
     // axis_increment = { "IC" ~ "(" ~ expression ~ ")" }
+    // Returns the new LOCAL coordinate. Since axes now store local coordinates,
+    // we simply add the increment to the current local value.
     let pair_clone = pair.clone();
     let inner_pair = pair.into_inner().next().expect("Expected an expression inside axis_increment, found none");
     if inner_pair.as_rule() != Rule::expression {
@@ -364,8 +369,11 @@ fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) ->
         });
     }
     let increment = evaluate_expression(inner_pair, state)?;
-    match state.axes.get(&key) {
-        Some(val) => Ok(*val + increment),
+    match state.get_axis_local(&key) {
+        Some(local_coord) => {
+            // Add increment to current local coordinate
+            Ok(local_coord + increment)
+        },
         None => {
             eprintln!(
                 "Warning: The axis '{}' is incremented before a fixed value is set, the G-code behavior may be indeterminate.",
@@ -894,10 +902,12 @@ fn interpret_statement(
                 insert_m_key(last, &value, line_no, preview)?;
             }
             Rule::assignment => {
-                let (key, value) = interpret_assignment(statement, state)?;
+                let (key, local_value) = interpret_assignment(statement, state)?;
                 if state.is_axis(&key) {
-                    let _updated_value = state.update_axis(&key, value, true)?;
-                    last.insert(key, Value::Float(_updated_value));
+                    // State keeps local coordinates; the output row gets the machine
+                    // coordinate under the translation active at this point in the program.
+                    let machine_value = local_value + state.get_translation(&key);
+                    last.insert(key, Value::Float(machine_value));
                 }
             }
             Rule::tool_selection => interpret_tool_selection(statement, output, state)?,
@@ -918,7 +928,14 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
     match pair.as_rule() {
         Rule::frame_trans => {
             for pair in pair.into_inner() {
+                // We need to parse the assignment to get the key and value,
+                // but we don't want to update the axis position.
+                // Save the current axis state, call interpret_assignment, then restore it.
+                let saved_axes = state.axes.clone();
                 let (key, value) = interpret_assignment(pair, state)?;
+                // Restore the axis values (undo the side effect of interpret_assignment)
+                state.axes = saved_axes;
+
                 if state.is_axis(&key) {
                     state.update_translation(&key, value)?;
                 } else {
@@ -932,7 +949,11 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
         }
         Rule::frame_atrans => {
             for pair in pair.into_inner() {
+                // Same as TRANS - save and restore axis state
+                let saved_axes = state.axes.clone();
                 let (key, value) = interpret_assignment(pair, state)?;
+                state.axes = saved_axes;
+
                 if state.is_axis(&key) {
                     let current_translation = state.get_translation(&key);
                     state.update_translation(&key, current_translation + value)?;

@@ -105,16 +105,24 @@ impl State {
         *self.translation.get(axis).unwrap_or(&0.0)
     }
 
-    /// Updates an axis value, optionally applying translation
-    pub fn update_axis(&mut self, key: &str, value: f32, translate: bool) -> Result<f32, ParsingError> {
+    /// Updates an axis value in local coordinates (without translation).
+    /// Returns the machine coordinate (local + translation) for output purposes.
+    pub fn update_axis(&mut self, key: &str, local_value: f32) -> Result<f32, ParsingError> {
+        // Store the local coordinate
+        self.axes.insert(key.to_string(), local_value);
+        // Return the machine coordinate for output
         let translation_value = self.get_translation(key);
-        let updated_value = if translate {
-            value + translation_value
-        } else {
-            value
-        };
-        self.axes.insert(key.to_string(), updated_value);
-        Ok(updated_value)
+        Ok(local_value + translation_value)
+    }
+
+    /// Gets the current local coordinate for an axis
+    pub fn get_axis_local(&self, key: &str) -> Option<f32> {
+        self.axes.get(key).copied()
+    }
+
+    /// Gets the current machine coordinate for an axis (local + translation)
+    pub fn get_axis_machine(&self, key: &str) -> Option<f32> {
+        self.axes.get(key).map(|local| local + self.get_translation(key))
     }
 
     /// Gets the array index for an axis, if a mapping exists
