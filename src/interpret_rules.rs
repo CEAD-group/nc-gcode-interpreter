@@ -17,9 +17,14 @@ const FRAME_KEYWORDS: &[&str] = &[
 fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, ParsingError> {
     let inner_pair = primary.into_inner().next().expect("Error");
     match inner_pair.as_rule() {
-        Rule::value => {
-            return Ok(inner_pair.as_str().parse::<f64>().expect("Failed to interpret value"));
-        }
+        Rule::value => inner_pair.as_str().parse::<f64>().map_err(|_| {
+            annotate_error(
+                &inner_pair,
+                "numeric literal",
+                format!("'{}' is not a valid number", inner_pair.as_str()),
+                state,
+            )
+        }),
         Rule::variable => {
             let (line_no, preview) = get_error_context(&inner_pair, state);
             interpret_variable(inner_pair, state).and_then(|key| {
@@ -383,10 +388,14 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
     let (key, local_value) = match (variable_pair.as_rule(), expression_pair.as_rule()) {
         (Rule::variable_single_char, Rule::value) => {
             let key = variable_pair.as_str().to_string();
-            let value = expression_pair
-                .as_str()
-                .parse::<f64>()
-                .expect("Failed to interpret value");
+            let value = expression_pair.as_str().parse::<f64>().map_err(|_| {
+                annotate_error(
+                    &expression_pair,
+                    "numeric literal",
+                    format!("'{}' is not a valid number", expression_pair.as_str()),
+                    state,
+                )
+            })?;
             (key, value)
         }
         (Rule::variable, Rule::axis_increment) => {
@@ -685,14 +694,25 @@ fn evaluate_condition(condition: Pair<Rule>, state: &mut State) -> Result<bool, 
         _ => Err(ParsingError::InvalidCondition),
     }
 }
+/// Sinumerik REAL comparisons check for relative rather than absolute
+/// equality, with a relative tolerance of 10^-12 (NC programming manual,
+/// "Precision correction on comparison errors (TRUNC)"). This applies to
+/// ==, <>, <= and >=, and by default also excludes relatively-equal values
+/// from < and >.
+const REAL_EQUALITY_RELATIVE_TOLERANCE: f64 = 1e-12;
+
+fn reals_equal(lhs: f64, rhs: f64) -> bool {
+    lhs == rhs || (lhs - rhs).abs() <= REAL_EQUALITY_RELATIVE_TOLERANCE * lhs.abs().max(rhs.abs())
+}
+
 fn evaluate_relational_operator(operator: Pair<Rule>, lhs: f64, rhs: f64) -> Result<bool, ParsingError> {
     match operator.as_str() {
-        "<" => Ok(lhs < rhs),
-        ">" => Ok(lhs > rhs),
-        "==" => Ok(lhs == rhs),
-        "<>" => Ok(lhs != rhs),
-        "<=" => Ok(lhs <= rhs),
-        ">=" => Ok(lhs >= rhs),
+        "<" => Ok(lhs < rhs && !reals_equal(lhs, rhs)),
+        ">" => Ok(lhs > rhs && !reals_equal(lhs, rhs)),
+        "==" => Ok(reals_equal(lhs, rhs)),
+        "<>" => Ok(!reals_equal(lhs, rhs)),
+        "<=" => Ok(lhs < rhs || reals_equal(lhs, rhs)),
+        ">=" => Ok(lhs > rhs || reals_equal(lhs, rhs)),
         _ => Err(ParsingError::UnexpectedOperator {
             operator: operator.as_str().to_string(),
         }),
@@ -1135,11 +1155,13 @@ fn interpret_block_number(element: Pair<Rule>, output: &mut Output) {
     let pair = pairs.next().expect("Expected a pair, got none");
 
     let last = output.last_mut().expect("Output vector should not be empty");
-    let value: f64 = match pair.as_rule() {
-        Rule::integer => pair.as_str().parse::<f64>().expect("Failed to interpret value"),
+    // The grammar guarantees an integer token; keep the original lexeme so
+    // large block numbers survive without float round-tripping.
+    let value = match pair.as_rule() {
+        Rule::integer => pair.as_str().to_string(),
         _ => panic!("Unexpected rule: {:?}", pair.as_rule()),
     };
-    last.insert("N".to_string(), Value::Str(value.to_string()));
+    last.insert("N".to_string(), Value::Str(value));
 }
 fn get_error_context(pair: &Pair<Rule>, state: &State) -> (usize, String) {
     let (line_no, _) = pair.line_col();

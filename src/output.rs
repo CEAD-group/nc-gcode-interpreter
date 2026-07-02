@@ -159,12 +159,15 @@ impl Table {
 
 fn build_column(name: &str, rows: &[&HashMap<String, Value>]) -> Column {
     if name == "N" {
-        // Block numbers are parsed as numbers but stored as strings; expose
-        // them as integers.
+        // Block numbers are stored as their original integer lexeme; expose
+        // them as integers (float fallback for legacy float-formatted values).
         let data = rows
             .iter()
             .map(|r| match r.get(name) {
-                Some(Value::Str(s)) => s.parse::<f64>().ok().map(|v| v as i64),
+                Some(Value::Str(s)) => s
+                    .parse::<i64>()
+                    .ok()
+                    .or_else(|| s.parse::<f64>().ok().map(|v| v as i64)),
                 Some(Value::Float(f)) => Some(*f as i64),
                 _ => None,
             })
