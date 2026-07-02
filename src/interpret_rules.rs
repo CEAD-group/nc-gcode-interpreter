@@ -6,6 +6,14 @@ use crate::types::Value;
 use std::collections::HashMap;
 
 type Output = Vec<HashMap<String, Value>>;
+
+/// The frame instruction family, normally captured by the frame_op grammar
+/// rule at block start. Also present in G-group 3, where they can only be
+/// reached when they FOLLOW another statement in the block - which is invalid
+/// (frame instructions must be alone in the block) and rejected loudly.
+const FRAME_KEYWORDS: &[&str] = &[
+    "TRANS", "ATRANS", "SCALE", "ASCALE", "ROT", "AROT", "ROTS", "AROTS", "CROTS", "MIRROR", "AMIRROR",
+];
 fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, ParsingError> {
     let inner_pair = primary.into_inner().next().expect("Error");
     match inner_pair.as_rule() {
@@ -343,6 +351,18 @@ fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (String, 
     ("non_returning_function_call".to_string(), command_str)
 }
 
+/// Axis and block-address names are case-insensitive; normalize them to
+/// uppercase so state lookups and output columns are consistent regardless
+/// of the case used in the program (`x10` must hit the same axis, column and
+/// translation as `X10`).
+fn normalize_reserved_case(key: String, state: &State) -> String {
+    if state.is_axis(&key) || state.is_block_address(&key) {
+        key.to_uppercase()
+    } else {
+        key
+    }
+}
+
 fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(String, f32), ParsingError> {
     let mut inner_pairs = element.into_inner();
 
@@ -366,12 +386,12 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
             (key, value)
         }
         (Rule::variable, Rule::axis_increment) => {
-            let key = interpret_variable(variable_pair.clone(), state)?;
+            let key = normalize_reserved_case(interpret_variable(variable_pair.clone(), state)?, state);
             let value = interpret_axis_increment(expression_pair, state, key.clone())?;
             (key, value)
         }
         (Rule::variable, Rule::expression) => {
-            let key = interpret_variable(variable_pair.clone(), state)?;
+            let key = normalize_reserved_case(interpret_variable(variable_pair.clone(), state)?, state);
             let value = evaluate_expression(expression_pair, state)?;
             (key, value)
         }
@@ -406,6 +426,11 @@ fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) ->
     // axis_increment = { "IC" ~ "(" ~ expression ~ ")" }
     // Returns the new LOCAL coordinate. Since axes now store local coordinates,
     // we simply add the increment to the current local value.
+    // Note: when the frame changed since the previous move, the machine-space
+    // delta is increment + frame change. This matches the control's factory
+    // default SD42440 $SC_FRAME_OFFSET_INCR_PROG = TRUE ("changes to work
+    // offsets are traversed after a frame change"); machines configured with
+    // FALSE traverse the pure increment instead, which is not modeled here.
     let pair_clone = pair.clone();
     let inner_pair = pair.into_inner().next().expect("Expected an expression inside axis_increment, found none");
     if inner_pair.as_rule() != Rule::expression {
@@ -598,7 +623,9 @@ fn interpret_definition(element: Pair<Rule>, state: &mut State) -> Result<(), Pa
             Rule::assignment => {
                 let res = interpret_assignment(pair, state)?;
                 if state.is_axis(res.0.as_str()) {
-                    Err(ParsingError::AxisUsedAsVariable { name: res.0 })?;
+                    return Err(ParsingError::AxisUsedAsVariable { name: res.0 });
+                } else if state.is_block_address(res.0.as_str()) {
+                    return Err(ParsingError::ReservedNameUsedAsVariable { name: res.0 });
                 }
             }
             Rule::assignment_multi => {
@@ -606,6 +633,11 @@ fn interpret_definition(element: Pair<Rule>, state: &mut State) -> Result<(), Pa
             }
             Rule::variable => {
                 let key = interpret_variable(pair, state)?;
+                if state.is_axis(&key) {
+                    return Err(ParsingError::AxisUsedAsVariable { name: key });
+                } else if state.is_block_address(&key) {
+                    return Err(ParsingError::ReservedNameUsedAsVariable { name: key });
+                }
                 state.symbol_table.insert(key, 0.0);
             }
             Rule::variable_array => {
@@ -872,16 +904,39 @@ fn interpret_control(
     let mut pairs = element.into_inner();
     let pair = pairs.next().expect("Expected a pair, got none");
     match pair.as_rule() {
-        // Rule::goto_statement => println!("Goto statement: {:?}", pair),
-        // Rule::gotob_statement => println!("Gotob statement: {:?}", pair),
-        // Rule::gotof_statement => println!("Gotof statement: {:?}", pair),
-        // Rule::gotoc_statement => println!("Gotoc statement: {:?}", pair),
         Rule::if_statement => interpret_statement_if(pair, output, state),
-        // Rule::loop_statement => println!("Loop statement: {:?}", pair),
         Rule::for_statement => interpret_statement_for(pair, output, state),
         Rule::while_statement => interpret_statement_while(pair, output, state),
         Rule::repeat_until_statement => interpret_statement_repeat_until(pair, output, state),
-        _ => panic!("Unexpected rule: {:?}", pair.as_rule()),
+        Rule::goto_statement => {
+            let (line_no, preview) = get_error_context(&pair, state);
+            let keyword = pair.as_str().split_whitespace().next().unwrap_or("GOTO").to_uppercase();
+            Err(ParsingError::UnsupportedStatement {
+                line_no,
+                preview,
+                statement: format!("The jump statement {}", keyword),
+                hint: "Jumps are not interpreted; silently skipping one would produce wrong \
+                       coordinates. Restructure the program with IF/WHILE/FOR/REPEAT instead."
+                    .to_string(),
+            })
+        }
+        Rule::loop_statement => {
+            let (line_no, preview) = get_error_context(&pair, state);
+            Err(ParsingError::UnsupportedStatement {
+                line_no,
+                preview,
+                statement: "The endless loop LOOP ... ENDLOOP".to_string(),
+                hint: "LOOP can only be left with a jump, which is not interpreted. Use \
+                       WHILE/FOR/REPEAT with an explicit condition instead."
+                    .to_string(),
+            })
+        }
+        _ => Err(annotate_error(
+            &pair,
+            "control statement",
+            format!("Unexpected rule in interpret_control: {:?}", pair.as_rule()),
+            state,
+        )),
     }
 }
 fn insert_m_key(last: &mut HashMap<String, Value>, value: &str, line_no: usize, preview: String) -> Result<(), ParsingError> {
@@ -936,7 +991,22 @@ fn interpret_statement(
                 last.insert(key, Value::Str(value));
             }
             Rule::g_command => {
+                let (line_no, preview) = get_error_context(&statement, state);
                 let (key, value) = interpret_g_command(statement);
+                // Frame instructions are only interpreted as frame_op at the
+                // start of a block ("alone in the block" per manual 3.12.2.1).
+                // If one shows up here it followed another statement, and
+                // e.g. `G1 MIRROR X0` would silently move X to 0. Error loudly.
+                if FRAME_KEYWORDS.contains(&value.to_uppercase().as_str()) {
+                    return Err(ParsingError::UnsupportedStatement {
+                        line_no,
+                        preview,
+                        statement: format!("The frame instruction {} after another statement", value),
+                        hint: "Frame instructions must be programmed in a separate NC block \
+                               (manual 3.12.2.1)."
+                            .to_string(),
+                    });
+                }
                 last.insert(key, Value::Str(value));
             }
             Rule::g_command_numbered => {
@@ -973,58 +1043,84 @@ fn interpret_statement(
     }
     Ok(())
 }
+/// Evaluate the assignments of a frame instruction without moving any axis:
+/// the axis state is saved and restored around parsing, and each assignment
+/// must target a valid axis.
+fn frame_assignments(
+    pairs: Vec<Pair<Rule>>,
+    state: &mut State,
+) -> Result<Vec<(String, f32)>, ParsingError> {
+    let mut result = Vec::with_capacity(pairs.len());
+    for pair in pairs {
+        let saved_axes = state.axes.clone();
+        let (key, value) = interpret_assignment(pair, state)?;
+        // Undo the axis-position side effect of interpret_assignment
+        state.axes = saved_axes;
+
+        if !state.is_axis(&key) {
+            return Err(ParsingError::UnexpectedAxis {
+                axis: key,
+                axes: state.axis_identifiers.join(", "),
+            });
+        }
+        result.push((key, value));
+    }
+    Ok(result)
+}
+
 fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), ParsingError> {
+    let (line_no, preview) = get_error_context(&element, state);
     let mut pairs = element.into_inner();
-    let pair = pairs.next().expect("Expected a pair, got none");
-    match pair.as_rule() {
-        Rule::frame_trans => {
-            for pair in pair.into_inner() {
-                // We need to parse the assignment to get the key and value,
-                // but we don't want to update the axis position.
-                // Save the current axis state, call interpret_assignment, then restore it.
-                let saved_axes = state.axes.clone();
-                let (key, value) = interpret_assignment(pair, state)?;
-                // Restore the axis values (undo the side effect of interpret_assignment)
-                state.axes = saved_axes;
+    let kw = pairs.next().expect("frame_op must start with a frame keyword");
+    let op = kw.as_str().to_uppercase();
+    let assignments: Vec<Pair<Rule>> = pairs.collect();
 
-                if state.is_axis(&key) {
-                    state.update_translation(&key, value)?;
-                } else {
-                    return Err(ParsingError::UnexpectedAxis {
-                        axis: key,
-                        axes: state.axes.keys().cloned().collect(),
-                    });
-                }
+    match op.as_str() {
+        "TRANS" => {
+            // TRANS is a substituting frame instruction: it deletes ALL
+            // previously programmed frame components, including offsets on
+            // axes not mentioned in this block (manual 3.12.2.2, and the
+            // Notice "Absolute frame instructions delete all programmed
+            // frames"). Bare TRANS is therefore just the reset.
+            state.reset_translations();
+            for (key, value) in frame_assignments(assignments, state)? {
+                state.update_translation(&key, value)?;
             }
             Ok(())
         }
-        Rule::frame_atrans => {
-            for pair in pair.into_inner() {
-                // Same as TRANS - save and restore axis state
-                let saved_axes = state.axes.clone();
-                let (key, value) = interpret_assignment(pair, state)?;
-                state.axes = saved_axes;
-
-                if state.is_axis(&key) {
-                    let current_translation = state.get_translation(&key);
-                    state.update_translation(&key, current_translation + value)?;
-                } else {
-                    return Err(ParsingError::UnexpectedAxis {
-                        axis: key,
-                        axes: state.axes.keys().cloned().collect(),
-                    });
-                }
+        "ATRANS" => {
+            for (key, value) in frame_assignments(assignments, state)? {
+                let current_translation = state.get_translation(&key);
+                state.update_translation(&key, current_translation + value)?;
             }
             Ok(())
         }
+        // Rotation, scaling and mirroring change the geometry in ways this
+        // interpreter does not model, so anything with parameters must fail
+        // loudly instead of producing wrong coordinates. The bare forms are
+        // frame resets: a bare ABSOLUTE instruction (ROT/ROTS/CROTS/SCALE/
+        // MIRROR) deletes the whole programmable frame including the
+        // translation (manual 3.12.2.1), while a bare ADDITIVE instruction
+        // adds nothing and is a no-op.
         _ => {
-            return Err(ParsingError::UnexpectedRule {
-                rule: pair.as_rule(),
-                context: "interpret_frame_op".to_string(),
-                line_no: pair.line_col().0,
-                preview: state.get_line(pair.line_col().0).unwrap_or("").to_string(),
-                message: format!("Unexpected rule in interpret_frame_op: {:?}", pair.as_rule()),
-            })
+            if assignments.is_empty() {
+                if !op.starts_with('A') {
+                    // Bare absolute frame instruction: delete the programmable
+                    // frame. (CROTS is absolute despite the leading C.)
+                    state.reset_translations();
+                }
+                Ok(())
+            } else {
+                Err(ParsingError::UnsupportedStatement {
+                    line_no,
+                    preview,
+                    statement: format!("The frame instruction {}", op),
+                    hint: "Rotation, scaling and mirroring frames are not modeled; interpreting \
+                           this program would produce wrong coordinates. Only TRANS and ATRANS \
+                           are supported."
+                        .to_string(),
+                })
+            }
         }
     }
 }

@@ -1,0 +1,15 @@
+; TRANS is a substituting frame instruction (manual 3.12.2.2):
+; every TRANS deletes ALL previously programmed offsets, including on
+; axes not mentioned in the block. A bare absolute frame instruction
+; (TRANS, ROT, SCALE, MIRROR) deletes the whole programmable frame.
+X1 Y1
+TRANS X100 Y20
+X2 Y2
+TRANS X10
+X3 Y3 ; X offset replaced (13), Y offset deleted (3)
+TRANS
+X4 Y4 ; bare TRANS: no offsets (4, 4)
+ATRANS X50
+X5 Y5 ; additive on empty frame (55, 5)
+ROT
+X6 Y6 ; bare absolute ROT deletes the frame too (6, 6)

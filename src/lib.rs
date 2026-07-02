@@ -53,7 +53,7 @@ mod python_bindings {
             axis_index_map,
             allow_undefined_variables,
         )
-        .map_err(|e| PyErr::new::<PyValueError, _>(format!("Error creating DataFrame: {:?}", e)))?;
+        .map_err(|e| PyErr::new::<PyValueError, _>(format!("{}", e)))?;
 
         let data = PyDict::new(py);
         let mut schema: Vec<(String, String)> = Vec::with_capacity(table.columns.len());

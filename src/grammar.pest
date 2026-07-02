@@ -8,25 +8,24 @@ block               =  { block_number_set? ~ (definition | frame_op | control | 
 block_number_set    = _{ "N" ~ block_number }
 control             =  {
     goto_statement
-  | gotob_statement
-  | gotof_statement
-  | gotoc_statement
   | if_statement
   | loop_statement
   | for_statement
   | while_statement
   | repeat_until_statement
 }
-goto_statement         =  { ^"GOTO" ~ label }
-gotob_statement        =  { ^"GOTOB" ~ block_number }
-gotof_statement        =  { ^"GOTOF" ~ block_number }
-gotoc_statement        =  { ^"GOTOC" ~ condition ~ newline ~ label }
+// GOTO targets are labels or block numbers. These statements are recognized
+// so the interpreter can reject them loudly; silently skipping a jump would
+// produce wrong coordinates. The keyword is atomic with a word boundary so
+// that identifiers like GOTOFFSET still parse as ordinary names.
+goto_statement         =  { goto_kw ~ goto_target }
+goto_kw                = @{ (^"GOTOC" | ^"GOTOF" | ^"GOTOB" | ^"GOTO") ~ !(ASCII_ALPHANUMERIC | "_") }
+goto_target            =  { identifier | block_number }
 if_statement           =  { ^"IF" ~ condition ~ comment? ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
 loop_statement         =  { ^"LOOP" ~ blocks ~ ^"ENDLOOP" }
 for_statement          =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ blocks ~ ^"ENDFOR" }
 while_statement        =  { ^"WHILE" ~ condition ~ blocks ~ ^"ENDWHILE" }
 repeat_until_statement =  { ^"REPEAT" ~ blocks ~ ^"UNTIL" ~ condition }
-label                  =  { ^"LABEL" ~ identifier }
 block_number           =  { integer }
 condition              =  { base_condition | ("(" ~ base_condition ~ ")") }
 base_condition         = _{ (expression ~ relational_operator ~ expression) | expression }
@@ -64,6 +63,7 @@ reserved   = _{
   | ^"UNTIL"
   | ^"ENDWHILE"
   | ^"ENDFOR"
+  | ^"ENDLOOP"
 }
 
 identifier = @{
@@ -117,12 +117,14 @@ arith_fun_name   = { "SIN" | "COS" | "TAN" | "ASIN" | "ACOS" | "ATAN2" | "SQRT" 
 
 tool_selection = { ^"T" ~ "=" ~ quoted_string }
 
-// frame instructions
-frame_op     = { frame_trans | frame_scale | frame_atrans | frame_ascale }
-frame_trans  = { ^"TRANS" ~ assignment+ }
-frame_scale  = { ^"SCALE" ~ assignment+ }
-frame_atrans = { ^"ATRANS" ~ assignment+ }
-frame_ascale = { ^"ASCALE" ~ assignment+ }
+// Frame instructions. A single rule captures the whole family (with any
+// number of axis assignments, including none: a bare substituting frame
+// instruction like `TRANS` resets the frame component). The keyword is
+// atomic so that identifiers such as TRANSFORM cannot half-match.
+frame_op = { frame_kw ~ assignment* }
+frame_kw = @{
+    (^"AMIRROR" | ^"AROTS" | ^"AROT" | ^"ASCALE" | ^"ATRANS" | ^"CROTS" | ^"MIRROR" | ^"ROTS" | ^"ROT" | ^"SCALE" | ^"TRANS") ~ !(ASCII_ALPHANUMERIC | "_")
+}
 
 // function call parser
 non_returning_function_call =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }

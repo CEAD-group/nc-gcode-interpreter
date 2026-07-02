@@ -86,6 +86,8 @@ To fix this, ensure that each block contains at most one M command.
     UnexpectedAxis { axis: String, axes: String },
     #[error("Cannot define a variable named '{name}', as it conflicts with an axis name")]
     AxisUsedAsVariable { name: String },
+    #[error("Cannot define a variable named '{name}', as it is a reserved block address (spline PW/SD/PL)")]
+    ReservedNameUsedAsVariable { name: String },
     #[error(r#"
 Missing axis mapping on line {line_no}
 ----------------------------------------
@@ -110,6 +112,20 @@ Array indices must be non-negative and within the valid range."#)]
         preview: String,
         axis: String,
         index: usize,
+    },
+    #[error(r#"
+Unsupported statement on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: {statement} is not supported by this interpreter.
+{hint}
+"#)]
+    UnsupportedStatement {
+        line_no: usize,
+        preview: String,
+        statement: String,
+        hint: String,
     },
     #[error(r#"
 Invalid function call on line {line_no}
