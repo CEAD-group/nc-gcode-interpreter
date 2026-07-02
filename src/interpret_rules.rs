@@ -356,8 +356,9 @@ fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (String, 
 
 /// Axis and block-address names are case-insensitive; normalize them to
 /// uppercase so state lookups and output columns are consistent regardless
-/// of the case used in the program (`x10` must hit the same axis, column and
-/// translation as `X10`).
+/// of the case used in the program (`x=10` must hit the same axis, column and
+/// translation as `X=10`; the bare word form `X10` is uppercase-only in the
+/// grammar).
 fn normalize_reserved_case(key: String, state: &State) -> String {
     if state.is_axis(&key) || state.is_block_address(&key) {
         key.to_uppercase()
@@ -1000,7 +1001,7 @@ fn interpret_statement(
                 // start of a block ("alone in the block" per manual 3.12.2.1).
                 // If one shows up here it followed another statement, and
                 // e.g. `G1 MIRROR X0` would silently move X to 0. Error loudly.
-                if FRAME_KEYWORDS.contains(&value.to_uppercase().as_str()) {
+                if FRAME_KEYWORDS.iter().any(|kw| kw.eq_ignore_ascii_case(&value)) {
                     return Err(ParsingError::UnsupportedStatement {
                         line_no,
                         preview,
@@ -1054,13 +1055,13 @@ fn frame_assignments(
     state: &mut State,
 ) -> Result<Vec<(String, f64)>, ParsingError> {
     let mut result = Vec::with_capacity(pairs.len());
+    // Save the axis state once for the whole instruction; interpret_assignment
+    // mutates it as a side effect and frame instructions must not move axes.
+    let saved_axes = state.axes.clone();
     for pair in pairs {
-        let saved_axes = state.axes.clone();
         let (key, value) = interpret_assignment(pair, state)?;
-        // Undo the axis-position side effect of interpret_assignment
-        state.axes = saved_axes;
-
         if !state.is_axis(&key) {
+            state.axes = saved_axes;
             return Err(ParsingError::UnexpectedAxis {
                 axis: key,
                 axes: state.axis_identifiers.join(", "),
@@ -1068,6 +1069,8 @@ fn frame_assignments(
         }
         result.push((key, value));
     }
+    // Undo the axis-position side effects of interpret_assignment
+    state.axes = saved_axes;
     Ok(result)
 }
 
