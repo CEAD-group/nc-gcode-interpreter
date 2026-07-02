@@ -7,10 +7,7 @@ comment             =  { ";" ~ (!newline ~ ANY)* }
 block               =  { block_number_set? ~ (definition | frame_op | control | statement*) ~ comment? }
 block_number_set    = _{ "N" ~ block_number }
 control             =  {
-    gotoc_statement
-  | gotof_statement
-  | gotob_statement
-  | goto_statement
+    goto_statement
   | if_statement
   | loop_statement
   | for_statement
@@ -19,11 +16,10 @@ control             =  {
 }
 // GOTO targets are labels or block numbers. These statements are recognized
 // so the interpreter can reject them loudly; silently skipping a jump would
-// produce wrong coordinates.
-goto_statement         =  { ^"GOTO" ~ goto_target }
-gotob_statement        =  { ^"GOTOB" ~ goto_target }
-gotof_statement        =  { ^"GOTOF" ~ goto_target }
-gotoc_statement        =  { ^"GOTOC" ~ goto_target }
+// produce wrong coordinates. The keyword is atomic with a word boundary so
+// that identifiers like GOTOFFSET still parse as ordinary names.
+goto_statement         =  { goto_kw ~ goto_target }
+goto_kw                = @{ (^"GOTOC" | ^"GOTOF" | ^"GOTOB" | ^"GOTO") ~ !(ASCII_ALPHANUMERIC | "_") }
 goto_target            =  { identifier | block_number }
 if_statement           =  { ^"IF" ~ condition ~ comment? ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
 loop_statement         =  { ^"LOOP" ~ blocks ~ ^"ENDLOOP" }
@@ -127,7 +123,7 @@ tool_selection = { ^"T" ~ "=" ~ quoted_string }
 // atomic so that identifiers such as TRANSFORM cannot half-match.
 frame_op = { frame_kw ~ assignment* }
 frame_kw = @{
-    (^"AMIRROR" | ^"AROTS" | ^"AROT" | ^"ASCALE" | ^"ATRANS" | ^"CROTS" | ^"MIRROR" | ^"ROTS" | ^"ROT" | ^"SCALE" | ^"TRANS") ~ !ASCII_ALPHANUMERIC
+    (^"AMIRROR" | ^"AROTS" | ^"AROT" | ^"ASCALE" | ^"ATRANS" | ^"CROTS" | ^"MIRROR" | ^"ROTS" | ^"ROT" | ^"SCALE" | ^"TRANS") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 // function call parser

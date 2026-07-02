@@ -86,6 +86,8 @@ To fix this, ensure that each block contains at most one M command.
     UnexpectedAxis { axis: String, axes: String },
     #[error("Cannot define a variable named '{name}', as it conflicts with an axis name")]
     AxisUsedAsVariable { name: String },
+    #[error("Cannot define a variable named '{name}', as it is a reserved block address (spline PW/SD/PL)")]
+    ReservedNameUsedAsVariable { name: String },
     #[error(r#"
 Missing axis mapping on line {line_no}
 ----------------------------------------

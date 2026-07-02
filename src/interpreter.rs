@@ -39,10 +39,9 @@ pub fn nc_to_table(
         allow_undefined_variables,
     );
     if let Some(initial_state) = initial_state {
-        if let Err(error) = interpret_file(initial_state, &mut state) {
-            eprintln!("Error while parsing defaults: {:?}", error);
-            std::process::exit(1);
-        }
+        // Propagate the error instead of exiting: this is library code, and
+        // process::exit would kill e.g. a host Python interpreter.
+        interpret_file(initial_state, &mut state)?;
     }
 
     // Now interpret the main input using the axis_index_map from state
