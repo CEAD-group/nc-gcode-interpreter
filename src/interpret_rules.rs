@@ -179,11 +179,12 @@ fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f32,
     let mut pos = 0;
     let value = evaluate_additive(&pairs, &mut pos, state)?;
     if let Some(pair) = pairs.get(pos) {
+        let (line_no, preview) = get_error_context(pair, state);
         return Err(ParsingError::UnexpectedRule {
             rule: pair.as_rule(),
             context: "evaluate_expression".to_string(),
-            line_no: pair.line_col().0,
-            preview: state.get_line(pair.line_col().0).unwrap_or("").to_string(),
+            line_no,
+            preview,
             message: format!("Unexpected trailing rule in expression: {:?}", pair.as_rule()),
         });
     }
@@ -250,8 +251,17 @@ fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> R
         sign = -sign;
         *pos += 1;
     }
-    let pair = pairs.get(*pos).ok_or_else(|| ParsingError::ParseError {
-        message: "Expected an operand at end of expression".to_string(),
+    let pair = pairs.get(*pos).ok_or_else(|| {
+        let (line_no, preview) = pairs
+            .last()
+            .map(|p| get_error_context(p, state))
+            .unwrap_or((0, "(could not retrieve line)".to_string()));
+        ParsingError::ParsingContext {
+            line_no,
+            preview,
+            context: "evaluate_unary".to_string(),
+            message: "Expected an operand at end of expression".to_string(),
+        }
     })?;
     if pair.as_rule() != Rule::primary {
         let (line_no, preview) = get_error_context(pair, state);
