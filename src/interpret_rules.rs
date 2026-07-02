@@ -107,31 +107,36 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
         Ok(())
     };
 
-    // Apply the function
+    // Apply the function.
+    // Sinumerik trigonometric functions work in degrees, not radians
+    // (NC programming manual, "Operators and arithmetic functions").
     match func_name.as_str() {
         "SIN" => {
             check_args(1)?;
-            Ok(args[0].sin())
+            Ok(args[0].to_radians().sin())
         },
         "COS" => {
             check_args(1)?;
-            Ok(args[0].cos())
+            Ok(args[0].to_radians().cos())
         },
         "TAN" => {
             check_args(1)?;
-            Ok(args[0].tan())
+            Ok(args[0].to_radians().tan())
         },
         "ASIN" => {
             check_args(1)?;
-            Ok(args[0].asin())
+            Ok(args[0].asin().to_degrees())
         },
         "ACOS" => {
             check_args(1)?;
-            Ok(args[0].acos())
+            Ok(args[0].acos().to_degrees())
         },
         "ATAN2" => {
             check_args(2)?;
-            Ok(args[1].atan2(args[0]))
+            // ATAN2(a, b): angle of the vector sum of two perpendicular vectors,
+            // in degrees (-180..180]. The angular reference is the SECOND value,
+            // so e.g. ATAN2(30.5, 80.1) = 20.8455 (manual 4.1.3.1).
+            Ok(args[0].atan2(args[1]).to_degrees())
         },
         "SQRT" => {
             check_args(1)?;
@@ -166,70 +171,111 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
         }),
     }
 }
+/// Evaluate an expression with the operator priorities of the Sinumerik NC
+/// language: *, /, DIV and MOD bind more strongly than + and -; operators of
+/// equal priority evaluate left to right; unary minus binds most strongly.
 fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f32, ParsingError> {
-    // check if the first inner_pair is a negative sign
-    let mut inner_pairs = expression.clone().into_inner();
-    let mut inner_pair = inner_pairs.next().expect("Error");
-    let mut lhs: f32 = 1.0;
-
-    if inner_pair.as_rule() == Rule::neg {
-        lhs = -1.0;
-        inner_pair = inner_pairs.next().expect("Error");
+    let pairs: Vec<Pair<Rule>> = expression.into_inner().collect();
+    let mut pos = 0;
+    let value = evaluate_additive(&pairs, &mut pos, state)?;
+    if let Some(pair) = pairs.get(pos) {
+        let (line_no, preview) = get_error_context(pair, state);
+        return Err(ParsingError::UnexpectedRule {
+            rule: pair.as_rule(),
+            context: "evaluate_expression".to_string(),
+            line_no,
+            preview,
+            message: format!("Unexpected trailing rule in expression: {:?}", pair.as_rule()),
+        });
     }
+    Ok(value)
+}
 
-    // the next inner_pair should be a value or identifier
-    lhs *= interpret_primary(inner_pair, state)?;
-
-    // check if there is a next inner pair. If so it should be an operator
-    // if not, return the result
-    // if there is, evaluate the next inner pair and apply the operator
-
-    while let Some(inner_pair) = inner_pairs.next() {
-        let operator_rule = inner_pair.as_rule();
-        let inner_pair = inner_pairs.next().expect("Expected an operand after an operator");
-
-        let rhs: f32 = match inner_pair.as_rule() {
-            Rule::neg => -interpret_primary(
-                inner_pairs.next().expect("Expected a primary expression after 'neg'"),
-                state,
-            )?,
-            Rule::primary => interpret_primary(inner_pair.clone(), state)?,
-            // _ => panic!("Unexpected rule: {:?}", inner_pair.as_rule()),
-            _ => Err(ParsingError::UnexpectedRule {
-                rule: inner_pair.as_rule(),
-                context: "evaluate_expression::rhs".to_string(),
-                line_no: inner_pair.line_col().0,
-                preview: state.get_line(inner_pair.line_col().0).unwrap_or("").to_string(),
-                message: format!("Unexpected rule in evaluate_expression::rhs: {:?}", inner_pair.as_rule()),
-            })?,
-        };
-
-        // Match against the operator rules directly
-        match operator_rule {
-            Rule::op_add => lhs += rhs,
-            Rule::op_sub => lhs -= rhs,
-            Rule::op_mul => lhs *= rhs,
-            Rule::op_div => lhs /= rhs,
-            Rule::op_int_div => {
-                let lhs_int = lhs as i32; // Cast the left-hand side to an integer
-                let rhs_int = rhs as i32; // Cast the right-hand side to an integer
-                lhs = (lhs_int / rhs_int) as f32
+fn evaluate_additive(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f32, ParsingError> {
+    let mut lhs = evaluate_multiplicative(pairs, pos, state)?;
+    while let Some(pair) = pairs.get(*pos) {
+        match pair.as_rule() {
+            Rule::op_add => {
+                *pos += 1;
+                lhs += evaluate_multiplicative(pairs, pos, state)?;
             }
-            Rule::op_mod => {
-                lhs %= rhs;
+            Rule::op_sub => {
+                *pos += 1;
+                lhs -= evaluate_multiplicative(pairs, pos, state)?;
             }
-            // _ => panic!("Unexpected operator rule: {:?}", operator_rule),
-            _ => Err(ParsingError::UnexpectedRule {
-                rule: operator_rule,
-                context: "evaluate_expression::operator".to_string(),
-                line_no: inner_pair.line_col().0,
-                preview: state.get_line(inner_pair.line_col().0).unwrap_or("").to_string(),
-                message: format!("Unexpected operator rule: {:?}", operator_rule),
-            })?,
+            _ => break,
         }
     }
-
     Ok(lhs)
+}
+
+fn evaluate_multiplicative(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f32, ParsingError> {
+    let mut lhs = evaluate_unary(pairs, pos, state)?;
+    while let Some(pair) = pairs.get(*pos) {
+        match pair.as_rule() {
+            Rule::op_mul => {
+                *pos += 1;
+                lhs *= evaluate_unary(pairs, pos, state)?;
+            }
+            Rule::op_div => {
+                *pos += 1;
+                lhs /= evaluate_unary(pairs, pos, state)?;
+            }
+            Rule::op_int_div => {
+                let (line_no, preview) = get_error_context(pair, state);
+                *pos += 1;
+                let rhs = evaluate_unary(pairs, pos, state)?;
+                if rhs as i32 == 0 {
+                    return Err(ParsingError::ParsingContext {
+                        line_no,
+                        preview,
+                        context: "integer division".to_string(),
+                        message: "Integer division (DIV) by zero".to_string(),
+                    });
+                }
+                lhs = ((lhs as i32) / (rhs as i32)) as f32;
+            }
+            Rule::op_mod => {
+                *pos += 1;
+                lhs %= evaluate_unary(pairs, pos, state)?;
+            }
+            _ => break,
+        }
+    }
+    Ok(lhs)
+}
+
+fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f32, ParsingError> {
+    let mut sign = 1.0f32;
+    while pairs.get(*pos).is_some_and(|p| p.as_rule() == Rule::neg) {
+        sign = -sign;
+        *pos += 1;
+    }
+    let pair = pairs.get(*pos).ok_or_else(|| {
+        let (line_no, preview) = pairs
+            .last()
+            .map(|p| get_error_context(p, state))
+            .unwrap_or((0, "(could not retrieve line)".to_string()));
+        ParsingError::ParsingContext {
+            line_no,
+            preview,
+            context: "evaluate_unary".to_string(),
+            message: "Expected an operand at end of expression".to_string(),
+        }
+    })?;
+    if pair.as_rule() != Rule::primary {
+        let (line_no, preview) = get_error_context(pair, state);
+        return Err(ParsingError::UnexpectedRule {
+            rule: pair.as_rule(),
+            context: "evaluate_unary".to_string(),
+            line_no,
+            preview,
+            message: format!("Expected an operand, found {:?}", pair.as_rule()),
+        });
+    }
+    *pos += 1;
+    let value = interpret_primary(pair.clone(), state)?;
+    Ok(sign * value)
 }
 fn interpret_g_command(g_command: Pair<Rule>) -> (String, String) {
     let inner_pair = g_command.into_inner().next().expect("Error");
