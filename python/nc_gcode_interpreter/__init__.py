@@ -1,7 +1,6 @@
 from typing import Protocol
 import polars as pl
-from ._internal import nc_to_dataframe as _nc_to_dataframe
-from ._internal import sanitize_dataframe as _sanitize_dataframe
+from ._internal import nc_to_columns as _nc_to_columns
 from ._internal import __doc__  # noqa: F401
 import json
 from pathlib import Path
@@ -86,7 +85,7 @@ def nc_to_dataframe(
     if initial_state is not None and not isinstance(initial_state, str):
         initial_state = initial_state.read()
 
-    df, state = _nc_to_dataframe(
+    data, schema, state = _nc_to_columns(
         input,
         initial_state,
         axis_identifiers,
@@ -96,7 +95,18 @@ def nc_to_dataframe(
         axis_index_map,
         allow_undefined_variables,
     )
+    df = pl.DataFrame(
+        data, schema={name: _DTYPES[dtype] for name, dtype in schema}
+    )
     return df, state
+
+
+_DTYPES: dict[str, pl.DataType | type[pl.DataType]] = {
+    "f64": pl.Float64,
+    "i64": pl.Int64,
+    "str": pl.String,
+    "list[str]": pl.List(pl.String),
+}
 
 
 _T = TypeVar("_T")
@@ -183,8 +193,45 @@ def sanitize_dataframe(
     pl.DataFrame
         The sanitized DataFrame ready for analysis or conversion back to G-code.
     """
-    # Call the internal Rust function to sanitize the DataFrame
-    return _sanitize_dataframe(df, disable_forward_fill)
+    modal = [g["short_name"] for g in GGroups.g_groups if g["effectiveness"] == "modal"]
+    non_modal = [g["short_name"] for g in GGroups.g_groups if g["effectiveness"] != "modal"]
+    known_axes = [
+        "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V",
+        "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
+    ]
+    string_columns = {*modal, *non_modal, "T", "non_returning_function_call", "comment"}
+
+    # Value columns: anything that is not a known string/list column.
+    value_columns = [
+        c for c in df.columns if c not in string_columns and c not in ("M", "N")
+    ]
+
+    # Cast to the canonical dtypes.
+    casts = []
+    if "N" in df.columns:
+        casts.append(pl.col("N").cast(pl.Int64))
+    casts += [pl.col(c).cast(pl.String) for c in df.columns if c in string_columns]
+    casts += [pl.col(c).cast(pl.Float64) for c in value_columns]
+    if "M" in df.columns:
+        casts.append(pl.col("M").cast(pl.List(pl.String)))
+    df = df.with_columns(casts)
+
+    # Canonical column order.
+    order: list[str] = []
+    for name in (
+        ["N"] + modal + non_modal + known_axes
+        + sorted(c for c in value_columns if c not in known_axes)
+        + ["T", "M", "non_returning_function_call", "comment"]
+    ):
+        if name in df.columns and name not in order:
+            order.append(name)
+    df = df.select(order)
+
+    # Forward-fill value columns and modal G-group columns.
+    if not disable_forward_fill:
+        fill = [c for c in df.columns if c in value_columns or c == "N" or c in modal]
+        df = df.with_columns([pl.col(c).fill_null(strategy="forward") for c in fill])
+    return df
 
 
 def dataframe_to_nc(df: pl.DataFrame, file_path: str | Path):

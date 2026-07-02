@@ -11,9 +11,10 @@ mod interpret_rules;
 mod interpreter;
 mod modal_groups;
 mod state;
+mod output;
 mod types;
 
-use interpreter::{dataframe_to_csv, nc_to_dataframe};
+use interpreter::nc_to_table;
 use std::path::PathBuf;
 
 fn main() -> io::Result<()> {
@@ -134,7 +135,7 @@ fn main() -> io::Result<()> {
         
     let allow_undefined_variables = matches.get_flag("allow_undefined_variables");
     
-    match nc_to_dataframe(
+    match nc_to_table(
         &input,
         initial_state.as_deref(),
         axes_override.clone(),
@@ -144,12 +145,12 @@ fn main() -> io::Result<()> {
         axis_index_map, 
         allow_undefined_variables,
     ) {
-        Ok((mut df, _state)) => {
+        Ok((table, _state)) => {
             let mut output_path = PathBuf::from(input_path.clone());
             output_path.set_extension("csv");
 
-            dataframe_to_csv(&mut df, output_path.to_str().unwrap())
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))
+            let file = std::fs::File::create(&output_path)?;
+            output::write_csv(&table, file)
         }
         Err(e) => {
             // Print error directly to stderr for better formatting
