@@ -41,7 +41,7 @@ mod python_bindings {
     ) -> PyResult<(
         Py<PyDict>,
         Vec<(String, String)>,
-        HashMap<String, HashMap<String, f32>>,
+        HashMap<String, HashMap<String, f64>>,
     )> {
         let (table, state) = nc_to_table(
             input,

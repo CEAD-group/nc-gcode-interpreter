@@ -14,12 +14,17 @@ type Output = Vec<HashMap<String, Value>>;
 const FRAME_KEYWORDS: &[&str] = &[
     "TRANS", "ATRANS", "SCALE", "ASCALE", "ROT", "AROT", "ROTS", "AROTS", "CROTS", "MIRROR", "AMIRROR",
 ];
-fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, ParsingError> {
+fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, ParsingError> {
     let inner_pair = primary.into_inner().next().expect("Error");
     match inner_pair.as_rule() {
-        Rule::value => {
-            return Ok(inner_pair.as_str().parse::<f32>().expect("Failed to interpret value"));
-        }
+        Rule::value => inner_pair.as_str().parse::<f64>().map_err(|_| {
+            annotate_error(
+                &inner_pair,
+                "numeric literal",
+                format!("'{}' is not a valid number", inner_pair.as_str()),
+                state,
+            )
+        }),
         Rule::variable => {
             let (line_no, preview) = get_error_context(&inner_pair, state);
             interpret_variable(inner_pair, state).and_then(|key| {
@@ -71,7 +76,7 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f32, Pars
         }
     }
 }
-fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f32, ParsingError> {
+fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f64, ParsingError> {
     let (line_no, preview) = get_error_context(&pair, state);
     let mut pairs = pair.into_inner();
     
@@ -182,7 +187,7 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
 /// Evaluate an expression with the operator priorities of the Sinumerik NC
 /// language: *, /, DIV and MOD bind more strongly than + and -; operators of
 /// equal priority evaluate left to right; unary minus binds most strongly.
-fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f32, ParsingError> {
+fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f64, ParsingError> {
     let pairs: Vec<Pair<Rule>> = expression.into_inner().collect();
     let mut pos = 0;
     let value = evaluate_additive(&pairs, &mut pos, state)?;
@@ -199,7 +204,7 @@ fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f32,
     Ok(value)
 }
 
-fn evaluate_additive(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f32, ParsingError> {
+fn evaluate_additive(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
     let mut lhs = evaluate_multiplicative(pairs, pos, state)?;
     while let Some(pair) = pairs.get(*pos) {
         match pair.as_rule() {
@@ -217,7 +222,7 @@ fn evaluate_additive(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -
     Ok(lhs)
 }
 
-fn evaluate_multiplicative(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f32, ParsingError> {
+fn evaluate_multiplicative(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
     let mut lhs = evaluate_unary(pairs, pos, state)?;
     while let Some(pair) = pairs.get(*pos) {
         match pair.as_rule() {
@@ -233,7 +238,7 @@ fn evaluate_multiplicative(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut St
                 let (line_no, preview) = get_error_context(pair, state);
                 *pos += 1;
                 let rhs = evaluate_unary(pairs, pos, state)?;
-                if rhs as i32 == 0 {
+                if rhs == 0.0 {
                     return Err(ParsingError::ParsingContext {
                         line_no,
                         preview,
@@ -241,7 +246,10 @@ fn evaluate_multiplicative(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut St
                         message: "Integer division (DIV) by zero".to_string(),
                     });
                 }
-                lhs = ((lhs as i32) / (rhs as i32)) as f32;
+                // DIV divides the REAL operands and truncates the result
+                // (manual 4.1.3.1: 7 DIV 4.1 = 1); operands are NOT
+                // truncated first.
+                lhs = (lhs / rhs).trunc();
             }
             Rule::op_mod => {
                 *pos += 1;
@@ -253,8 +261,8 @@ fn evaluate_multiplicative(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut St
     Ok(lhs)
 }
 
-fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f32, ParsingError> {
-    let mut sign = 1.0f32;
+fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
+    let mut sign = 1.0f64;
     while pairs.get(*pos).is_some_and(|p| p.as_rule() == Rule::neg) {
         sign = -sign;
         *pos += 1;
@@ -353,8 +361,9 @@ fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (String, 
 
 /// Axis and block-address names are case-insensitive; normalize them to
 /// uppercase so state lookups and output columns are consistent regardless
-/// of the case used in the program (`x10` must hit the same axis, column and
-/// translation as `X10`).
+/// of the case used in the program (`x=10` must hit the same axis, column and
+/// translation as `X=10`; the bare word form `X10` is uppercase-only in the
+/// grammar).
 fn normalize_reserved_case(key: String, state: &State) -> String {
     if state.is_axis(&key) || state.is_block_address(&key) {
         key.to_uppercase()
@@ -363,7 +372,7 @@ fn normalize_reserved_case(key: String, state: &State) -> String {
     }
 }
 
-fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(String, f32), ParsingError> {
+fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(String, f64), ParsingError> {
     let mut inner_pairs = element.into_inner();
 
     let variable_pair = inner_pairs
@@ -379,10 +388,14 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
     let (key, local_value) = match (variable_pair.as_rule(), expression_pair.as_rule()) {
         (Rule::variable_single_char, Rule::value) => {
             let key = variable_pair.as_str().to_string();
-            let value = expression_pair
-                .as_str()
-                .parse::<f32>()
-                .expect("Failed to interpret value");
+            let value = expression_pair.as_str().parse::<f64>().map_err(|_| {
+                annotate_error(
+                    &expression_pair,
+                    "numeric literal",
+                    format!("'{}' is not a valid number", expression_pair.as_str()),
+                    state,
+                )
+            })?;
             (key, value)
         }
         (Rule::variable, Rule::axis_increment) => {
@@ -422,7 +435,7 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
 
     Ok((key, local_value))
 }
-fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) -> Result<f32, ParsingError> {
+fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) -> Result<f64, ParsingError> {
     // axis_increment = { "IC" ~ "(" ~ expression ~ ")" }
     // Returns the new LOCAL coordinate. Since axes now store local coordinates,
     // we simply add the increment to the current local value.
@@ -484,7 +497,7 @@ fn interpret_assignment_multi(element: Pair<Rule>, state: &mut State) -> Result<
     }
     Ok(keys)
 }
-fn interpret_value_array(pair: Pair<Rule>, state: &mut State) -> Result<Vec<Option<f32>>, ParsingError> {
+fn interpret_value_array(pair: Pair<Rule>, state: &mut State) -> Result<Vec<Option<f64>>, ParsingError> {
     let mut values = Vec::new();
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -558,7 +571,7 @@ fn interpret_variable_array(inner: Pair<Rule>, state: &mut State) -> Result<Vec<
     }
     Ok(variable_names)
 }
-fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f32>, ParsingError> {
+fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f64>, ParsingError> {
     let mut indices = Vec::new();
     // Get error context before consuming pair
     let (pair_line_no, pair_preview) = get_error_context(&pair, state);
@@ -572,7 +585,7 @@ fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f32>, Pa
                 if state.is_axis(&expr_str) {
                     let (line_no, preview) = get_error_context(&inner, state);
                     let index = state.get_axis_index(&expr_str, line_no, &preview)?;
-                    indices.push(index as f32);
+                    indices.push(index as f64);
                 } else {
                     let value = evaluate_expression(inner, state)?;
                     // Validate the index value
@@ -647,7 +660,7 @@ fn interpret_definition(element: Pair<Rule>, state: &mut State) -> Result<(), Pa
                 }
             }
             Rule::data_type => {
-                // Ignore the type definition, as we are treating all variables as f32
+                // Ignore the type definition, as we are treating all variables as f64
             }
             _ => Err(ParsingError::UnexpectedRule {
                 rule: pair.as_rule(),
@@ -681,14 +694,25 @@ fn evaluate_condition(condition: Pair<Rule>, state: &mut State) -> Result<bool, 
         _ => Err(ParsingError::InvalidCondition),
     }
 }
-fn evaluate_relational_operator(operator: Pair<Rule>, lhs: f32, rhs: f32) -> Result<bool, ParsingError> {
+/// Sinumerik REAL comparisons check for relative rather than absolute
+/// equality, with a relative tolerance of 10^-12 (NC programming manual,
+/// "Precision correction on comparison errors (TRUNC)"). This applies to
+/// ==, <>, <= and >=, and by default also excludes relatively-equal values
+/// from < and >.
+const REAL_EQUALITY_RELATIVE_TOLERANCE: f64 = 1e-12;
+
+fn reals_equal(lhs: f64, rhs: f64) -> bool {
+    lhs == rhs || (lhs - rhs).abs() <= REAL_EQUALITY_RELATIVE_TOLERANCE * lhs.abs().max(rhs.abs())
+}
+
+fn evaluate_relational_operator(operator: Pair<Rule>, lhs: f64, rhs: f64) -> Result<bool, ParsingError> {
     match operator.as_str() {
-        "<" => Ok(lhs < rhs),
-        ">" => Ok(lhs > rhs),
-        "==" => Ok(lhs == rhs),
-        "<>" => Ok(lhs != rhs),
-        "<=" => Ok(lhs <= rhs),
-        ">=" => Ok(lhs >= rhs),
+        "<" => Ok(lhs < rhs && !reals_equal(lhs, rhs)),
+        ">" => Ok(lhs > rhs && !reals_equal(lhs, rhs)),
+        "==" => Ok(reals_equal(lhs, rhs)),
+        "<>" => Ok(!reals_equal(lhs, rhs)),
+        "<=" => Ok(lhs < rhs || reals_equal(lhs, rhs)),
+        ">=" => Ok(lhs > rhs || reals_equal(lhs, rhs)),
         _ => Err(ParsingError::UnexpectedOperator {
             operator: operator.as_str().to_string(),
         }),
@@ -997,7 +1021,7 @@ fn interpret_statement(
                 // start of a block ("alone in the block" per manual 3.12.2.1).
                 // If one shows up here it followed another statement, and
                 // e.g. `G1 MIRROR X0` would silently move X to 0. Error loudly.
-                if FRAME_KEYWORDS.contains(&value.to_uppercase().as_str()) {
+                if FRAME_KEYWORDS.iter().any(|kw| kw.eq_ignore_ascii_case(&value)) {
                     return Err(ParsingError::UnsupportedStatement {
                         line_no,
                         preview,
@@ -1049,15 +1073,15 @@ fn interpret_statement(
 fn frame_assignments(
     pairs: Vec<Pair<Rule>>,
     state: &mut State,
-) -> Result<Vec<(String, f32)>, ParsingError> {
+) -> Result<Vec<(String, f64)>, ParsingError> {
     let mut result = Vec::with_capacity(pairs.len());
+    // Save the axis state once for the whole instruction; interpret_assignment
+    // mutates it as a side effect and frame instructions must not move axes.
+    let saved_axes = state.axes.clone();
     for pair in pairs {
-        let saved_axes = state.axes.clone();
         let (key, value) = interpret_assignment(pair, state)?;
-        // Undo the axis-position side effect of interpret_assignment
-        state.axes = saved_axes;
-
         if !state.is_axis(&key) {
+            state.axes = saved_axes;
             return Err(ParsingError::UnexpectedAxis {
                 axis: key,
                 axes: state.axis_identifiers.join(", "),
@@ -1065,6 +1089,8 @@ fn frame_assignments(
         }
         result.push((key, value));
     }
+    // Undo the axis-position side effects of interpret_assignment
+    state.axes = saved_axes;
     Ok(result)
 }
 
@@ -1129,11 +1155,13 @@ fn interpret_block_number(element: Pair<Rule>, output: &mut Output) {
     let pair = pairs.next().expect("Expected a pair, got none");
 
     let last = output.last_mut().expect("Output vector should not be empty");
-    let value: f32 = match pair.as_rule() {
-        Rule::integer => pair.as_str().parse::<f32>().expect("Failed to interpret value"),
+    // The grammar guarantees an integer token; keep the original lexeme so
+    // large block numbers survive without float round-tripping.
+    let value = match pair.as_rule() {
+        Rule::integer => pair.as_str().to_string(),
         _ => panic!("Unexpected rule: {:?}", pair.as_rule()),
     };
-    last.insert("N".to_string(), Value::Str(value.to_string()));
+    last.insert("N".to_string(), Value::Str(value));
 }
 fn get_error_context(pair: &Pair<Rule>, state: &State) -> (usize, String) {
     let (line_no, _) = pair.line_col();

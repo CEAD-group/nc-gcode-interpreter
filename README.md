@@ -108,7 +108,7 @@ shape: (14, 7)
 ┌───────┬───────┬──────┬────────┬───────────┬─────────────┬─────────────────────────────────┐
 │ X     ┆ Y     ┆ Z    ┆ F      ┆ M         ┆ gg01_motion ┆ comment                         │
 │ ---   ┆ ---   ┆ ---  ┆ ---    ┆ ---       ┆ ---         ┆ ---                             │
-│ f32   ┆ f32   ┆ f32  ┆ f32    ┆ list[str] ┆ str         ┆ str                             │
+│ f64   ┆ f64   ┆ f64  ┆ f64    ┆ list[str] ┆ str         ┆ str                             │
 ╞═══════╪═══════╪══════╪════════╪═══════════╪═════════════╪═════════════════════════════════╡
 │ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ null        ┆ ;size of the square             │
 │ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ null        ┆ ;size of the square             │
