@@ -200,6 +200,9 @@ def sanitize_dataframe(
         "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
     ]
     string_columns = {*modal, *non_modal, "T", "non_returning_function_call", "comment"}
+    # Spline block addresses: value columns, but never forward-filled (a
+    # point weight applies only to the point it is programmed with).
+    block_addresses = ["PW", "SD", "PL"]
 
     # Value columns: anything that is not a known string/list column.
     value_columns = [
@@ -220,7 +223,8 @@ def sanitize_dataframe(
     order: list[str] = []
     for name in (
         ["N"] + modal + non_modal + known_axes
-        + sorted(c for c in value_columns if c not in known_axes)
+        + sorted(c for c in value_columns if c not in known_axes and c not in block_addresses)
+        + block_addresses
         + ["T", "M", "non_returning_function_call", "comment"]
     ):
         if name in df.columns and name not in order:
@@ -229,7 +233,11 @@ def sanitize_dataframe(
 
     # Forward-fill value columns and modal G-group columns.
     if not disable_forward_fill:
-        fill = [c for c in df.columns if c in value_columns or c == "N" or c in modal]
+        fill = [
+            c
+            for c in df.columns
+            if (c in value_columns and c not in block_addresses) or c == "N" or c in modal
+        ]
         df = df.with_columns([pl.col(c).fill_null(strategy="forward") for c in fill])
     return df
 

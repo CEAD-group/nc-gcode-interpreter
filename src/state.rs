@@ -1,6 +1,12 @@
 use crate::errors::ParsingError;
 use std::collections::HashMap;
 
+/// Block addresses: per-block values that are emitted to the output like axes,
+/// but are not axes (no translation applies) and not user variables.
+/// Currently the spline programming addresses (PW: point weight, SD: spline
+/// degree, PL: parameter interval length).
+pub const BLOCK_ADDRESSES: &[&str] = &["PW", "SD", "PL"];
+
 #[derive(Debug, Clone)]
 pub struct State {
     pub axes: HashMap<String, f32>,
@@ -85,6 +91,11 @@ impl State {
     /// Checks if a given key is a valid axis identifier
     pub fn is_axis(&self, key: &str) -> bool {
         self.axis_identifiers.contains(&key.to_uppercase())
+    }
+
+    /// Checks if a given key is a block address (e.g. spline PW/SD/PL)
+    pub fn is_block_address(&self, key: &str) -> bool {
+        BLOCK_ADDRESSES.contains(&key.to_uppercase().as_str())
     }
 
     /// Updates the translation value for an axis

@@ -7,6 +7,7 @@
 //! CSV directly with the `csv` crate.
 
 use crate::modal_groups::{MODAL_G_GROUPS, NON_MODAL_G_GROUPS};
+use crate::state::BLOCK_ADDRESSES;
 use crate::types::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -115,12 +116,17 @@ impl Table {
             .copied()
             .filter(|name| {
                 !ordered.iter().any(|c| c == name)
+                    && !BLOCK_ADDRESSES.contains(name)
                     && !matches!(*name, "T" | "M" | "non_returning_function_call" | "comment")
             })
             .collect();
         extra.sort_unstable();
         for name in extra {
             ordered.push(name.to_string());
+        }
+        // Block addresses (spline PW/SD/PL) come after the axes.
+        for &name in BLOCK_ADDRESSES {
+            push_if_present(name, &mut ordered);
         }
         for name in ["T", "M", "non_returning_function_call", "comment"] {
             push_if_present(name, &mut ordered);
@@ -134,7 +140,10 @@ impl Table {
         let mut columns: Vec<(String, Column)> = Vec::with_capacity(ordered.len());
         for name in ordered {
             let mut column = build_column(&name, &rows);
-            let is_value_column = matches!(column, Column::Float(_) | Column::Int(_));
+            // Block addresses (spline PW/SD/PL) are never forward-filled: a
+            // point weight applies only to the point it is programmed with.
+            let is_value_column = matches!(column, Column::Float(_) | Column::Int(_))
+                && !BLOCK_ADDRESSES.contains(&name.as_str());
             if !disable_forward_fill && (is_value_column || modal.contains(name.as_str())) {
                 column.forward_fill();
             }

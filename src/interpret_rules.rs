@@ -347,6 +347,9 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
 
     if state.is_axis(&key) {
         state.update_axis(&key, local_value)?;
+    } else if state.is_block_address(&key) {
+        // Block addresses (e.g. spline PW/SD/PL) only appear in the output row;
+        // they are neither axes nor user variables, so nothing is stored.
     } else {
         state.symbol_table.insert(key.clone(), local_value);
     }
@@ -906,8 +909,10 @@ fn interpret_statement(
                 if state.is_axis(&key) {
                     // State keeps local coordinates; the output row gets the machine
                     // coordinate under the translation active at this point in the program.
-                    let machine_value = local_value + state.get_translation(&key);
+                    let machine_value = state.get_axis_machine(&key).unwrap_or(local_value);
                     last.insert(key, Value::Float(machine_value));
+                } else if state.is_block_address(&key) {
+                    last.insert(key, Value::Float(local_value));
                 }
             }
             Rule::tool_selection => interpret_tool_selection(statement, output, state)?,
