@@ -18,10 +18,6 @@ def create_pest_grammar(g_groups):
     grammar_parts.append(
         "// Due to the way pest works, the sorting of the literals is important."
     )
-    all_words = [
-        f'^"{entry["id"]}"' for group in g_groups for entry in group["entries"]
-    ]
-
     ggroup_names = []
     for group in g_groups:
         group_rules = []
@@ -33,14 +29,11 @@ def create_pest_grammar(g_groups):
             f"{ggroup_name} = @{{({' | '.join(reversed(sorted(group_rules)))}) ~ !(ASCII_ALPHANUMERIC) }}"
         )
 
-    grammar_parts.append(
-        f"\ngcommand_list = @{{({' | '.join(reversed(sorted(all_words)))}) ~ !(ASCII_ALPHANUMERIC) }}"
-    )
-
     grammar_parts.append('g_command_numbered = { &("G" ~ ASCII_DIGIT+) ~ g_command }')
-    grammar_parts.append(
-        f"g_command = {{ &gcommand_list ~ ({' | '.join(ggroup_names)})}}"
-    )
+    # Note: no leading lookahead over the full command list here — the group
+    # alternation below is the same language, and a lookahead would make every
+    # G-command match the ~370-alternative union twice.
+    grammar_parts.append(f"g_command = {{ ({' | '.join(ggroup_names)})}}")
     return "\n".join(grammar_parts)
 
 
