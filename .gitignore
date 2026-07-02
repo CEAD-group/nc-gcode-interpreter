@@ -26,3 +26,9 @@ dist/
 __pycache__
 python/**/*.so
 python/**/*.pyc
+
+# macOS
+.DS_Store
+
+# local scratch
+tmp/
