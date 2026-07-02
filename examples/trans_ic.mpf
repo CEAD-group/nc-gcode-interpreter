@@ -1,0 +1,21 @@
+; Regression test: IC() incremental moves with an active TRANS offset
+;
+; IC() increments the local (programmed) coordinate:
+;   new_local = current_local + increment
+; The output shows machine coordinates:
+;   machine = local + TRANS offset active at that block
+
+DEF REAL OFFSET
+OFFSET = 100
+
+; Start at X=0 Y=0
+G1 X=0 Y=0
+
+; Apply TRANS offset of 100 (via variable, exercises TRANS X=<expr>)
+TRANS X=OFFSET Y=0
+
+; Move to X=16 in local coords -> machine X=116
+G1 X=16 Y=0
+
+; Incremental move by 50 -> machine X = 116 + 50 = 166
+G1 X=IC(50) Y=0
