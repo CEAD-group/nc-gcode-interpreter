@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 /// A single typed column. Values are optional: `None` is a null cell.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Column {
-    Float(Vec<Option<f32>>),
+    Float(Vec<Option<f64>>),
     Int(Vec<Option<i64>>),
     Str(Vec<Option<String>>),
     StrList(Vec<Option<Vec<String>>>),
@@ -198,7 +198,7 @@ fn build_column(name: &str, rows: &[&HashMap<String, Value>]) -> Column {
         .iter()
         .map(|r| match r.get(name) {
             Some(Value::Float(f)) => Some(*f),
-            Some(Value::Str(s)) => s.parse::<f32>().ok(),
+            Some(Value::Str(s)) => s.parse::<f64>().ok(),
             _ => None,
         })
         .collect();

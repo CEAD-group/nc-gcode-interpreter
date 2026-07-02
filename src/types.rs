@@ -9,6 +9,6 @@ pub struct NCParser;
 #[derive(Debug, Clone)]
 pub enum Value {
     Str(String),
-    Float(f32),
+    Float(f64),
     StrList(Vec<String>),
 }

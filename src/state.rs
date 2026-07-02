@@ -9,9 +9,9 @@ pub const BLOCK_ADDRESSES: &[&str] = &["PW", "SD", "PL"];
 
 #[derive(Debug, Clone)]
 pub struct State {
-    pub axes: HashMap<String, f32>,
-    pub symbol_table: HashMap<String, f32>,
-    pub translation: HashMap<String, f32>,
+    pub axes: HashMap<String, f64>,
+    pub symbol_table: HashMap<String, f64>,
+    pub translation: HashMap<String, f64>,
     pub axis_identifiers: Vec<String>,
     pub iteration_limit: usize,
     pub axis_index_map: Option<HashMap<String, usize>>,
@@ -99,7 +99,7 @@ impl State {
     }
 
     /// Updates the translation value for an axis
-    pub fn update_translation(&mut self, axis: &str, value: f32) -> Result<(), ParsingError> {
+    pub fn update_translation(&mut self, axis: &str, value: f64) -> Result<(), ParsingError> {
         if self.is_axis(axis) {
             self.translation.insert(axis.to_string(), value);
             Ok(())
@@ -112,7 +112,7 @@ impl State {
     }
 
     /// Gets the translation value for an axis
-    pub fn get_translation(&self, axis: &str) -> f32 {
+    pub fn get_translation(&self, axis: &str) -> f64 {
         *self.translation.get(axis).unwrap_or(&0.0)
     }
 
@@ -126,7 +126,7 @@ impl State {
 
     /// Updates an axis value in local coordinates (without translation).
     /// Returns the machine coordinate (local + translation) for output purposes.
-    pub fn update_axis(&mut self, key: &str, local_value: f32) -> Result<f32, ParsingError> {
+    pub fn update_axis(&mut self, key: &str, local_value: f64) -> Result<f64, ParsingError> {
         // Store the local coordinate
         self.axes.insert(key.to_string(), local_value);
         // Return the machine coordinate for output
@@ -135,12 +135,12 @@ impl State {
     }
 
     /// Gets the current local coordinate for an axis
-    pub fn get_axis_local(&self, key: &str) -> Option<f32> {
+    pub fn get_axis_local(&self, key: &str) -> Option<f64> {
         self.axes.get(key).copied()
     }
 
     /// Gets the current machine coordinate for an axis (local + translation)
-    pub fn get_axis_machine(&self, key: &str) -> Option<f32> {
+    pub fn get_axis_machine(&self, key: &str) -> Option<f64> {
         self.axes.get(key).map(|local| local + self.get_translation(key))
     }
 
@@ -164,7 +164,7 @@ impl State {
     }
 
     #[allow(dead_code)]
-    pub fn to_python_dict(&self) -> HashMap<String, HashMap<String, f32>> {
+    pub fn to_python_dict(&self) -> HashMap<String, HashMap<String, f64>> {
         let mut result = HashMap::new();
 
         result.insert("axes".to_string(), self.axes.clone());
