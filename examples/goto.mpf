@@ -1,0 +1,15 @@
+; Program jumps to jump markers (GOTOB, GOTOF, GOTO, GOTOC)
+N10 R1=30 R2=10 R4=3
+N20 GOTOF MIDDLE ; jump toward the end of the program, skipping N30
+N30 X=999
+N40 REPEAT_HERE: X=R1 ; jump label, execution resumes here
+N50 R1=R1+R2 R4=R4-1
+N60 IF R4>0 GOTOB REPEAT_HERE ; conditional jump toward the beginning
+N70 GOTOF 90 ; block numbers are valid jump destinations too
+N80 X=999
+N90 GOTOC NOWHERE ; destination missing: alarm suppressed, fall through
+N100 GOTO FINISH ; searches forward first, then backward
+N110 X=999
+N120 FINISH: M30
+MIDDLE: Y=1
+GOTOB REPEAT_HERE

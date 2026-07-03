@@ -128,6 +128,22 @@ Details: {statement} is not supported by this interpreter.
         hint: String,
     },
     #[error(r#"
+Jump destination not found on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: No block with the jump label or block number '{target}' was found
+searching {search_direction} (alarm 14080 on a real control).
+Note: jump destinations inside IF/LOOP/FOR/WHILE/REPEAT bodies cannot be
+reached from outside those bodies.
+"#)]
+    JumpTargetNotFound {
+        line_no: usize,
+        preview: String,
+        target: String,
+        search_direction: String,
+    },
+    #[error(r#"
 Invalid function call on line {line_no}
 ----------------------------------------
 Line: {preview}

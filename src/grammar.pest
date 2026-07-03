@@ -4,23 +4,44 @@ newline             = _{ "\n" | "\r\n" }
 WHITESPACE          = _{ " " | "\t" }
 QUOTE               = _{ "\"" }
 comment             =  { ";" ~ (!newline ~ ANY)* }
-block               =  { block_number_set? ~ (definition | frame_op | control | statement*) ~ comment? }
+block               =  { block_number_set? ~ label_def? ~ (definition | frame_op | control | statement*) ~ comment? }
 block_number_set    = _{ "N" ~ block_number }
 control             =  {
-    goto_statement
+    gotos_statement
+  | goto_statement
+  | case_statement
+  | if_goto_statement+
   | if_statement
   | loop_statement
   | for_statement
   | while_statement
   | repeat_until_statement
 }
-// GOTO targets are labels or block numbers. These statements are recognized
-// so the interpreter can reject them loudly; silently skipping a jump would
-// produce wrong coordinates. The keyword is atomic with a word boundary so
-// that identifiers like GOTOFFSET still parse as ordinary names.
+// Jump labels sit at the start of a block, immediately after the block
+// number if there is one (manual 4.1.5.2): 2..32 characters, the first two
+// being letters or underscores, terminated by a colon. Compound-atomic so
+// no whitespace may separate the name from the colon.
+label_def  = ${ label_name ~ ":" }
+label_name = @{ (ASCII_ALPHA | "_"){2} ~ (ASCII_ALPHANUMERIC | "_"){0, 30} }
+// GOTO targets are labels or block numbers. The keyword is atomic with a
+// word boundary so that identifiers like GOTOFFSET still parse as ordinary
+// names. GOTOS (return jump to program start) takes no target.
 goto_statement         =  { goto_kw ~ goto_target }
 goto_kw                = @{ (^"GOTOC" | ^"GOTOF" | ^"GOTOB" | ^"GOTO") ~ !(ASCII_ALPHANUMERIC | "_") }
+gotos_statement        = @{ ^"GOTOS" ~ !(ASCII_ALPHANUMERIC | "_") }
 goto_target            =  { identifier | block_number }
+// Conditional jump in a single block: IF <condition> GOTO... <target>.
+// Several conditional jumps may share one block (manual 4.1.5.2).
+if_goto_statement      =  { ^"IF" ~ condition ~ goto_statement }
+// Program branch: CASE(<expr>) OF <const> GOTO... <target> ... DEFAULT ...
+// (manual 4.1.5.3). Without a DEFAULT arm, execution falls through to the
+// next block when no constant matches.
+case_statement         =  { case_kw ~ expression ~ of_kw ~ case_arm+ ~ case_default? }
+case_kw                = @{ ^"CASE" ~ !(ASCII_ALPHANUMERIC | "_") }
+of_kw                  = @{ ^"OF" ~ !(ASCII_ALPHANUMERIC | "_") }
+case_arm               =  { value ~ goto_statement }
+case_default           =  { default_kw ~ goto_statement }
+default_kw             = @{ ^"DEFAULT" ~ !(ASCII_ALPHANUMERIC | "_") }
 if_statement           =  { ^"IF" ~ condition ~ comment? ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
 loop_statement         =  { ^"LOOP" ~ blocks ~ ^"ENDLOOP" }
 for_statement          =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ blocks ~ ^"ENDFOR" }
@@ -54,6 +75,10 @@ reserved   = _{
   | ^"GOTOB"
   | ^"GOTOF"
   | ^"GOTOC"
+  | ^"GOTOS"
+  | ^"CASE"
+  | ^"OF"
+  | ^"DEFAULT"
   | ^"LOOP"
   | ^"FOR"
   | ^"WHILE"
@@ -67,7 +92,7 @@ reserved   = _{
 }
 
 identifier = @{
-    !(reserved ~ !ASCII_ALPHANUMERIC)
+    !(reserved ~ !(ASCII_ALPHANUMERIC | "_"))
     ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*
 }
 
@@ -113,7 +138,7 @@ primary          =  { arith_fun | value | variable_array | variable | "(" ~ expr
 float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* ~ !ASCII_ALPHA } // Ensure floats are not followed by letters
 integer          = @{ "-"? ~ ASCII_DIGIT+ ~ !ASCII_ALPHA } // Ensure integers are not followed by letters
 arith_fun        = { arith_fun_name ~ "(" ~ function_arguments ~ ")" }
-arith_fun_name   = { "SIN" | "COS" | "TAN" | "ASIN" | "ACOS" | "ATAN2" | "SQRT" | "ABS" | "POT" | "TRUNC" | "ROUND" | "LN" | "EXP" }
+arith_fun_name   = { "SIN" | "COS" | "TAN" | "ASIN" | "ACOS" | "ATAN2" | "SQRT" | "ABS" | "POT" | "TRUNC" | "ROUNDUP" | "ROUND" | "LN" | "EXP" | "MINVAL" | "MAXVAL" | "BOUND" }
 
 tool_selection = { ^"T" ~ "=" ~ quoted_string }
 

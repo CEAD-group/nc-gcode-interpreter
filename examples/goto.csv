@@ -1,0 +1,18 @@
+N,X,Y,M,comment
+,,,,"; Program jumps to jump markers (GOTOB, GOTOF, GOTO, GOTOC)"
+10,,,,
+20,,,,"; jump toward the end of the program, skipping N30"
+20,,1.000,,
+40,30.000,1.000,,"; jump label, execution resumes here"
+50,30.000,1.000,,
+60,30.000,1.000,,; conditional jump toward the beginning
+40,40.000,1.000,,"; jump label, execution resumes here"
+50,40.000,1.000,,
+60,40.000,1.000,,; conditional jump toward the beginning
+40,50.000,1.000,,"; jump label, execution resumes here"
+50,50.000,1.000,,
+60,50.000,1.000,,; conditional jump toward the beginning
+70,50.000,1.000,,; block numbers are valid jump destinations too
+90,50.000,1.000,,"; destination missing: alarm suppressed, fall through"
+100,50.000,1.000,,"; searches forward first, then backward"
+120,50.000,1.000,M30,

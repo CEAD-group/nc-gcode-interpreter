@@ -7,6 +7,130 @@ use std::collections::HashMap;
 
 type Output = Vec<HashMap<String, Value>>;
 
+/// Control-flow signal returned by block interpretation: either fall through
+/// to the next block, or a pending GOTO that must be resolved against the
+/// block list of the current scope or, failing that, an enclosing scope
+/// (which is how a jump leaves an IF body or a LOOP).
+#[derive(Debug, Clone)]
+pub enum BlockFlow {
+    Continue,
+    Jump(JumpRequest),
+    /// M2/M17/M30 executed: end of program. With jumps in play the end
+    /// marker is not necessarily the last block (manual 4.1.5.2), so it must
+    /// terminate interpretation instead of falling through to later blocks.
+    EndProgram,
+}
+
+#[derive(Debug, Clone)]
+pub struct JumpRequest {
+    /// Canonical target key, comparable against `scan_jump_targets` keys.
+    key: String,
+    /// The destination as written in the program, for error messages.
+    display: String,
+    direction: JumpDirection,
+    line_no: usize,
+    preview: String,
+}
+
+impl JumpRequest {
+    pub fn into_not_found_error(self) -> ParsingError {
+        ParsingError::JumpTargetNotFound {
+            line_no: self.line_no,
+            preview: self.preview,
+            target: self.display,
+            search_direction: self.direction.search_description().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JumpDirection {
+    /// GOTOB: toward the beginning of the program.
+    Backward,
+    /// GOTOF: toward the end of the program.
+    Forward,
+    /// GOTO / GOTOC: first toward the end, then toward the beginning.
+    BothForwardFirst,
+}
+
+impl JumpDirection {
+    fn search_description(self) -> &'static str {
+        match self {
+            JumpDirection::Backward => "toward the beginning of the program (GOTOB)",
+            JumpDirection::Forward => "toward the end of the program (GOTOF)",
+            JumpDirection::BothForwardFirst => "in both directions (GOTO/GOTOC)",
+        }
+    }
+}
+
+/// Canonicalize a jump destination as written (`goto_target` lexeme) into a
+/// key that matches `scan_jump_targets`. Labels are case-insensitive; block
+/// numbers may be written as `200` or `N200` (manual 4.1.5.2) and are
+/// normalized so `N020` and `20` compare equal.
+fn canonical_jump_target(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let digits = trimmed.strip_prefix(['N', 'n']).unwrap_or(trimmed);
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        format!("N:{}", canonical_block_number(digits))
+    } else {
+        format!("LABEL:{}", trimmed.to_uppercase())
+    }
+}
+
+fn canonical_block_number(digits: &str) -> &str {
+    let stripped = digits.trim_start_matches('0');
+    if stripped.is_empty() { "0" } else { stripped }
+}
+
+/// Collect the jump targets (labels and block numbers) defined by each block
+/// of a scope, mapping the canonical key to the (ascending) block indices
+/// where it is defined.
+fn scan_jump_targets(block_pairs: &[Pair<Rule>]) -> HashMap<String, Vec<usize>> {
+    let mut targets: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, block) in block_pairs.iter().enumerate() {
+        for item in block.clone().into_inner() {
+            match item.as_rule() {
+                Rule::block_number => {
+                    let key = format!("N:{}", canonical_block_number(item.as_str().trim()));
+                    targets.entry(key).or_default().push(index);
+                }
+                Rule::label_def => {
+                    let name = item
+                        .into_inner()
+                        .next()
+                        .expect("label_def always contains a label_name")
+                        .as_str()
+                        .to_uppercase();
+                    targets.entry(format!("LABEL:{}", name)).or_default().push(index);
+                }
+                // Block numbers and labels can only appear at the start of a
+                // block; stop peeking once the payload begins.
+                _ => break,
+            }
+        }
+    }
+    targets
+}
+
+/// Resolve a jump request against the targets of one scope: GOTOB searches
+/// backward from the current block (inclusive), GOTOF forward (exclusive),
+/// GOTO/GOTOC forward first and then backward. Returns the destination block
+/// index, or None when the target is not reachable in this scope.
+fn resolve_jump(
+    targets: &HashMap<String, Vec<usize>>,
+    current: usize,
+    request: &JumpRequest,
+) -> Option<usize> {
+    let positions = targets.get(&request.key)?;
+    let forward = || positions.iter().copied().find(|&p| p > current);
+    let backward = || positions.iter().copied().rev().find(|&p| p <= current);
+    match request.direction {
+        JumpDirection::Forward => forward(),
+        JumpDirection::Backward => backward(),
+        JumpDirection::BothForwardFirst => forward().or_else(backward),
+    }
+}
+
 /// The frame instruction family, normally captured by the frame_op grammar
 /// rule at block start. Also present in G-group 3, where they can only be
 /// reached when they FOLLOW another statement in the block - which is invalid
@@ -170,6 +294,34 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
         "ROUND" => {
             check_args(1)?;
             Ok(args[0].round())
+        },
+        "ROUNDUP" => {
+            // Round up to the next higher integer (manual 4.1.3.5).
+            check_args(1)?;
+            Ok(args[0].ceil())
+        },
+        "MINVAL" => {
+            check_args(2)?;
+            Ok(args[0].min(args[1]))
+        },
+        "MAXVAL" => {
+            check_args(2)?;
+            Ok(args[0].max(args[1]))
+        },
+        "BOUND" => {
+            // BOUND(<minimum>, <maximum>, <check value>): the check value
+            // bounded to [minimum, maximum] (manual 4.1.1.13).
+            check_args(3)?;
+            let (min, max, value) = (args[0], args[1], args[2]);
+            if min > max {
+                return Err(ParsingError::ParsingContext {
+                    line_no,
+                    preview,
+                    context: "BOUND".to_string(),
+                    message: format!("BOUND minimum ({}) is greater than maximum ({})", min, max),
+                });
+            }
+            Ok(value.clamp(min, max))
         },
         "LN" => {
             check_args(1)?;
@@ -722,7 +874,7 @@ fn interpret_statement_if(
     element: Pair<Rule>,
     output: &mut Output,
     state: &mut State,
-) -> Result<(), ParsingError> {
+) -> Result<BlockFlow, ParsingError> {
     let mut pairs = element.into_inner();
 
     // Match the condition
@@ -794,40 +946,69 @@ fn interpret_statement_if(
         last.insert("comment".to_string(), Value::Str(comment_pair.as_str().to_string()));
     }
 
-    // Evaluate the condition and execute the appropriate block
+    // Evaluate the condition and execute the appropriate block. A jump out
+    // of either branch propagates to the enclosing scope.
     if evaluate_condition(condition, state)? {
-        interpret_blocks(true_block, output, state)?;
+        interpret_blocks(true_block, output, state)
     } else if let Some(false_block) = false_block {
-        interpret_blocks(false_block, output, state)?;
+        interpret_blocks(false_block, output, state)
+    } else {
+        Ok(BlockFlow::Continue)
     }
-
-    Ok(())
 }
 fn interpret_statement_while(
     element: Pair<Rule>,
     output: &mut Output,
     state: &mut State,
-) -> Result<(), ParsingError> {
+) -> Result<BlockFlow, ParsingError> {
     let mut pairs = element.into_inner();
     let condition = pairs.next().expect("Expected a pair, got none");
     let blocks = pairs.next().expect("Expected a pair, got none");
     let mut loop_count = 0;
     while evaluate_condition(condition.clone(), state)? && loop_count < state.iteration_limit {
         loop_count += 1;
-        interpret_blocks(blocks.clone(), output, state)?;
+        match interpret_blocks(blocks.clone(), output, state)? {
+            BlockFlow::Continue => {}
+            // A jump leaves the loop (resolving in an enclosing scope), and
+            // an executed end-of-program M code stops it outright.
+            other => return Ok(other),
+        }
     }
     if loop_count >= state.iteration_limit {
         return Err(ParsingError::LoopLimit {
             limit: state.iteration_limit.to_string(),
         });
     }
-    Ok(())
+    Ok(BlockFlow::Continue)
+}
+/// LOOP ... ENDLOOP: an endless loop that can only be left with a jump out
+/// of its body (manual 4.1.7.2); without one the iteration limit trips.
+fn interpret_statement_loop(
+    element: Pair<Rule>,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<BlockFlow, ParsingError> {
+    let mut pairs = element.into_inner();
+    let blocks = pairs.next().expect("Expected a pair, got none");
+    let mut loop_count = 0;
+    loop {
+        match interpret_blocks(blocks.clone(), output, state)? {
+            BlockFlow::Continue => {}
+            other => return Ok(other),
+        }
+        loop_count += 1;
+        if loop_count >= state.iteration_limit {
+            return Err(ParsingError::LoopLimit {
+                limit: state.iteration_limit.to_string(),
+            });
+        }
+    }
 }
 fn interpret_statement_for(
     element: Pair<Rule>,
     output: &mut Output,
     state: &mut State,
-) -> Result<(), ParsingError> {
+) -> Result<BlockFlow, ParsingError> {
     let mut pairs = element.into_inner();
 
     // Parse and execute the assignment statement
@@ -848,7 +1029,12 @@ fn interpret_statement_for(
         }
 
         // Parse and execute the blocks
-        interpret_blocks(blocks.clone(), output, state)?;
+        match interpret_blocks(blocks.clone(), output, state)? {
+            BlockFlow::Continue => {}
+            // A jump leaves the loop (resolving in an enclosing scope), and
+            // an executed end-of-program M code stops it outright.
+            other => return Ok(other),
+        }
 
         // After parsing blocks, increment the loop control variable
         // Ensure this is done in a separate scope to avoid mutable borrow conflict
@@ -860,13 +1046,13 @@ fn interpret_statement_for(
             *loop_control_value += 1.0; // Increment value directly
         }
     }
-    Ok(())
+    Ok(BlockFlow::Continue)
 }
 fn interpret_statement_repeat_until(
     element: Pair<Rule>,
     output: &mut Output,
     state: &mut State,
-) -> Result<(), ParsingError> {
+) -> Result<BlockFlow, ParsingError> {
     let mut pairs = element.into_inner();
     let first_pair = pairs.next().expect("Expected a pair, got none");
     let blocks;
@@ -907,7 +1093,12 @@ fn interpret_statement_repeat_until(
     let condition = pairs.next().expect("Expected condition, got none");
     let mut loop_count = 0;
     loop {
-        interpret_blocks(blocks.clone(), output, state)?;
+        match interpret_blocks(blocks.clone(), output, state)? {
+            BlockFlow::Continue => {}
+            // A jump leaves the loop (resolving in an enclosing scope), and
+            // an executed end-of-program M code stops it outright.
+            other => return Ok(other),
+        }
         loop_count += 1;
         if loop_count >= state.iteration_limit {
             return Err(ParsingError::LoopLimit {
@@ -918,50 +1109,155 @@ fn interpret_statement_repeat_until(
             break;
         }
     }
-    Ok(())
+    Ok(BlockFlow::Continue)
 }
+/// Interpret an unconditional jump statement into a pending jump request.
+/// GOTOC is the exception: when its destination does not exist anywhere on
+/// the active scope chain, the alarm is suppressed and execution simply
+/// continues with the next block (manual 4.1.5.2).
+fn interpret_goto(pair: Pair<Rule>, state: &State) -> Result<BlockFlow, ParsingError> {
+    let (line_no, preview) = get_error_context(&pair, state);
+    let mut pairs = pair.into_inner();
+    let keyword_pair = pairs.next().expect("goto_statement starts with its keyword");
+    let keyword = keyword_pair.as_str().to_uppercase();
+    let target_pair = pairs.next().expect("goto_statement contains a goto_target");
+    let display = target_pair.as_str().trim().to_string();
+    let key = canonical_jump_target(&display);
+
+    let direction = match keyword.as_str() {
+        "GOTOB" => JumpDirection::Backward,
+        "GOTOF" => JumpDirection::Forward,
+        "GOTO" | "GOTOC" => JumpDirection::BothForwardFirst,
+        other => {
+            return Err(ParsingError::ParsingContext {
+                line_no,
+                preview,
+                context: "jump statement".to_string(),
+                message: format!("Unexpected jump keyword '{}'", other),
+            })
+        }
+    };
+
+    if keyword == "GOTOC" && !state.jump_target_visible(&key) {
+        eprintln!(
+            "Warning: GOTOC destination '{}' not found; alarm suppressed, continuing with the next block (line {})",
+            display, line_no
+        );
+        return Ok(BlockFlow::Continue);
+    }
+
+    Ok(BlockFlow::Jump(JumpRequest {
+        key,
+        display,
+        direction,
+        line_no,
+        preview,
+    }))
+}
+
+/// IF <condition> GOTO... <target>: single-block conditional jump.
+fn interpret_if_goto(pair: Pair<Rule>, state: &mut State) -> Result<BlockFlow, ParsingError> {
+    let mut pairs = pair.into_inner();
+    let condition = pairs.next().expect("if_goto_statement starts with a condition");
+    let goto = pairs.next().expect("if_goto_statement contains a goto_statement");
+    if evaluate_condition(condition, state)? {
+        interpret_goto(goto, state)
+    } else {
+        Ok(BlockFlow::Continue)
+    }
+}
+
+/// CASE(<expr>) OF <const> GOTO... <target> ... DEFAULT GOTO... <target>:
+/// jump to the arm whose constant equals the expression; without a matching
+/// arm the DEFAULT applies, and without a DEFAULT execution falls through to
+/// the next block (manual 4.1.5.3).
+fn interpret_case(pair: Pair<Rule>, state: &mut State) -> Result<BlockFlow, ParsingError> {
+    let mut pairs = pair.into_inner();
+    // Skip the atomic case_kw pair preceding the expression.
+    let expression = pairs
+        .find(|p| p.as_rule() == Rule::expression)
+        .expect("case_statement contains an expression");
+    let value = evaluate_expression(expression, state)?;
+
+    for arm in pairs {
+        match arm.as_rule() {
+            Rule::case_arm => {
+                let mut arm_pairs = arm.clone().into_inner();
+                let constant_pair = arm_pairs.next().expect("case_arm starts with a value");
+                let constant = constant_pair.as_str().trim().parse::<f64>().map_err(|_| {
+                    annotate_error(
+                        &constant_pair,
+                        "CASE constant",
+                        format!("'{}' is not a valid number", constant_pair.as_str()),
+                        state,
+                    )
+                })?;
+                if reals_equal(value, constant) {
+                    let goto = arm_pairs.next().expect("case_arm contains a goto_statement");
+                    return interpret_goto(goto, state);
+                }
+            }
+            Rule::case_default => {
+                // Skip the atomic default_kw pair preceding the jump.
+                let goto = arm
+                    .into_inner()
+                    .find(|p| p.as_rule() == Rule::goto_statement)
+                    .expect("case_default contains a goto_statement");
+                return interpret_goto(goto, state);
+            }
+            // The atomic keyword pairs (of_kw etc.) carry no content.
+            _ => {}
+        }
+    }
+    Ok(BlockFlow::Continue)
+}
+
 fn interpret_control(
     element: Pair<Rule>,
     output: &mut Output,
     state: &mut State,
-) -> Result<(), ParsingError> {
-    let mut pairs = element.into_inner();
-    let pair = pairs.next().expect("Expected a pair, got none");
-    match pair.as_rule() {
-        Rule::if_statement => interpret_statement_if(pair, output, state),
-        Rule::for_statement => interpret_statement_for(pair, output, state),
-        Rule::while_statement => interpret_statement_while(pair, output, state),
-        Rule::repeat_until_statement => interpret_statement_repeat_until(pair, output, state),
-        Rule::goto_statement => {
-            let (line_no, preview) = get_error_context(&pair, state);
-            let keyword = pair.as_str().split_whitespace().next().unwrap_or("GOTO").to_uppercase();
-            Err(ParsingError::UnsupportedStatement {
-                line_no,
-                preview,
-                statement: format!("The jump statement {}", keyword),
-                hint: "Jumps are not interpreted; silently skipping one would produce wrong \
-                       coordinates. Restructure the program with IF/WHILE/FOR/REPEAT instead."
-                    .to_string(),
-            })
+) -> Result<BlockFlow, ParsingError> {
+    // A control element is a single statement, except for conditional jumps
+    // where several may share one block; the first satisfied jump wins.
+    for pair in element.into_inner() {
+        let flow = match pair.as_rule() {
+            Rule::if_statement => interpret_statement_if(pair, output, state)?,
+            Rule::for_statement => interpret_statement_for(pair, output, state)?,
+            Rule::while_statement => interpret_statement_while(pair, output, state)?,
+            Rule::repeat_until_statement => interpret_statement_repeat_until(pair, output, state)?,
+            Rule::loop_statement => interpret_statement_loop(pair, output, state)?,
+            Rule::goto_statement => interpret_goto(pair, state)?,
+            Rule::if_goto_statement => interpret_if_goto(pair, state)?,
+            Rule::case_statement => interpret_case(pair, state)?,
+            Rule::gotos_statement => {
+                // GOTOS repeats the program only when the PLC requests it via
+                // <Chan>.basic.out.enableGoToStart; without that request the
+                // control continues with the next block (Basic Functions
+                // manual 3.5.10.1). An offline interpreter has no PLC, and a
+                // restart would produce an unbounded trace, so the
+                // no-request behavior is modeled.
+                let (line_no, _) = get_error_context(&pair, state);
+                eprintln!(
+                    "Warning: GOTOS ignored (line {}): the program restart depends on the PLC signal enableGoToStart; continuing with the next block",
+                    line_no
+                );
+                BlockFlow::Continue
+            }
+            _ => {
+                return Err(annotate_error(
+                    &pair,
+                    "control statement",
+                    format!("Unexpected rule in interpret_control: {:?}", pair.as_rule()),
+                    state,
+                ))
+            }
+        };
+        match flow {
+            BlockFlow::Continue => {}
+            other => return Ok(other),
         }
-        Rule::loop_statement => {
-            let (line_no, preview) = get_error_context(&pair, state);
-            Err(ParsingError::UnsupportedStatement {
-                line_no,
-                preview,
-                statement: "The endless loop LOOP ... ENDLOOP".to_string(),
-                hint: "LOOP can only be left with a jump, which is not interpreted. Use \
-                       WHILE/FOR/REPEAT with an explicit condition instead."
-                    .to_string(),
-            })
-        }
-        _ => Err(annotate_error(
-            &pair,
-            "control statement",
-            format!("Unexpected rule in interpret_control: {:?}", pair.as_rule()),
-            state,
-        )),
     }
+    Ok(BlockFlow::Continue)
 }
 fn insert_m_key(last: &mut HashMap<String, Value>, value: &str, line_no: usize, preview: String) -> Result<(), ParsingError> {
     let m_key = "M";
@@ -991,11 +1287,19 @@ fn insert_m_key(last: &mut HashMap<String, Value>, value: &str, line_no: usize, 
         message: "Too many M commands in a single block".to_string(),
     })
 }
+/// M codes that end the program: M2/M02 and M30 end a main program, M17 a
+/// subprogram. Execution of one of these stops interpretation; the rest of
+/// the containing block still executes.
+fn is_end_of_program_m_code(code: &str) -> bool {
+    let digits = code.trim_start_matches(['M', 'm']);
+    matches!(digits.trim_start_matches('0'), "2" | "17" | "30")
+}
+
 fn interpret_statement(
     element: Pair<Rule>,
     output: &mut Output,
     state: &mut State,
-) -> Result<(), ParsingError> {
+) -> Result<BlockFlow, ParsingError> {
     // Grammar:
     // statement           =  {
     //     g_command_numbered
@@ -1007,6 +1311,7 @@ fn interpret_statement(
     //   | tool_selection
     // }
 
+    let mut flow = BlockFlow::Continue;
     for statement in element.into_inner() {
         let last = output.last_mut().expect("Output vector should not be empty");
         match statement.as_rule() {
@@ -1043,6 +1348,10 @@ fn interpret_statement(
                 let (_key, value) = interpret_m_command(statement);
                 // there are 5 M codes allowed in a block. Store them in separate columns in the output
                 insert_m_key(last, &value, line_no, preview)?;
+                // The whole block still executes; interpretation stops after it.
+                if is_end_of_program_m_code(&value) {
+                    flow = BlockFlow::EndProgram;
+                }
             }
             Rule::assignment => {
                 let (key, local_value) = interpret_assignment(statement, state)?;
@@ -1065,7 +1374,7 @@ fn interpret_statement(
             })?,
         }
     }
-    Ok(())
+    Ok(flow)
 }
 /// Evaluate the assignments of a frame instruction without moving any axis:
 /// the axis state is saved and restored around parsing, and each assignment
@@ -1183,28 +1492,36 @@ fn interpret_block(
     element: Pair<Rule>,
     output: &mut Output,
     state: &mut State,
-) -> Result<(), ParsingError> {
+) -> Result<BlockFlow, ParsingError> {
     match element.as_rule() {
         Rule::block => {
             // Create a new HashMap for this block
             output.push(HashMap::new());
-            
+
+            let mut flow = BlockFlow::Continue;
             for item in element.into_inner() {
                 match item.as_rule() {
-                    Rule::statement => interpret_statement(item, output, state)?,
+                    Rule::statement => {
+                        if let BlockFlow::EndProgram = interpret_statement(item, output, state)? {
+                            flow = BlockFlow::EndProgram;
+                        }
+                    }
                     Rule::block_number => interpret_block_number(item, output),
-                    Rule::control => interpret_control(item, output, state)?,
+                    // Jump labels are collected by scan_jump_targets before
+                    // execution; at execution time they are inert.
+                    Rule::label_def => {}
+                    Rule::control => flow = interpret_control(item, output, state)?,
                     Rule::definition => interpret_definition(item, state)?,
                     Rule::frame_op => interpret_frame_op(item, state)?,
                     Rule::comment => {
                         let last = output.last_mut().expect("Output vector should not be empty");
                         last.insert("comment".to_string(), Value::Str(item.as_str().to_string()));
                     },
-                    _ => return Err(annotate_error(&item, "block interpretation", 
+                    _ => return Err(annotate_error(&item, "block interpretation",
                         format!("Unexpected rule: {:?}", item.as_rule()), state)),
                 }
             }
-            Ok(())
+            Ok(flow)
         }
         _ => {
             return Err(annotate_error(&element, "blocks interpretation",
@@ -1217,17 +1534,53 @@ pub fn interpret_blocks(
     blocks: Pair<Rule>,
     output: &mut Output,
     state: &mut State,
-) -> Result<(), ParsingError> {
-    match blocks.as_rule() {
-        Rule::blocks => {
-            for block in blocks.into_inner() {
-                interpret_block(block, output, state)?;
-            }
-            Ok(())
-        }
-        _ => {
-            return Err(annotate_error(&blocks, "blocks interpretation",
-                format!("Expected blocks, found {:?}", blocks.as_rule()), state));
+) -> Result<BlockFlow, ParsingError> {
+    if blocks.as_rule() != Rule::blocks {
+        return Err(annotate_error(&blocks, "blocks interpretation",
+            format!("Expected blocks, found {:?}", blocks.as_rule()), state));
+    }
+    let block_pairs: Vec<Pair<Rule>> = blocks.into_inner().collect();
+    let targets = scan_jump_targets(&block_pairs);
+    state.jump_scopes.push(targets.keys().cloned().collect());
+    let result = run_blocks(&block_pairs, &targets, output, state);
+    state.jump_scopes.pop();
+    result
+}
+
+/// Execute the blocks of one scope in order, resolving jumps against the
+/// scope's own labels and block numbers. A jump that cannot be resolved here
+/// is handed to the enclosing scope (that is how a jump leaves an IF body or
+/// a LOOP); the outermost caller turns an unresolved jump into an error.
+fn run_blocks(
+    block_pairs: &[Pair<Rule>],
+    targets: &HashMap<String, Vec<usize>>,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<BlockFlow, ParsingError> {
+    let mut index = 0;
+    let mut jumps_taken = 0;
+    while index < block_pairs.len() {
+        match interpret_block(block_pairs[index].clone(), output, state)? {
+            BlockFlow::Continue => index += 1,
+            BlockFlow::EndProgram => return Ok(BlockFlow::EndProgram),
+            BlockFlow::Jump(request) => match resolve_jump(targets, index, &request) {
+                Some(destination) => {
+                    // Only backward jumps can form cycles; bound them like the
+                    // loop statements (tripping at the same >= threshold).
+                    // Forward jumps strictly advance and are fine in any number.
+                    if destination <= index {
+                        jumps_taken += 1;
+                        if jumps_taken >= state.iteration_limit {
+                            return Err(ParsingError::LoopLimit {
+                                limit: state.iteration_limit.to_string(),
+                            });
+                        }
+                    }
+                    index = destination;
+                }
+                None => return Ok(BlockFlow::Jump(request)),
+            },
         }
     }
+    Ok(BlockFlow::Continue)
 }
