@@ -5,12 +5,6 @@ from nc_gcode_interpreter import nc_to_dataframe
 @pytest.mark.parametrize(
     "program",
     [
-        "GOTOF MYLABEL\nX2",  # jump forward to a label
-        "GOTOF 20\nX2",  # jump forward to a block number
-        "GOTOB START\nX2",  # jump backward
-        "GOTO END1\nX2",  # jump
-        "GOTOC TARGET\nX2",  # jump without alarm
-        "LOOP\nX1\nENDLOOP",  # endless loop, can only be left with a jump
         "MIRROR X0\nX2",  # mirroring frame
         "AMIRROR X0\nX2",  # additive mirroring frame
         "ROT RPL=30\nX2",  # rotation frame
@@ -22,8 +16,8 @@ from nc_gcode_interpreter import nc_to_dataframe
 )
 def test_unsupported_statements_error_loudly(program):
     """
-    Statements that would silently corrupt the output (skipped jumps,
-    unmodeled frame transformations) must raise instead of being ignored.
+    Statements that would silently corrupt the output (unmodeled frame
+    transformations) must raise instead of being ignored.
     """
     with pytest.raises(ValueError, match="not supported"):
         nc_to_dataframe(program)

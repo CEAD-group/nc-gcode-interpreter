@@ -1,0 +1,6 @@
+N,X,M,comment
+,,,; Program branch (CASE ... OF ... DEFAULT ...)
+30,,,
+40,1.000,,
+45,1.000,,
+70,1.000,M30,

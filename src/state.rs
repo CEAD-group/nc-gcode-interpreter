@@ -1,5 +1,5 @@
 use crate::errors::ParsingError;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Block addresses: per-block values that are emitted to the output like axes,
 /// but are not axes (no translation applies) and not user variables.
@@ -16,6 +16,10 @@ pub struct State {
     pub iteration_limit: usize,
     pub axis_index_map: Option<HashMap<String, usize>>,
     pub allow_undefined_variables: bool,
+    /// Stack of jump-target sets (labels and block numbers), one per active
+    /// `blocks` scope, innermost last. Used by GOTOC to decide whether its
+    /// destination exists anywhere on the scope chain before jumping.
+    pub jump_scopes: Vec<HashSet<String>>,
     /// Store line offsets for efficient error reporting
     line_offsets: Vec<usize>,
     /// Store the input text for error messages
@@ -57,9 +61,16 @@ impl State {
             iteration_limit,
             axis_index_map,
             allow_undefined_variables,
+            jump_scopes: Vec::new(),
             line_offsets: Vec::new(),
             input: String::new(),
         }
+    }
+
+    /// True if a jump target (canonical key) is defined in any scope on the
+    /// currently active scope chain.
+    pub fn jump_target_visible(&self, key: &str) -> bool {
+        self.jump_scopes.iter().any(|scope| scope.contains(key))
     }
 
     /// Sets the input text and pre-calculates line offsets for efficient access

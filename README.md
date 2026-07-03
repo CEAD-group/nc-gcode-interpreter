@@ -12,10 +12,11 @@ The **NC-GCode-Interpreter** offers a streamlined and efficient solution for int
 
 - **G Group Commands**: Recognizes G-code groups and modal G-code commands.
 - **Global Transformations**: Supports commands like `TRANS` and `ATRANS` for adjusting coordinates globally.
-- **Looping Constructs**: Handles loops using `WHILE` and `FOR` statements.
+- **Looping Constructs**: Handles loops using `WHILE`, `FOR`, `REPEAT ... UNTIL` and `LOOP ... ENDLOOP` statements.
 - **Variable Handling**: Supports definition and manipulation of local variables.
 - **Conditional Logic**: Implements conditional execution with `IF`, `ELSE`, and `ENDIF`.
-- **Arithmetic Operations**: Supports basic operations such as addition, subtraction, multiplication, and division.
+- **Program Jumps**: Jump labels (`MY_LABEL:`) and block numbers as jump destinations for `GOTOF`, `GOTOB`, `GOTO` and `GOTOC`, including single-block conditional jumps (`IF R4>0 GOTOB LA1`) and the `CASE ... OF ... DEFAULT ...` program branch. An executed `M2`/`M17`/`M30` ends the program, so code after the end marker (common in programs with jumps) is not executed. `GOTOS` is parsed but continues with the next block, matching the control's behavior when the PLC does not request a program restart.
+- **Arithmetic Operations**: Supports basic operations such as addition, subtraction, multiplication, and division, plus the arithmetic functions `SIN`, `COS`, `TAN`, `ASIN`, `ACOS`, `ATAN2`, `SQRT`, `ABS`, `POT`, `TRUNC`, `ROUND`, `ROUNDUP`, `LN`, `EXP`, `MINVAL`, `MAXVAL` and `BOUND`.
 - **Array Operations**: Manages arrays and allows operations on them.
 - **Incremental Changes**: Facilitates incremental changes in axes positions like `X=IC(2)`.
 - **Spline Programming**: `ASPLINE`, `BSPLINE` and `CSPLINE` blocks with their start/end conditions (`BAUTO`/`BNAT`/`BTAN`, `EAUTO`/`ENAT`/`ETAN`) and the spline block addresses `PW` (point weight), `SD` (spline degree) and `PL` (parameter interval length). Block addresses appear as output columns; unlike axes they receive no `TRANS` offset and are not forward-filled, since e.g. a point weight only applies to the point it is programmed with.

@@ -1,6 +1,6 @@
 //interpreter.rs
 use crate::errors::ParsingError;
-use crate::interpret_rules::interpret_blocks;
+use crate::interpret_rules::{interpret_blocks, BlockFlow};
 use crate::output::Table;
 use crate::state::{self, State};
 use crate::types::{NCParser, Rule, Value};
@@ -80,6 +80,10 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
             message: "No inner blocks found".to_string(),
         })?;
 
-    interpret_blocks(blocks, &mut results, state)?;
-    Ok(results)
+    match interpret_blocks(blocks, &mut results, state)? {
+        BlockFlow::Continue | BlockFlow::EndProgram => Ok(results),
+        // A jump that no scope could resolve: the destination does not exist
+        // in the programmed search direction (alarm 14080 on a real control).
+        BlockFlow::Jump(request) => Err(request.into_not_found_error()),
+    }
 }
