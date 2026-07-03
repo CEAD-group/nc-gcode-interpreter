@@ -11,6 +11,7 @@ mod interpret_rules;
 mod interpreter;
 mod modal_groups;
 mod state;
+mod structure_scan;
 mod output;
 mod types;
 

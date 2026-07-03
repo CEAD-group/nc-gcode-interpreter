@@ -146,6 +146,18 @@ reached from outside those bodies.
         hint: String,
     },
     #[error(r#"
+Unmatched control structure on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: {message}.
+"#)]
+    UnmatchedStructure {
+        line_no: usize,
+        preview: String,
+        message: String,
+    },
+    #[error(r#"
 Unknown G code on line {line_no}
 ----------------------------------------
 Line: {preview}
