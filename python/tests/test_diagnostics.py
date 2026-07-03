@@ -30,15 +30,63 @@ def test_call_with_arguments_does_not_warn(capfd):
 
 
 def test_parse_errors_use_human_phrasing():
-    """Grammar-internal rule names (gg08_work_offset, label_name, ...) must
-    not leak into parse error messages."""
+    """Grammar-internal rule names (label_name, frame_kw, ...) must not
+    leak into parse error messages."""
     with pytest.raises(ValueError) as excinfo:
-        nc_to_dataframe("X1\nIF R1>0\nX2\nX3")
+        nc_to_dataframe("G1 X10 Y=")
     message = str(excinfo.value)
     assert "label_name" not in message
     assert "frame_kw" not in message
-    assert "gg0" not in message
+    assert "axis_increment" not in message
     assert "expected" in message
+
+
+@pytest.mark.parametrize(
+    "program, expected_line, expected_message",
+    [
+        ("X1\nIF R1>0\nX2\nX3", 2, "IF is never closed"),
+        ("WHILE R1<5\nX1", 1, "WHILE is never closed"),
+        ("X1\nENDIF", 2, "ENDIF without a preceding IF"),
+        ("X1\nELSE\nX2", 2, "ELSE without a preceding IF"),
+        ("WHILE R1<5\nX1\nENDIF", 3, "innermost open structure is WHILE from line 1"),
+        ("IF R1>0\nWHILE R2<5\nX1\nENDIF\nENDWHILE", 4, "innermost open structure is WHILE from line 2"),
+        # Nested unclosed structures: the innermost one is the actionable fix
+        # (its closer must come first).
+        ("IF R1>0\nWHILE R2<5\nX1", 2, "WHILE is never closed"),
+        # The grammar allows whitespace between N and the block number.
+        ("N 10 IF R1>0\nX1", 1, "IF is never closed"),
+    ],
+    ids=[
+        "missing-ENDIF",
+        "missing-ENDWHILE",
+        "stray-ENDIF",
+        "stray-ELSE",
+        "wrong-closer",
+        "crossed-nesting",
+        "nested-unclosed-reports-innermost",
+        "block-number-with-space",
+    ],
+)
+def test_unmatched_structures_point_at_the_cause(program, expected_line, expected_message):
+    """Unclosed or crossed control structures must name the offending line,
+    not fail at the end of the file like a raw PEG parse does."""
+    with pytest.raises(ValueError) as excinfo:
+        nc_to_dataframe(program)
+    message = str(excinfo.value)
+    assert expected_message in message
+    assert f"line {expected_line}" in message
+
+
+def test_single_line_conditional_jump_is_not_an_opener():
+    df, _state = nc_to_dataframe("R1=1\nIF R1>0 GOTOF DONE\nX999\nDONE: X1")
+    assert df["X"].drop_nulls().to_list() == [1.0]
+
+
+def test_label_starting_with_structure_keyword_is_not_an_opener():
+    """A label like REPEAT_HERE: (or even UNTIL_X:) must not be taken for a
+    structure keyword by the pre-scan."""
+    df, _state = nc_to_dataframe("GOTOF UNTIL_X\nX999\nUNTIL_X: X1")
+    assert df["X"].to_list() == [1.0]
 
 
 def test_jump_error_suggests_similar_label():

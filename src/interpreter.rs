@@ -56,6 +56,10 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
     // Store input for error messages
     state.set_input(input.to_string());
 
+    // Validate control-structure nesting first: a PEG reports an unclosed
+    // IF/WHILE at the end of the file; the line scan reports the opener.
+    crate::structure_scan::check_structures(input)?;
+
     // Initialize results with an empty HashMap
     let mut results = vec![HashMap::new()];
 

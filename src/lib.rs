@@ -9,6 +9,7 @@ pub mod interpreter;
 mod modal_groups;
 pub mod output;
 mod state;
+mod structure_scan;
 
 #[cfg(feature = "python")]
 mod python_bindings {
