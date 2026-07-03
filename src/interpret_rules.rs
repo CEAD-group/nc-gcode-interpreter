@@ -33,14 +33,75 @@ pub struct JumpRequest {
 }
 
 impl JumpRequest {
-    pub fn into_not_found_error(self) -> ParsingError {
+    pub fn into_not_found_error(self, state: &State) -> ParsingError {
+        // When the destination exists as written, "did you mean" would
+        // absurdly suggest the very name the user typed; the actual problem
+        // is the search direction or the scope it is defined in.
+        let hint = if state.seen_jump_targets.contains(&self.key) {
+            let reason = match self.direction {
+                JumpDirection::Forward => {
+                    "GOTOF only searches toward the end of the program; use GOTOB or GOTO for a destination that lies before this block"
+                }
+                JumpDirection::Backward => {
+                    "GOTOB only searches toward the beginning of the program; use GOTOF or GOTO for a destination that lies after this block"
+                }
+                JumpDirection::BothForwardFirst => "a jump cannot enter an IF or loop body from outside",
+            };
+            format!(
+                "\n'{}' is defined, but not where this jump searches: {}.",
+                self.display, reason
+            )
+        } else {
+            suggest_jump_target(&self.key, &state.seen_jump_targets)
+                .map(|s| format!("\nDid you mean '{}'?", s))
+                .unwrap_or_default()
+        };
         ParsingError::JumpTargetNotFound {
             line_no: self.line_no,
             preview: self.preview,
             target: self.display,
             search_direction: self.direction.search_description().to_string(),
+            hint,
         }
     }
+}
+
+/// Suggest the closest jump target of the same kind (label or block number)
+/// within a small edit distance, for "did you mean" hints.
+fn suggest_jump_target(key: &str, seen: &std::collections::HashSet<String>) -> Option<String> {
+    let mut best: Option<(usize, &str)> = None;
+    for candidate in seen {
+        // Keys are prefixed "LABEL:"/"N:", so kinds can never cross-match
+        // within distance 2 unless the names themselves are close.
+        // Distance 0 (the target exists) is handled by the caller with a
+        // direction/scope hint; suggesting the same name would be absurd.
+        let distance = edit_distance(key, candidate);
+        if (1..=2).contains(&distance) && best.map_or(true, |(d, _)| distance < d) {
+            best = Some((distance, candidate));
+        }
+    }
+    best.map(|(_, c)| {
+        c.strip_prefix("LABEL:")
+            .map(str::to_string)
+            .or_else(|| c.strip_prefix("N:").map(|n| format!("N{}", n)))
+            .unwrap_or_else(|| c.to_string())
+    })
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut current = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let substitution = prev[j] + usize::from(ca != cb);
+            current[j + 1] = substitution.min(prev[j + 1] + 1).min(current[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut current);
+    }
+    prev[b.len()]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1295,6 +1356,25 @@ fn is_end_of_program_m_code(code: &str) -> bool {
     matches!(digits.trim_start_matches('0'), "2" | "17" | "30")
 }
 
+/// True for words shaped like a G code: G followed by digits only.
+fn is_g_number_shaped(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some('G') | Some('g'))
+        && name.len() > 1
+        && chars.all(|c| c.is_ascii_digit())
+}
+
+/// True for words that look like an axis word with a typo or a missing
+/// space: a letter directly followed by a digit, with more letters later
+/// (Y2O, X10Y20). Legitimate subprogram names rarely have this shape.
+fn looks_like_axis_word_typo(name: &str) -> bool {
+    let chars: Vec<char> = name.chars().collect();
+    chars.len() >= 3
+        && chars[0].is_ascii_alphabetic()
+        && chars[1].is_ascii_digit()
+        && chars[2..].iter().any(|c| c.is_ascii_alphabetic())
+}
+
 fn interpret_statement(
     element: Pair<Rule>,
     output: &mut Output,
@@ -1316,7 +1396,29 @@ fn interpret_statement(
         let last = output.last_mut().expect("Output vector should not be empty");
         match statement.as_rule() {
             Rule::non_returning_function_call => {
+                let (line_no, preview) = get_error_context(&statement, state);
                 let (key, value) = interpret_non_returning_function_call(statement);
+                let name = value.split('(').next().unwrap_or("").trim();
+                // A bare G<digits> word can only land here when no G-group
+                // matched it: an unknown G code. Program names may not look
+                // like a G code, so this is never a legitimate call.
+                if is_g_number_shaped(name) {
+                    return Err(ParsingError::UnknownGCommand {
+                        line_no,
+                        preview,
+                        code: name.to_uppercase(),
+                    });
+                }
+                // A parenless word like Y2O or X10Y20 is far more likely a
+                // mistyped axis word than a subprogram call; the toolpath
+                // would silently lose a move. Warn, but keep the call
+                // semantics: only the user can tell.
+                if !value.contains('(') && looks_like_axis_word_typo(name) {
+                    eprintln!(
+                        "Warning: '{}' (line {}) is interpreted as a subprogram call; did you mean one or more axis words (e.g. Y20)?",
+                        name, line_no
+                    );
+                }
                 last.insert(key, Value::Str(value));
             }
             Rule::g_command => {
@@ -1543,6 +1645,7 @@ pub fn interpret_blocks(
     }
     let block_pairs: Vec<Pair<Rule>> = blocks.into_inner().collect();
     let targets = scan_jump_targets(&block_pairs);
+    state.seen_jump_targets.extend(targets.keys().cloned());
     state.jump_scopes.push(targets.keys().cloned().collect());
     let result = run_blocks(&block_pairs, &targets, output, state);
     state.jump_scopes.pop();
