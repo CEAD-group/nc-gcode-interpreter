@@ -87,3 +87,265 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
         BlockFlow::Jump(request) => Err(request.into_not_found_error()),
     }
 }
+
+#[cfg(test)]
+mod parse_speed {
+    // NCParser and pest::Parser arrive via the glob from the parent module's
+    // imports; explicit re-imports here would be redundant (though legal -
+    // a glob import may be shadowed, only two explicit imports collide).
+    use super::*;
+    use std::fmt::Write as _;
+    use std::time::Instant;
+
+    /// Deterministic pseudo-random generator (LCG) so the benchmark input is
+    /// reproducible without pulling in a rand dependency.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn coord(&mut self) -> f64 {
+            (self.next() % 2_000_000) as f64 / 1000.0 - 1000.0
+        }
+    }
+
+    /// Generate a large-format-additive-style flood file: mostly linear moves
+    /// in XYZ, sometimes ABC, an E axis, an external axis, occasional modal
+    /// G codes, block numbers, comments and spline sections.
+    fn generate_flood(lines: usize) -> String {
+        let mut rng = Lcg(42);
+        let mut out = String::with_capacity(lines * 40);
+        out.push_str("; synthetic parse benchmark\nG54 G90 G17\nG1 F2400\nX0 Y0 Z0 E0\n");
+        let mut in_spline = false;
+        for i in 0..lines {
+            let x = rng.coord();
+            let y = rng.coord();
+            let z = rng.coord();
+            match rng.next() % 1000 {
+                0..=699 => {
+                    let _ = writeln!(out, "X{:.3} Y{:.3} Z{:.3}", x, y, z);
+                }
+                700..=849 => {
+                    let _ = writeln!(out, "X{:.3} Y{:.3} Z{:.3} E{:.3}", x, y, z, rng.coord().abs());
+                }
+                850..=909 => {
+                    let _ = writeln!(out, "G1 X{:.3} Y{:.3} F{}", x, y, 1200 + rng.next() % 4800);
+                }
+                910..=949 => {
+                    let _ = writeln!(
+                        out,
+                        "X{:.3} Y{:.3} Z{:.3} A{:.3} B{:.3} C{:.3}",
+                        x,
+                        y,
+                        z,
+                        rng.coord() / 10.0,
+                        rng.coord() / 10.0,
+                        rng.coord() / 10.0
+                    );
+                }
+                950..=969 => {
+                    let _ = writeln!(out, "X{:.3} Y{:.3} ELX={:.3}", x, y, rng.coord());
+                }
+                970..=984 => {
+                    let _ = writeln!(out, "N{} X{:.3} Y{:.3}", i, x, y);
+                }
+                985..=994 => {
+                    let _ = writeln!(out, "; layer {} progress marker", i);
+                }
+                _ => {
+                    if in_spline {
+                        out.push_str("G1\n");
+                    } else {
+                        out.push_str("BSPLINE\n");
+                    }
+                    in_spline = !in_spline;
+                    let _ = writeln!(out, "X{:.3} Y{:.3} Z{:.3} PW=1.5", x, y, z);
+                }
+            }
+        }
+        out.push_str("M30\n");
+        out
+    }
+
+    /// Stage-1 prototype: byte-level scanner for trivially decodable lines.
+    /// Returns the sum of decoded numeric values (so the optimizer cannot
+    /// remove the extraction work), or None when the line needs the full
+    /// grammar. Deliberately conservative: any unexpected byte rejects.
+    fn scan_trivial_line(line: &str) -> Option<f64> {
+        let b = line.as_bytes();
+        let mut i = 0usize;
+        let mut sum = 0.0f64;
+        let n = b.len();
+        let skip_ws = |i: &mut usize| while *i < n && (b[*i] == b' ' || b[*i] == b'\t') { *i += 1 };
+        let parse_num = |i: &mut usize| -> Option<f64> {
+            let start = *i;
+            if *i < n && b[*i] == b'-' { *i += 1; }
+            let digits_start = *i;
+            while *i < n && b[*i].is_ascii_digit() { *i += 1; }
+            if *i == digits_start { return None; }
+            if *i < n && b[*i] == b'.' {
+                *i += 1;
+                while *i < n && b[*i].is_ascii_digit() { *i += 1; }
+            }
+            // reject 1e5 / 100X style tails; those need the real grammar
+            if *i < n && (b[*i].is_ascii_alphabetic() || b[*i] == b'_') { return None; }
+            line[start..*i].parse::<f64>().ok()
+        };
+        skip_ws(&mut i);
+        // optional block number
+        if i + 1 < n && (b[i] == b'N' || b[i] == b'n') && b[i + 1].is_ascii_digit() {
+            i += 1;
+            while i < n && b[i].is_ascii_digit() { i += 1; }
+            skip_ws(&mut i);
+        }
+        while i < n {
+            if b[i] == b';' { break; } // trailing comment: fine
+            if !b[i].is_ascii_alphabetic() && b[i] != b'_' { return None; }
+            let word_start = i;
+            i += 1;
+            // single letter followed directly by a number: axis/address word
+            if i < n && (b[i].is_ascii_digit() || b[i] == b'-' || b[i] == b'.') {
+                sum += parse_num(&mut i)?;
+            } else {
+                // multi-char word: bare keyword or ident=number
+                while i < n && (b[i].is_ascii_alphanumeric() || b[i] == b'_') { i += 1; }
+                if i < n && b[i] == b'=' {
+                    i += 1;
+                    sum += parse_num(&mut i)?;
+                } else {
+                    // bare word (G-keyword, M-code was covered above, CP,
+                    // TRAORI...): claimable only with a vocabulary table;
+                    // prototype counts it as claimed with value 0. A real
+                    // implementation looks it up and falls back on miss.
+                    let _word = &line[word_start..i];
+                }
+            }
+            skip_ws(&mut i);
+        }
+        Some(sum)
+    }
+
+    /// Not a correctness test: prints parse/interpret throughput for a 1M
+    /// line flood file. Run with:
+    /// cargo test --release --lib parse_speed -- --ignored --nocapture
+    #[test]
+    #[ignore = "performance benchmark, run explicitly in release mode"]
+    fn parse_speed_1m_lines() {
+        let lines = std::env::var("BENCH_LINES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1_000_000usize);
+        // BENCH_FILE parses a real program instead of the synthetic flood;
+        // BENCH_MODE isolates a single line shape to attribute parse cost.
+        if let Ok(path) = std::env::var("BENCH_FILE") {
+            let input = std::fs::read_to_string(&path).expect("BENCH_FILE must be readable");
+            let lines = input.lines().count();
+            println!("input: {} ({} lines, {:.1} MB)", path, lines, input.len() as f64 / 1_048_576.0);
+            let start = Instant::now();
+            let pairs = NCParser::parse(Rule::file, &input).expect("BENCH_FILE must parse");
+            let parse_time = start.elapsed();
+            println!(
+                "pest parse:      {:>8.2?}  ({:.0} klines/s, {:.1} MB/s)",
+                parse_time,
+                lines as f64 / parse_time.as_secs_f64() / 1000.0,
+                input.len() as f64 / 1_048_576.0 / parse_time.as_secs_f64()
+            );
+            println!("tree pairs: {}", pairs.flatten().count());
+
+            // Prototype of a stage-1 "trivial line" scanner: claims lines of
+            // the shape [N<d>] (WORD)* [;comment] where WORD is LETTER<num>,
+            // ident=<num>, G<d>/M<d>, or a bare word - i.e. no expressions,
+            // no control flow, no DEF/TRANS. Decodes key/value pairs as it
+            // goes so the timing includes real extraction work.
+            let start = Instant::now();
+            let mut claimed = 0usize;
+            let mut fallback = 0usize;
+            let mut checksum = 0.0f64;
+            for line in input.lines() {
+                match scan_trivial_line(line) {
+                    Some(sum) => {
+                        claimed += 1;
+                        checksum += sum;
+                    }
+                    None => fallback += 1,
+                }
+            }
+            let scan_time = start.elapsed();
+            println!(
+                "stage-1 scan:    {:>8.2?}  ({:.0} klines/s, {:.1} MB/s) - {} claimed, {} fall back to pest ({:.3}%), checksum {:.1}",
+                scan_time,
+                lines as f64 / scan_time.as_secs_f64() / 1000.0,
+                input.len() as f64 / 1_048_576.0 / scan_time.as_secs_f64(),
+                claimed,
+                fallback,
+                100.0 * fallback as f64 / lines as f64,
+                checksum
+            );
+            return;
+        }
+        let input = match std::env::var("BENCH_MODE").as_deref() {
+            Ok("xyz") => {
+                let mut rng = Lcg(42);
+                let mut out = String::with_capacity(lines * 40);
+                for _ in 0..lines {
+                    let _ = writeln!(out, "X{:.3} Y{:.3} Z{:.3}", rng.coord(), rng.coord(), rng.coord());
+                }
+                out
+            }
+            Ok("g1") => {
+                let mut rng = Lcg(42);
+                let mut out = String::with_capacity(lines * 40);
+                for _ in 0..lines {
+                    let _ = writeln!(out, "G1 X{:.3} Y{:.3} F2400", rng.coord(), rng.coord());
+                }
+                out
+            }
+            Ok("g54") => "G54\n".repeat(lines),
+            Ok("elx") => {
+                let mut rng = Lcg(42);
+                let mut out = String::with_capacity(lines * 40);
+                for _ in 0..lines {
+                    let _ = writeln!(out, "X{:.3} Y{:.3} ELX={:.3}", rng.coord(), rng.coord(), rng.coord());
+                }
+                out
+            }
+            Ok("comment") => "; layer progress marker\n".repeat(lines),
+            Ok("bspline") => "BSPLINE\n".repeat(lines),
+            _ => generate_flood(lines),
+        };
+        println!(
+            "input: {} lines, {:.1} MB",
+            lines,
+            input.len() as f64 / 1_048_576.0
+        );
+
+        let start = Instant::now();
+        let pairs = NCParser::parse(Rule::file, &input).expect("benchmark input must parse");
+        let parse_time = start.elapsed();
+        println!(
+            "pest parse:      {:>8.2?}  ({:.0} klines/s, {:.1} MB/s)",
+            parse_time,
+            lines as f64 / parse_time.as_secs_f64() / 1000.0,
+            input.len() as f64 / 1_048_576.0 / parse_time.as_secs_f64()
+        );
+
+        let start = Instant::now();
+        let token_count = pairs.flatten().count();
+        println!(
+            "tree iteration:  {:>8.2?}  ({} pairs)",
+            start.elapsed(),
+            token_count
+        );
+
+        let start = Instant::now();
+        let (table, _state) =
+            nc_to_table(&input, None, None, None, 10_000, false, None, false).expect("interpret");
+        println!(
+            "full nc_to_table:{:>8.2?}  ({} rows, {} columns)",
+            start.elapsed(),
+            table.columns.first().map_or(0, |(_, c)| c.len()),
+            table.columns.len()
+        );
+    }
+}

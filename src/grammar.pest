@@ -3,8 +3,17 @@ blocks              =  { block ~ (newline ~ block)* }
 newline             = _{ "\n" | "\r\n" }
 WHITESPACE          = _{ " " | "\t" }
 QUOTE               = _{ "\"" }
-comment             =  { ";" ~ (!newline ~ ANY)* }
-block               =  { block_number_set? ~ label_def? ~ (definition | frame_op | control | statement*) ~ comment? }
+// Atomic: without @ pest would attempt the implicit WHITESPACE rule between
+// every single character of the comment body, which measurably dominates
+// comment-heavy files.
+comment             = @{ ";" ~ (!newline ~ ANY)* }
+// Alternatives are ordered for parse speed on coordinate-flood programs:
+// statements are tried before control, which is safe because every control
+// keyword (IF, GOTO.., CASE, LOOP, FOR, WHILE, REPEAT) is in `reserved` and
+// therefore can never parse as a statement. definition and frame_op must
+// stay in front: DEF/TRANS/... are not reserved words, so a statement would
+// otherwise swallow them as function calls or assignments.
+block               =  { block_number_set? ~ label_def? ~ (definition | frame_op | statement+ | control)? ~ comment? }
 block_number_set    = _{ "N" ~ block_number }
 control             =  {
     gotos_statement
@@ -52,7 +61,8 @@ condition              =  { base_condition | ("(" ~ base_condition ~ ")") }
 base_condition         = _{ (expression ~ relational_operator ~ expression) | expression }
 relational_operator    =  { "<=" | ">=" | "==" | "<>" | "<" | ">" }
 statement              =  {
-    g_command_numbered
+    axis_word
+  | g_command_numbered
   | m_command
   | tool_selection
   | assignment_multi
@@ -60,6 +70,14 @@ statement              =  {
   | g_command
   | non_returning_function_call
 }
+// Fast path for the by-far most common statement in real programs: a bare
+// axis word like `X123.456`. Semantically identical to the first alternative
+// of `assignment`, but hoisted above `assignment_multi` so that flood lines
+// of coordinates skip the identifier rule (whose reserved-word lookahead
+// tries ~19 case-insensitive keywords) entirely - that lookahead dominated
+// the parse profile. The `!"["` guard keeps arrays whose name happens to
+// look like an axis word (e.g. `X1[2]=...`) flowing to assignment_multi.
+axis_word              =  { variable_single_char ~ value ~ !"[" }
 
 // local variable definitions
 definition = { ^"DEF" ~ data_type ~ (assignment_multi | assignment | variable_array | variable) ~ ("," ~ (assignment_multi | assignment | variable_array | variable))* }
@@ -71,11 +89,13 @@ reserved   = _{
     ^"IF"
   | ^"ELSE"
   | ^"ENDIF"
-  | ^"GOTO"
+  // Longest first: PEG choice commits, so GOTO would shadow GOTOB/GOTOF/
+  // GOTOC/GOTOS (the boundary check then fails without retrying).
   | ^"GOTOB"
   | ^"GOTOF"
   | ^"GOTOC"
   | ^"GOTOS"
+  | ^"GOTO"
   | ^"CASE"
   | ^"OF"
   | ^"DEFAULT"
@@ -124,7 +144,9 @@ assignment_multi =  { variable_array ~ "=" ~ (value_array | value_repeating) }
 value_array      =  { "SET" ~ "(" ~ (expression | value_none) ~ ("," ~ (expression | value_none))* ~ ")" }
 value_repeating  =  { "REP" ~ "(" ~ expression ~ ("," ~ expression)? ~ ")" }
 value_none       =  { "" }
-value            =  { float | integer }
+// Atomic: the interpreter only reads the full lexeme (as_str), so the inner
+// float/integer pairs would be two dead tokens per coordinate on the queue.
+value            = @{ float | integer }
 op               = _{ op_add | op_sub | op_mul | op_div | op_int_div | op_mod }
 op_add           =  { "+" }
 op_sub           =  { "-" }

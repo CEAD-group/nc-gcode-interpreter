@@ -1353,7 +1353,9 @@ fn interpret_statement(
                     flow = BlockFlow::EndProgram;
                 }
             }
-            Rule::assignment => {
+            // axis_word is the hoisted fast-path form of assignment's first
+            // alternative; both carry (variable_single_char, value) inners.
+            Rule::assignment | Rule::axis_word => {
                 let (key, local_value) = interpret_assignment(statement, state)?;
                 if state.is_axis(&key) {
                     // State keeps local coordinates; the output row gets the machine
