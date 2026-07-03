@@ -8,6 +8,7 @@ mod interpret_rules;
 pub mod interpreter;
 mod modal_groups;
 pub mod output;
+mod line_driver;
 mod state;
 mod structure_scan;
 

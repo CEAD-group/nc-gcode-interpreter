@@ -49,8 +49,12 @@ impl Structure {
 /// Validate that every IF/WHILE/FOR/LOOP/REPEAT has its matching closer and
 /// vice versa. Returns the first structural error with the line that caused
 /// it (the opener for a missing closer, the closer for a missing opener).
-pub fn check_structures(input: &str) -> Result<(), ParsingError> {
+/// On success, reports whether the program contains any multi-line control
+/// structure at all: structure-free programs (all CAM output) qualify for
+/// the per-line fast path.
+pub fn check_structures(input: &str) -> Result<ProgramShape, ParsingError> {
     let mut stack: Vec<(Structure, usize, String)> = Vec::new();
+    let mut has_block_structures = false;
 
     for (index, raw_line) in input.lines().enumerate() {
         let line_no = index + 1;
@@ -70,13 +74,26 @@ pub fn check_structures(input: &str) -> Result<(), ParsingError> {
             // jump form (IF <condition> GOTO... <target>).
             "IF" => {
                 if !contains_goto_word(line) {
+                    has_block_structures = true;
                     stack.push((Structure::If, line_no, raw_line.to_string()));
                 }
             }
-            "WHILE" => stack.push((Structure::While, line_no, raw_line.to_string())),
-            "FOR" => stack.push((Structure::For, line_no, raw_line.to_string())),
-            "LOOP" => stack.push((Structure::Loop, line_no, raw_line.to_string())),
-            "REPEAT" => stack.push((Structure::Repeat, line_no, raw_line.to_string())),
+            "WHILE" => {
+                has_block_structures = true;
+                stack.push((Structure::While, line_no, raw_line.to_string()));
+            }
+            "FOR" => {
+                has_block_structures = true;
+                stack.push((Structure::For, line_no, raw_line.to_string()));
+            }
+            "LOOP" => {
+                has_block_structures = true;
+                stack.push((Structure::Loop, line_no, raw_line.to_string()));
+            }
+            "REPEAT" => {
+                has_block_structures = true;
+                stack.push((Structure::Repeat, line_no, raw_line.to_string()));
+            }
             "ELSE" => match stack.last() {
                 Some((Structure::If, _, _)) => {}
                 Some((open, open_line, _)) => {
@@ -131,7 +148,15 @@ pub fn check_structures(input: &str) -> Result<(), ParsingError> {
             ),
         });
     }
-    Ok(())
+    Ok(ProgramShape { has_block_structures })
+}
+
+/// Result of a successful structure scan.
+pub struct ProgramShape {
+    /// True when the program contains IF/WHILE/FOR/LOOP/REPEAT blocks
+    /// (multi-line structures); false for straight-line programs, which
+    /// may still contain labels, jumps and single-line conditional jumps.
+    pub has_block_structures: bool,
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -205,9 +230,9 @@ fn contains_goto_word(line: &str) -> bool {
         if matches!(bytes.get(end), Some(b'F') | Some(b'B') | Some(b'C') | Some(b'S')) {
             end += 1;
         }
-        let followed_ok = bytes
+        let followed_ok = !bytes
             .get(end)
-            .map_or(true, |b| !(b.is_ascii_alphanumeric() || *b == b'_'));
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
         if preceded_ok && followed_ok {
             return true;
         }

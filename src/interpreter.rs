@@ -58,10 +58,24 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
 
     // Validate control-structure nesting first: a PEG reports an unclosed
     // IF/WHILE at the end of the file; the line scan reports the opener.
-    crate::structure_scan::check_structures(input)?;
+    let shape = crate::structure_scan::check_structures(input)?;
 
     // Initialize results with an empty HashMap
     let mut results = vec![HashMap::new()];
+
+    // Stage-1 fast path: structure-free programs (all CAM output) are
+    // interpreted line by line - trivial lines through the byte decoder,
+    // the rest through per-line pest parses. NC_STAGE1=0 disables it.
+    if !shape.has_block_structures && crate::line_driver::stage1_enabled() {
+        let mut padded_lines = Vec::new();
+        // None: the line driver declined (padding budget); fall through to
+        // the whole-file parse below.
+        match crate::line_driver::interpret_lines(input, &mut padded_lines, &mut results, state)? {
+            Some(BlockFlow::Continue) | Some(BlockFlow::EndProgram) => return Ok(results),
+            Some(BlockFlow::Jump(request)) => return Err(request.into_not_found_error(state)),
+            None => {}
+        }
+    }
 
     let file = NCParser::parse(Rule::file, input)
         .map_err(|e| {
@@ -96,7 +110,7 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
 /// mapped to user-facing phrasing and deduplicated (all sixty G-group rules
 /// collapse into one "a G code" entry) instead of leaking grammar-internal
 /// rule names like `gg08_work_offset`.
-fn describe_parse_error(error: &pest::error::Error<Rule>) -> String {
+pub(crate) fn describe_parse_error(error: &pest::error::Error<Rule>) -> String {
     use pest::error::ErrorVariant;
     match &error.variant {
         ErrorVariant::ParsingError { positives, .. } if !positives.is_empty() => {
@@ -248,64 +262,6 @@ mod parse_speed {
         out
     }
 
-    /// Stage-1 prototype: byte-level scanner for trivially decodable lines.
-    /// Returns the sum of decoded numeric values (so the optimizer cannot
-    /// remove the extraction work), or None when the line needs the full
-    /// grammar. Deliberately conservative: any unexpected byte rejects.
-    fn scan_trivial_line(line: &str) -> Option<f64> {
-        let b = line.as_bytes();
-        let mut i = 0usize;
-        let mut sum = 0.0f64;
-        let n = b.len();
-        let skip_ws = |i: &mut usize| while *i < n && (b[*i] == b' ' || b[*i] == b'\t') { *i += 1 };
-        let parse_num = |i: &mut usize| -> Option<f64> {
-            let start = *i;
-            if *i < n && b[*i] == b'-' { *i += 1; }
-            let digits_start = *i;
-            while *i < n && b[*i].is_ascii_digit() { *i += 1; }
-            if *i == digits_start { return None; }
-            if *i < n && b[*i] == b'.' {
-                *i += 1;
-                while *i < n && b[*i].is_ascii_digit() { *i += 1; }
-            }
-            // reject 1e5 / 100X style tails; those need the real grammar
-            if *i < n && (b[*i].is_ascii_alphabetic() || b[*i] == b'_') { return None; }
-            line[start..*i].parse::<f64>().ok()
-        };
-        skip_ws(&mut i);
-        // optional block number
-        if i + 1 < n && (b[i] == b'N' || b[i] == b'n') && b[i + 1].is_ascii_digit() {
-            i += 1;
-            while i < n && b[i].is_ascii_digit() { i += 1; }
-            skip_ws(&mut i);
-        }
-        while i < n {
-            if b[i] == b';' { break; } // trailing comment: fine
-            if !b[i].is_ascii_alphabetic() && b[i] != b'_' { return None; }
-            let word_start = i;
-            i += 1;
-            // single letter followed directly by a number: axis/address word
-            if i < n && (b[i].is_ascii_digit() || b[i] == b'-' || b[i] == b'.') {
-                sum += parse_num(&mut i)?;
-            } else {
-                // multi-char word: bare keyword or ident=number
-                while i < n && (b[i].is_ascii_alphanumeric() || b[i] == b'_') { i += 1; }
-                if i < n && b[i] == b'=' {
-                    i += 1;
-                    sum += parse_num(&mut i)?;
-                } else {
-                    // bare word (G-keyword, M-code was covered above, CP,
-                    // TRAORI...): claimable only with a vocabulary table;
-                    // prototype counts it as claimed with value 0. A real
-                    // implementation looks it up and falls back on miss.
-                    let _word = &line[word_start..i];
-                }
-            }
-            skip_ws(&mut i);
-        }
-        Some(sum)
-    }
-
     /// Not a correctness test: prints parse/interpret throughput for a 1M
     /// line flood file. Run with:
     /// cargo test --release --lib parse_speed -- --ignored --nocapture
@@ -333,35 +289,6 @@ mod parse_speed {
             );
             println!("tree pairs: {}", pairs.flatten().count());
 
-            // Prototype of a stage-1 "trivial line" scanner: claims lines of
-            // the shape [N<d>] (WORD)* [;comment] where WORD is LETTER<num>,
-            // ident=<num>, G<d>/M<d>, or a bare word - i.e. no expressions,
-            // no control flow, no DEF/TRANS. Decodes key/value pairs as it
-            // goes so the timing includes real extraction work.
-            let start = Instant::now();
-            let mut claimed = 0usize;
-            let mut fallback = 0usize;
-            let mut checksum = 0.0f64;
-            for line in input.lines() {
-                match scan_trivial_line(line) {
-                    Some(sum) => {
-                        claimed += 1;
-                        checksum += sum;
-                    }
-                    None => fallback += 1,
-                }
-            }
-            let scan_time = start.elapsed();
-            println!(
-                "stage-1 scan:    {:>8.2?}  ({:.0} klines/s, {:.1} MB/s) - {} claimed, {} fall back to pest ({:.3}%), checksum {:.1}",
-                scan_time,
-                lines as f64 / scan_time.as_secs_f64() / 1000.0,
-                input.len() as f64 / 1_048_576.0 / scan_time.as_secs_f64(),
-                claimed,
-                fallback,
-                100.0 * fallback as f64 / lines as f64,
-                checksum
-            );
             return;
         }
         let input = match std::env::var("BENCH_MODE").as_deref() {

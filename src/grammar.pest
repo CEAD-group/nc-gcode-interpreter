@@ -1,4 +1,8 @@
 file                =  { SOI ~ blocks ~ newline? ~ EOI }
+// Entry point for parsing one line in isolation (stage-1 triage). Leading
+// newlines are allowed so a line can be parsed padded to its original file
+// position, keeping error positions in whole-file coordinates.
+line_entry          = _{ SOI ~ newline* ~ block ~ EOI }
 blocks              =  { block ~ (newline ~ block)* }
 newline             = _{ "\n" | "\r\n" }
 WHITESPACE          = _{ " " | "\t" }
