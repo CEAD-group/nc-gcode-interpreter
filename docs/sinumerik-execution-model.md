@@ -130,10 +130,17 @@ Sampling profile (samply) of the parse:
 4. `value` made atomic — the interpreter only reads the lexeme, so the
    inner `float`/`integer` pairs were two dead tokens per coordinate.
 
-Net effect: 3.74 s → 3.2 s parse (~15%), 17.5M → 14.3M pairs. The
-remaining time is pest's structural floor; a substantially faster front
-end (10×+) would mean replacing pest with a hand-rolled line lexer, which
-is not currently worth the grammar-maintainability loss.
+Net effect: 3.74 s → 3.2 s parse (~15%), 17.5M → 14.3M pairs.
+
+5. Moving the G vocabulary out of the grammar entirely (the ~600-literal
+   generated gg walls became a Rust lookup table, the grammar recognizes
+   only the lexical shapes `G<digits>` and `GFRAME[<n>]`) more than
+   halved what remained: **1.43 s** for the 1M-line mixed flood,
+   0.99 s for a pure-`G54` flood (was 3.58 s), 1.47 s for the real
+   319k-line Sheffield program (was 2.37 s). The win applies to *all*
+   line shapes because the compiled parser shrank by hundreds of literal
+   matchers. Beyond this, a substantially faster front end means the
+   stage-1 line triage below — not more grammar tuning.
 
 A trap worth recording: **PEG ordered choice commits.** In
 `(^"GOTO" | ^"GOTOF" ...) ~ boundary`, an input `GOTOF` matches `^"GOTO"`,

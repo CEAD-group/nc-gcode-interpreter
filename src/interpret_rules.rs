@@ -308,7 +308,8 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
     // Apply the function.
     // Sinumerik trigonometric functions work in degrees, not radians
     // (NC programming manual, "Operators and arithmetic functions").
-    match func_name.as_str() {
+    // Names are case-insensitive like the rest of the NC language.
+    match func_name.as_str().to_uppercase().as_str() {
         "SIN" => {
             check_args(1)?;
             Ok(args[0].to_radians().sin())
@@ -392,8 +393,11 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
             check_args(1)?;
             Ok(args[0].exp())
         },
-        _ => Err(ParsingError::ParseError {
-            message: format!("Unknown arithmetic function: {}", func_name.as_str()),
+        other => Err(ParsingError::ParsingContext {
+            line_no,
+            preview,
+            context: "expression".to_string(),
+            message: format!("'{}' is not a known arithmetic function", other),
         }),
     }
 }
@@ -506,14 +510,23 @@ fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> R
     let value = interpret_primary(pair.clone(), state)?;
     Ok(sign * value)
 }
-fn interpret_g_command(g_command: Pair<Rule>) -> (String, String) {
-    let inner_pair = g_command.into_inner().next().expect("Error");
-    let mut rule_name = format!("{:?}", inner_pair.as_rule());
-    let command_str = inner_pair.as_str().to_string();
-    if rule_name.is_empty() {
-        rule_name = command_str.clone();
+/// Classify a lexically G-shaped command (`G<digits>` or `GFRAME[<n>]`)
+/// against the vocabulary table: the column key is the G-group name, the
+/// value the command as written. An unknown G number is a hard error, like
+/// alarm 12470 "undefined G function" on a real control.
+fn interpret_g_command(g_command: Pair<Rule>, state: &State) -> Result<(String, String), ParsingError> {
+    let command_str = g_command.as_str().trim().to_string();
+    match crate::modal_groups::classify_g_command(&command_str.to_uppercase()) {
+        Some((group, _modal)) => Ok((group.to_string(), command_str)),
+        None => {
+            let (line_no, preview) = get_error_context(&g_command, state);
+            Err(ParsingError::UnknownGCommand {
+                line_no,
+                preview,
+                code: command_str.to_uppercase(),
+            })
+        }
     }
-    (rule_name, command_str)
 }
 fn interpret_m_command(m_command: Pair<Rule>) -> (String, String) {
     // Log the interpretd M command for debugging
@@ -1356,14 +1369,6 @@ fn is_end_of_program_m_code(code: &str) -> bool {
     matches!(digits.trim_start_matches('0'), "2" | "17" | "30")
 }
 
-/// True for words shaped like a G code: G followed by digits only.
-fn is_g_number_shaped(name: &str) -> bool {
-    let mut chars = name.chars();
-    matches!(chars.next(), Some('G') | Some('g'))
-        && name.len() > 1
-        && chars.all(|c| c.is_ascii_digit())
-}
-
 /// True for words that look like an axis word with a typo or a missing
 /// space: a letter directly followed by a digit, with more letters later
 /// (Y2O, X10Y20). Legitimate subprogram names rarely have this shape.
@@ -1399,50 +1404,54 @@ fn interpret_statement(
                 let (line_no, preview) = get_error_context(&statement, state);
                 let (key, value) = interpret_non_returning_function_call(statement);
                 let name = value.split('(').next().unwrap_or("").trim();
-                // A bare G<digits> word can only land here when no G-group
-                // matched it: an unknown G code. Program names may not look
-                // like a G code, so this is never a legitimate call.
-                if is_g_number_shaped(name) {
-                    return Err(ParsingError::UnknownGCommand {
-                        line_no,
-                        preview,
-                        code: name.to_uppercase(),
-                    });
-                }
-                // A parenless word like Y2O or X10Y20 is far more likely a
-                // mistyped axis word than a subprogram call; the toolpath
-                // would silently lose a move. Warn, but keep the call
-                // semantics: only the user can tell.
-                if !value.contains('(') && looks_like_axis_word_typo(name) {
-                    eprintln!(
-                        "Warning: '{}' (line {}) is interpreted as a subprogram call; did you mean one or more axis words (e.g. Y20)?",
-                        name, line_no
-                    );
+                if !value.contains('(') {
+                    // Frame instructions are only interpreted as frame_op at
+                    // the start of a block ("alone in the block" per manual
+                    // 3.12.2.1). Reaching this point means one followed
+                    // another statement, and e.g. `G1 MIRROR X0` would
+                    // silently move X to 0. Error loudly - independent of the
+                    // G-vocabulary table, which does not carry every frame
+                    // keyword (e.g. CROTS).
+                    if FRAME_KEYWORDS.iter().any(|kw| kw.eq_ignore_ascii_case(name)) {
+                        return Err(ParsingError::UnsupportedStatement {
+                            line_no,
+                            preview,
+                            statement: format!("The frame instruction {} after another statement", name),
+                            hint: "Frame instructions must be programmed in a separate NC block \
+                                   (manual 3.12.2.1)."
+                                .to_string(),
+                        });
+                    }
+                    // Keyword-shaped G commands (POLY, BSPLINE, SOFT, CP, ...)
+                    // parse as bare words; the vocabulary table decides
+                    // whether this is a G command or a subprogram call.
+                    if let Some((group, _modal)) = crate::modal_groups::classify_g_command(&name.to_uppercase()) {
+                        // `value` may carry trailing whitespace from the
+                        // backtracked optional argument list; store the
+                        // trimmed word like the g_command path does.
+                        last.insert(group.to_string(), Value::Str(name.to_string()));
+                        continue;
+                    }
+                    // A parenless word like Y2O or X10Y20 is far more likely
+                    // a mistyped axis word than a subprogram call; the
+                    // toolpath would silently lose a move. Warn, but keep the
+                    // call semantics: only the user can tell.
+                    if looks_like_axis_word_typo(name) {
+                        eprintln!(
+                            "Warning: '{}' (line {}) is interpreted as a subprogram call; did you mean one or more axis words (e.g. Y20)?",
+                            name, line_no
+                        );
+                    }
                 }
                 last.insert(key, Value::Str(value));
             }
             Rule::g_command => {
-                let (line_no, preview) = get_error_context(&statement, state);
-                let (key, value) = interpret_g_command(statement);
-                // Frame instructions are only interpreted as frame_op at the
-                // start of a block ("alone in the block" per manual 3.12.2.1).
-                // If one shows up here it followed another statement, and
-                // e.g. `G1 MIRROR X0` would silently move X to 0. Error loudly.
-                if FRAME_KEYWORDS.iter().any(|kw| kw.eq_ignore_ascii_case(&value)) {
-                    return Err(ParsingError::UnsupportedStatement {
-                        line_no,
-                        preview,
-                        statement: format!("The frame instruction {} after another statement", value),
-                        hint: "Frame instructions must be programmed in a separate NC block \
-                               (manual 3.12.2.1)."
-                            .to_string(),
-                    });
-                }
+                let (key, value) = interpret_g_command(statement, state)?;
                 last.insert(key, Value::Str(value));
             }
             Rule::g_command_numbered => {
-                let (key, value) =
-                    interpret_g_command(statement.into_inner().next().expect("Error parsing g_command_numbered"));
+                let inner = statement.into_inner().next().expect("Error parsing g_command_numbered");
+                let (key, value) = interpret_g_command(inner, state)?;
                 last.insert(key, Value::Str(value));
             }
             Rule::m_command => {
