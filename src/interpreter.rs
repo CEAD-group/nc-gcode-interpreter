@@ -1,9 +1,9 @@
 //interpreter.rs
 use crate::errors::ParsingError;
 use crate::interpret_rules::{interpret_blocks, BlockFlow};
-use crate::output::Table;
+use crate::output::{OutputRows, Row, Table};
 use crate::state::{self, State};
-use crate::types::{NCParser, Rule, Value};
+use crate::types::{NCParser, Rule};
 use pest::Parser;
 use std::collections::HashMap;
 
@@ -22,46 +22,87 @@ pub fn nc_to_table(
     axis_index_map: Option<HashMap<String, usize>>, // axis identifier to index mapping
     allow_undefined_variables: bool,
 ) -> Result<(Table, state::State), ParsingError> {
-    // Use the override if provided, otherwise use the default identifiers
-    let axis_identifiers: Vec<String> =
-        axis_identifiers.unwrap_or_else(|| DEFAULT_AXIS_IDENTIFIERS.iter().map(|&s| s.to_string()).collect());
-
-    // Add extra axes to the existing list if provided
-    let mut axis_identifiers = axis_identifiers;
-    if let Some(extra_axes) = extra_axes {
-        axis_identifiers.extend(extra_axes);
-    }
-
-    let mut state = state::State::new(
-        axis_identifiers.clone(),
+    let mut state = build_state(
+        axis_identifiers,
+        extra_axes,
         iteration_limit,
         axis_index_map,
         allow_undefined_variables,
     );
     if let Some(initial_state) = initial_state {
         // Propagate the error instead of exiting: this is library code, and
-        // process::exit would kill e.g. a host Python interpreter.
-        interpret_file(initial_state, &mut state)?;
+        // process::exit would kill e.g. a host Python interpreter. The rows
+        // of the initial-state file are discarded; only the state matters.
+        let mut discard = OutputRows::collect();
+        interpret_file(initial_state, &mut state, &mut discard)?;
     }
 
     // Now interpret the main input using the axis_index_map from state
-    let results = interpret_file(input, &mut state)?;
+    let mut output = OutputRows::collect();
+    interpret_file(input, &mut state, &mut output)?;
+    let rows = output.finish()?;
 
-    let table = Table::from_rows(&results, disable_forward_fill);
+    let table = Table::from_rows(&rows, disable_forward_fill);
     Ok((table, state))
 }
 
-/// Parse file and return results as a vector of HashMaps
-fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, Value>>, ParsingError> {
+fn build_state(
+    axis_identifiers: Option<Vec<String>>,
+    extra_axes: Option<Vec<String>>,
+    iteration_limit: usize,
+    axis_index_map: Option<HashMap<String, usize>>,
+    allow_undefined_variables: bool,
+) -> State {
+    // Use the override if provided, otherwise use the default identifiers
+    let mut axis_identifiers: Vec<String> =
+        axis_identifiers.unwrap_or_else(|| DEFAULT_AXIS_IDENTIFIERS.iter().map(|&s| s.to_string()).collect());
+    if let Some(extra_axes) = extra_axes {
+        axis_identifiers.extend(extra_axes);
+    }
+    state::State::new(axis_identifiers, iteration_limit, axis_index_map, allow_undefined_variables)
+}
+
+/// Streaming twin of `nc_to_table`: interpret the program pushing each
+/// finished row into `sender` as `(line_no, row)`, returning the final
+/// state. Blocks on the channel when the consumer is slower than the
+/// interpreter; aborts with `StreamClosed` when the consumer hangs up.
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // used by the python-feature bindings, not the bin
+pub fn nc_to_row_stream(
+    input: &str,
+    initial_state: Option<&str>,
+    axis_identifiers: Option<Vec<String>>,
+    extra_axes: Option<Vec<String>>,
+    iteration_limit: usize,
+    axis_index_map: Option<HashMap<String, usize>>,
+    allow_undefined_variables: bool,
+    sender: std::sync::mpsc::SyncSender<Row>,
+) -> Result<state::State, ParsingError> {
+    let mut state = build_state(
+        axis_identifiers,
+        extra_axes,
+        iteration_limit,
+        axis_index_map,
+        allow_undefined_variables,
+    );
+    if let Some(initial_state) = initial_state {
+        let mut discard = OutputRows::collect();
+        interpret_file(initial_state, &mut state, &mut discard)?;
+    }
+    let mut output = OutputRows::stream(sender);
+    interpret_file(input, &mut state, &mut output)?;
+    output.finish()?;
+    Ok(state)
+}
+
+/// Interpret a file, pushing rows into `output`.
+fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
     // Store input for error messages
     state.set_input(input.to_string());
 
     // Validate control-structure nesting first: a PEG reports an unclosed
     // IF/WHILE at the end of the file; the line scan reports the opener.
     let shape = crate::structure_scan::check_structures(input)?;
-
-    // Initialize results with an empty HashMap
-    let mut results = vec![HashMap::new()];
 
     // Stage-1 fast path: structure-free programs (all CAM output) are
     // interpreted line by line - trivial lines through the byte decoder,
@@ -70,8 +111,8 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
         let mut padded_lines = Vec::new();
         // None: the line driver declined (padding budget); fall through to
         // the whole-file parse below.
-        match crate::line_driver::interpret_lines(input, &mut padded_lines, &mut results, state)? {
-            Some(BlockFlow::Continue) | Some(BlockFlow::EndProgram) => return Ok(results),
+        match crate::line_driver::interpret_lines(input, &mut padded_lines, output, state)? {
+            Some(BlockFlow::Continue) | Some(BlockFlow::EndProgram) => return Ok(()),
             Some(BlockFlow::Jump(request)) => return Err(request.into_not_found_error(state)),
             None => {}
         }
@@ -98,8 +139,8 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
             message: "No inner blocks found".to_string(),
         })?;
 
-    match interpret_blocks(blocks, &mut results, state)? {
-        BlockFlow::Continue | BlockFlow::EndProgram => Ok(results),
+    match interpret_blocks(blocks, output, state)? {
+        BlockFlow::Continue | BlockFlow::EndProgram => Ok(()),
         // A jump that no scope could resolve: the destination does not exist
         // in the programmed search direction (alarm 14080 on a real control).
         BlockFlow::Jump(request) => Err(request.into_not_found_error(state)),

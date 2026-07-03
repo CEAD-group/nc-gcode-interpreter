@@ -218,8 +218,45 @@ Measured on the 319k-line Sheffield program, end to end: the Rust CLI
 (decode + execute + table + CSV) went 5.0 s → **2.9 s**, and
 `nc_to_dataframe` from Python 33 s → **9 s**. Parsing has left the
 profile entirely; what remains is row assembly (`HashMap` rows,
-forward-fill, the pyo3 → polars conversion), which is the natural target
-of the streaming-rows work.
+forward-fill, the pyo3 → polars conversion).
+
+## Streaming rows (nc_to_rows)
+
+The interpreter's output is a sink (`OutputRows`): collected into the
+batch table, or pushed row by row into a bounded channel drained by a
+Python iterator while interpretation runs on a worker thread.
+`nc_to_rows(program, ...)` yields `(line_no, row_dict)` — the 1-based
+source line each block came from (loops and jumps repeat and reorder
+line numbers, which is exactly what a visualizer needs for
+trace-to-source highlighting), and values typed and forward-filled like
+the batch DataFrame. Dropping the iterator hangs up the channel and
+aborts interpretation — breaking out of a `for` loop over an anonymous
+iterator drops it, but a stored iterator keeps the worker alive (parked
+on the bounded channel) until it is deleted or garbage-collected.
+Errors raise from `next()` at the offending row; the final state is
+available on the iterator once exhausted.
+
+On the 319k-line Sheffield program: the first row arrives after ~1.6 s
+(the price of eager whole-file validation — the decode/parse passes run
+before execution starts), a full drain takes ~8.6 s versus ~10 s for the
+batch DataFrame, and memory stays constant. The differential tests
+(`python/tests/test_streaming.py`) assert the streamed rows reconstruct
+the batch DataFrame exactly.
+
+With `include_variables=True` the iterator yields `(line_no, row_dict,
+variables_dict)` instead: every variable assignment a block performs
+(`R1=R1+1`, `DEF REAL Q=5`, FOR counters — the counter increment
+surfaces on the ENDFOR line, where the control performs it) arrives as
+a per-row delta, and blocks that only assign variables — pruned from
+the batch DataFrame — are streamed too, with an empty row dict. A live
+query of the interpreter's symbol table would be wrong by construction
+(the worker runs ahead of the consumer behind the channel buffer);
+deltas riding on the rows are race-free, and accumulating them with
+`dict.update` reconstructs the full variable state at any row.
+
+Not yet built: checkpoints (`position` + `State` snapshot) for
+seek/scrub in a visualizer — straightforward on top of the line driver
+when the need arrives.
 
 ## Requirement: good errors when a file does not parse
 

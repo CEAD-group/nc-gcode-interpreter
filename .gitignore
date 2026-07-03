@@ -32,3 +32,7 @@ python/**/*.pyc
 
 # local scratch
 tmp/
+
+# local exploration scripts
+python/example/plot_trace.py
+python/example/smooth_e.py
