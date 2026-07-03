@@ -10,10 +10,10 @@
 - [x] functions not hardcoded
 - [x] allow supplying custom values for builtin variables
 - [x] array syntax
-- [] are variables only internal state, or should they be part of output?
+- [x] are variables only internal state, or should they be part of output? -> internal state in the batch DataFrame; the streaming API exposes them per row via nc_to_rows(include_variables=True)
 - [] is every element in a variable array a separate element/column in the output?
 - [x] case (in)sensitivity
-- [x] write output while parsing -> no, will not do this
+- [x] write output while parsing -> yes after all: nc_to_rows streams rows from a background thread while interpreting
 - [] 4.1.3.1 Arithmetic functions
 - [] Var  PHU 42 LLI 0 ULI 
 - [x] PRESETON(E,0)
