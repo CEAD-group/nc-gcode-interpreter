@@ -20,6 +20,9 @@ pub struct State {
     /// `blocks` scope, innermost last. Used by GOTOC to decide whether its
     /// destination exists anywhere on the scope chain before jumping.
     pub jump_scopes: Vec<HashSet<String>>,
+    /// Every jump target seen anywhere during the run (never popped), used
+    /// for "did you mean" suggestions when a jump destination is not found.
+    pub seen_jump_targets: HashSet<String>,
     /// Store line offsets for efficient error reporting
     line_offsets: Vec<usize>,
     /// Store the input text for error messages
@@ -62,6 +65,7 @@ impl State {
             axis_index_map,
             allow_undefined_variables,
             jump_scopes: Vec::new(),
+            seen_jump_targets: HashSet::new(),
             line_offsets: Vec::new(),
             input: String::new(),
         }

@@ -66,7 +66,7 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
                 pest::error::LineColLocation::Span(start, _) => *start,
             };
             let preview = state.get_line(line).unwrap_or("(could not retrieve line)").to_string();
-            ParsingError::with_context(line, preview, "initial file parsing".to_string(), format!("{}", e))
+            ParsingError::with_context(line, preview, "initial file parsing".to_string(), describe_parse_error(&e))
         })?
         .next()
         .ok_or_else(|| ParsingError::ParseError {
@@ -84,7 +84,83 @@ fn interpret_file(input: &str, state: &mut State) -> Result<Vec<HashMap<String, 
         BlockFlow::Continue | BlockFlow::EndProgram => Ok(results),
         // A jump that no scope could resolve: the destination does not exist
         // in the programmed search direction (alarm 14080 on a real control).
-        BlockFlow::Jump(request) => Err(request.into_not_found_error()),
+        BlockFlow::Jump(request) => Err(request.into_not_found_error(state)),
+    }
+}
+
+/// Turn a pest parse error into a human message: the expected-rule set is
+/// mapped to user-facing phrasing and deduplicated (all sixty G-group rules
+/// collapse into one "a G code" entry) instead of leaking grammar-internal
+/// rule names like `gg08_work_offset`.
+fn describe_parse_error(error: &pest::error::Error<Rule>) -> String {
+    use pest::error::ErrorVariant;
+    match &error.variant {
+        ErrorVariant::ParsingError { positives, .. } if !positives.is_empty() => {
+            let mut expected: Vec<&'static str> = Vec::new();
+            for rule in positives {
+                let description = describe_rule(*rule);
+                if !expected.contains(&description) {
+                    expected.push(description);
+                }
+            }
+            format!("expected {}", expected.join(", or "))
+        }
+        _ => format!("{}", error),
+    }
+}
+
+fn describe_rule(rule: Rule) -> &'static str {
+    match rule {
+        Rule::file | Rule::blocks | Rule::block => "an NC block",
+        Rule::newline => "a new line",
+        Rule::EOI => "the end of the program",
+        Rule::comment => "a comment (;...)",
+        Rule::statement => "a statement",
+        Rule::axis_word => "an axis word (e.g. X12.5)",
+        Rule::variable_single_char => "an axis letter",
+        Rule::assignment => "an assignment",
+        Rule::assignment_multi => "an array assignment (SET/REP)",
+        Rule::axis_increment => "an incremental value IC(...)",
+        Rule::expression | Rule::primary => "an expression",
+        Rule::value | Rule::float | Rule::integer => "a number",
+        Rule::identifier | Rule::variable => "a name",
+        Rule::variable_array => "an array element",
+        Rule::indices => "array indices",
+        Rule::nc_variable => "a $-variable",
+        Rule::arith_fun | Rule::arith_fun_name => "an arithmetic function",
+        Rule::function_arguments => "function arguments",
+        Rule::non_returning_function_call => "a subprogram call",
+        Rule::quoted_string | Rule::string => "a quoted string",
+        Rule::tool_selection => "a tool selection (T=\"...\")",
+        Rule::definition => "a variable definition (DEF)",
+        Rule::data_type => "a data type (REAL/INT/BOOL)",
+        Rule::control => "a control statement",
+        Rule::condition => "a condition",
+        Rule::relational_operator => "a comparison operator",
+        Rule::if_statement | Rule::if_goto_statement => "IF",
+        Rule::while_statement => "WHILE",
+        Rule::for_statement => "FOR",
+        Rule::repeat_until_statement => "REPEAT",
+        Rule::loop_statement => "LOOP",
+        Rule::case_statement | Rule::case_kw => "CASE",
+        Rule::case_arm => "a CASE arm (<constant> GOTO...)",
+        Rule::case_default | Rule::default_kw => "DEFAULT",
+        Rule::of_kw => "OF",
+        Rule::goto_statement | Rule::goto_kw => "a jump (GOTO/GOTOF/GOTOB/GOTOC)",
+        Rule::gotos_statement => "GOTOS",
+        Rule::goto_target => "a jump destination (label or block number)",
+        Rule::label_def | Rule::label_name => "a jump label",
+        Rule::block_number => "a block number",
+        Rule::frame_op | Rule::frame_kw => "a frame instruction (TRANS/ROT/...)",
+        Rule::m_command => "an M code",
+        Rule::g_command | Rule::g_command_numbered => "a G code",
+        Rule::op_add | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_int_div | Rule::op_mod | Rule::neg => {
+            "an operator"
+        }
+        Rule::value_array | Rule::value_repeating | Rule::value_none => "SET/REP values",
+        Rule::WHITESPACE => "whitespace",
+        // Everything not listed is one of the generated G-group rules.
+        _ => "a G code",
     }
 }
 

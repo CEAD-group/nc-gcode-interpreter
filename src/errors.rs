@@ -133,7 +133,7 @@ Jump destination not found on line {line_no}
 Line: {preview}
 
 Details: No block with the jump label or block number '{target}' was found
-searching {search_direction} (alarm 14080 on a real control).
+searching {search_direction} (alarm 14080 on a real control).{hint}
 Note: jump destinations inside IF/LOOP/FOR/WHILE/REPEAT bodies cannot be
 reached from outside those bodies.
 "#)]
@@ -142,6 +142,22 @@ reached from outside those bodies.
         preview: String,
         target: String,
         search_direction: String,
+        /// Either empty or a "\nDid you mean '...'?" suggestion line.
+        hint: String,
+    },
+    #[error(r#"
+Unknown G code on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: '{code}' is not a G code known to this interpreter (a real control
+raises alarm 12470 "undefined G function"). If this is meant to be a
+subprogram call, note that program names cannot look like a G code.
+"#)]
+    UnknownGCommand {
+        line_no: usize,
+        preview: String,
+        code: String,
     },
     #[error(r#"
 Invalid function call on line {line_no}
