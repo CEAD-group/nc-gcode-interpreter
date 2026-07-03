@@ -128,7 +128,7 @@ impl JumpDirection {
 /// key that matches `scan_jump_targets`. Labels are case-insensitive; block
 /// numbers may be written as `200` or `N200` (manual 4.1.5.2) and are
 /// normalized so `N020` and `20` compare equal.
-fn canonical_jump_target(raw: &str) -> String {
+pub(crate) fn canonical_jump_target(raw: &str) -> String {
     let trimmed = raw.trim();
     let digits = trimmed.strip_prefix(['N', 'n']).unwrap_or(trimmed);
     if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
@@ -138,7 +138,7 @@ fn canonical_jump_target(raw: &str) -> String {
     }
 }
 
-fn canonical_block_number(digits: &str) -> &str {
+pub(crate) fn canonical_block_number(digits: &str) -> &str {
     let stripped = digits.trim_start_matches('0');
     if stripped.is_empty() { "0" } else { stripped }
 }
@@ -146,7 +146,7 @@ fn canonical_block_number(digits: &str) -> &str {
 /// Collect the jump targets (labels and block numbers) defined by each block
 /// of a scope, mapping the canonical key to the (ascending) block indices
 /// where it is defined.
-fn scan_jump_targets(block_pairs: &[Pair<Rule>]) -> HashMap<String, Vec<usize>> {
+pub(crate) fn scan_jump_targets(block_pairs: &[Pair<Rule>]) -> HashMap<String, Vec<usize>> {
     let mut targets: HashMap<String, Vec<usize>> = HashMap::new();
     for (index, block) in block_pairs.iter().enumerate() {
         for item in block.clone().into_inner() {
@@ -177,7 +177,7 @@ fn scan_jump_targets(block_pairs: &[Pair<Rule>]) -> HashMap<String, Vec<usize>> 
 /// backward from the current block (inclusive), GOTOF forward (exclusive),
 /// GOTO/GOTOC forward first and then backward. Returns the destination block
 /// index, or None when the target is not reachable in this scope.
-fn resolve_jump(
+pub(crate) fn resolve_jump(
     targets: &HashMap<String, Vec<usize>>,
     current: usize,
     request: &JumpRequest,
@@ -196,7 +196,7 @@ fn resolve_jump(
 /// rule at block start. Also present in G-group 3, where they can only be
 /// reached when they FOLLOW another statement in the block - which is invalid
 /// (frame instructions must be alone in the block) and rejected loudly.
-const FRAME_KEYWORDS: &[&str] = &[
+pub(crate) const FRAME_KEYWORDS: &[&str] = &[
     "TRANS", "ATRANS", "SCALE", "ASCALE", "ROT", "AROT", "ROTS", "AROTS", "CROTS", "MIRROR", "AMIRROR",
 ];
 fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, ParsingError> {
@@ -1333,7 +1333,7 @@ fn interpret_control(
     }
     Ok(BlockFlow::Continue)
 }
-fn insert_m_key(last: &mut HashMap<String, Value>, value: &str, line_no: usize, preview: String) -> Result<(), ParsingError> {
+pub(crate) fn insert_m_key(last: &mut HashMap<String, Value>, value: &str, line_no: usize, preview: String) -> Result<(), ParsingError> {
     let m_key = "M";
     for _i in 1..=5 {
         if let Some(existing_value) = last.get_mut(m_key) {
@@ -1364,7 +1364,7 @@ fn insert_m_key(last: &mut HashMap<String, Value>, value: &str, line_no: usize, 
 /// M codes that end the program: M2/M02 and M30 end a main program, M17 a
 /// subprogram. Execution of one of these stops interpretation; the rest of
 /// the containing block still executes.
-fn is_end_of_program_m_code(code: &str) -> bool {
+pub(crate) fn is_end_of_program_m_code(code: &str) -> bool {
     let digits = code.trim_start_matches(['M', 'm']);
     matches!(digits.trim_start_matches('0'), "2" | "17" | "30")
 }
@@ -1601,7 +1601,7 @@ fn annotate_error(pair: &Pair<Rule>, context: &str, message: String, state: &Sta
     )
 }
 
-fn interpret_block(
+pub(crate) fn interpret_block(
     element: Pair<Rule>,
     output: &mut Output,
     state: &mut State,

@@ -202,16 +202,24 @@ parsing everything with the full grammar, extrapolates a 1 GB file to
 flood lines entirely. pest is demoted to what it is good at: the rare,
 structurally interesting lines.
 
-Prerequisites for a production version (the prototype only proves the
-shape): bare words may only be claimed via the G-keyword vocabulary table
-(otherwise `GOTOF LABEL` would be mistaken for two harmless words), which
-requires moving that table out of the grammar into Rust first; an owned
-per-line block representation so fast-decoded and pest-parsed lines merge
-into one executable list (the same owned IR the streaming VM needs); and
-drift control — a differential-test mode that re-parses every claimed
-line with pest and asserts identical effects, run over the goldens and
-the mill-sim corpus. Simplest correct v1 policy: if the file contains any
-control-structure keyword, fall back to whole-file pest.
+This design is now implemented in `src/line_driver.rs`, gated by the
+structure scan: programs without multi-line control structures (all CAM
+output; labels and the whole GOTO family remain supported since jumps are
+line-scoped) are interpreted line by line — trivial lines through a
+conservative byte decoder, the rare rest through per-line pest parses
+padded to their file position so error messages keep whole-file
+coordinates. Bare words are claimed only via the vocabulary table, so
+`GOTOF LABEL` and reserved words always take the grammar. `NC_STAGE1=0`
+disables the fast path; the differential tests
+(`python/tests/test_stage1.py`) run synthetic edge cases and the whole
+mill-sim corpus through both paths and assert identical output.
+
+Measured on the 319k-line Sheffield program, end to end: the Rust CLI
+(decode + execute + table + CSV) went 5.0 s → **2.9 s**, and
+`nc_to_dataframe` from Python 33 s → **9 s**. Parsing has left the
+profile entirely; what remains is row assembly (`HashMap` rows,
+forward-fill, the pyo3 → polars conversion), which is the natural target
+of the streaming-rows work.
 
 ## Requirement: good errors when a file does not parse
 

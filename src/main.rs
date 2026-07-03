@@ -10,6 +10,7 @@ mod errors;
 mod interpret_rules;
 mod interpreter;
 mod modal_groups;
+mod line_driver;
 mod state;
 mod structure_scan;
 mod output;
