@@ -17,11 +17,25 @@ pest = "2.8.6"
 pest_derive = "2.8.6"
 thiserror = "2.0.18"
 clap = { version = "4.6", features = ["derive"] }
+rayon = "1.10"
 
 [dependencies.pyo3]
 version = "0.28"
 optional = true
 
+# polars + pyo3-polars are pulled in ONLY under the `python` feature so the
+# pure-Rust lib/CLI (default features, used by mill-sim + the CLI) stay
+# polars-free. `default-features = false` keeps the polars footprint to just the
+# dtypes the Table -> DataFrame conversion needs (Int64/Float64/String/List).
+[dependencies.polars]
+version = "0.54"
+optional = true
+default-features = false
+
+[dependencies.pyo3-polars]
+version = "0.27"
+optional = true
+
 [features]
 default = []
-python = ["pyo3"]
+python = ["pyo3", "polars", "pyo3-polars"]

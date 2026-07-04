@@ -23,11 +23,29 @@ released to PyPI.
 - Spline programming: `PW`/`SD`/`PL` block addresses become output columns
   (not forward-filled, no `TRANS` offset) instead of being silently
   swallowed (#18)
+- G2/G3 arc interpolation parameters `I`/`J`/`K`/`CR` become per-block output
+  columns (not forward-filled, no `TRANS` offset) instead of being silently
+  dropped — arcs previously came out as straight-line endpoints (#37)
+- `nc_to_batches(program, batch_size=...)`: interpret a program into a
+  stream of columnar polars DataFrames built on a worker thread and handed
+  over via the Arrow C data interface — bounded memory for programs too
+  large to fit in one DataFrame (#37)
+- Parsing: leading-underscore identifiers (`_WITH_M0`), assignment to
+  `$AC_*` system variables (`$AC_TIMER[1] = 0`), and the `NOT` logical
+  operator (#37)
 - `docs/sinumerik-execution-model.md`: how a real control executes NC code
   versus this interpreter, and why (#30)
 
 ### Changed
 
+- **Breaking:** `I`/`J`/`K`/`CR` are now treated as arc interpolation-parameter
+  block addresses (output columns), so they can no longer be used as user
+  variable names: `I=5` followed by `X=I+1` was a variable read before and is
+  now an undefined-variable error. Matches Sinumerik address semantics (#37)
+- `nc_to_dataframe` is now the concatenation of the internal batch stream
+  rather than collecting every row up front: same output, but bounded
+  intermediate memory and interpretation overlapped with DataFrame assembly
+  (a 1.1 GB program went from ~209 s / 6 GB to ~33 s / 3.3 GB) (#37)
 - An executed `M2`/`M17`/`M30` now ends the program immediately, even
   mid-file, instead of being ignored (#29)
 - Unknown G codes now error like Sinumerik alarm 12470 instead of silently

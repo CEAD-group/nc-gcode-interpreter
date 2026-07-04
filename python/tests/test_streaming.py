@@ -199,3 +199,26 @@ def test_stream_matches_batch_on_real_program():
     assert_stream_matches_batch(
         program, extra_axes=["ELX"], allow_undefined_variables=True
     )
+
+
+def test_path_input_matches_string_input(tmp_path):
+    """A pathlib.Path/os.PathLike input reads the file in Rust and must be
+    byte-for-byte equivalent to passing the same program as a string. A plain
+    str stays a program (backwards compatible), never a path."""
+    program = "G1 X10 Y20\nX20 Y5\nR1=5\nX=R1\n"
+    mpf = tmp_path / "prog.mpf"
+    mpf.write_text(program)
+
+    assert list(nc_to_rows(mpf)) == list(nc_to_rows(program))
+
+    df_path, state_path = nc_to_dataframe(mpf)
+    df_str, state_str = nc_to_dataframe(program)
+    assert_frame_equal(df_path, df_str)
+    assert state_path == state_str
+
+
+def test_missing_path_raises_valueerror():
+    with pytest.raises(ValueError):
+        list(nc_to_rows(pathlib.Path("/definitely/not/here.mpf")))
+    with pytest.raises(ValueError):
+        nc_to_dataframe(pathlib.Path("/definitely/not/here.mpf"))
