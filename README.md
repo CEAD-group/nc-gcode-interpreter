@@ -23,6 +23,8 @@ The **NC-GCode-Interpreter** offers a streamlined and efficient solution for int
 
 ### Additional Functionality
 
+- **Streaming interpretation**: `nc_to_rows(program)` yields `(line_no, row)` tuples lazily while the interpreter runs on a background thread — constant memory, early exit by dropping the iterator (breaking out of a `for` loop over an anonymous iterator does this; a stored iterator keeps the run alive until it is deleted or garbage-collected), and source-line numbers for mapping trace rows back to the program. With `include_variables=True` it yields `(line_no, row, variables)` instead, exposing every variable assignment (`R1=R1+1`, `DEF`, FOR counters) as it happens — including blocks that only assign variables, which are invisible in the batch DataFrame.
+
 - **Custom Axes**: Allows users to define additional axes beyond the standard `X`, `Y`, `Z`.
 - **Initial State Configuration**: Enables the use of an initial state MPF file to set default values for multiple runs.
 - **CLI Options**: Numerous command-line options to customize the processing, such as axis overriding, loop limits, and more.
@@ -126,6 +128,36 @@ shape: (14, 7)
 ```
 
 The Python bindings also return the state of the program after execution, which can be used for inspection.
+
+#### Streaming
+
+For long programs (or when you want results before the whole file is interpreted), `nc_to_rows` yields rows lazily while the interpreter runs on a background thread. Each row carries the 1-based source line it came from — loops and jumps repeat line numbers, which is exactly what a visualizer needs to map trace rows back to the program:
+
+```python
+from nc_gcode_interpreter import nc_to_rows
+
+program = "R1=0\nWHILE R1<3\nG1 X=R1*10 F1000\nR1=R1+1\nENDWHILE\nM30"
+
+for line_no, row in nc_to_rows(program):
+    print(line_no, row["X"])
+# 3 0.0
+# 3 10.0
+# 3 20.0
+# 6 20.0
+
+# With include_variables=True, every variable assignment streams as a
+# per-row delta - including variable-only blocks, which are invisible in
+# the batch DataFrame. Accumulating the deltas with dict.update
+# reconstructs the full variable state at any point of the stream.
+for line_no, row, variables in nc_to_rows(program, include_variables=True):
+    print(line_no, row.get("X"), variables)
+# 1 None {'R1': 0.0}
+# 3 0.0 {}
+# 4 None {'R1': 1.0}
+# ...
+```
+
+Rows are typed and forward-filled like the batch DataFrame (disable with `forward_fill=False`); errors raise from `next()` at the offending row; after exhaustion the iterator's `state` attribute holds the final interpreter state. See `python/example/streaming.py` for a runnable version.
 
 Additionally, conversion from a Polars DataFrame back to an MPF (NC) program is also supported:
 

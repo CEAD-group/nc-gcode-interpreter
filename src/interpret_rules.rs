@@ -5,7 +5,7 @@ use crate::types::Rule;
 use crate::types::Value;
 use std::collections::HashMap;
 
-type Output = Vec<HashMap<String, Value>>;
+type Output = crate::output::OutputRows;
 
 /// Control-flow signal returned by block interpretation: either fall through
 /// to the next block, or a pending GOTO that must be resolved against the
@@ -696,7 +696,9 @@ fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) ->
         }
     }
 }
-fn interpret_assignment_multi(element: Pair<Rule>, state: &mut State) -> Result<Vec<String>, ParsingError> {
+/// Returns each target key with the value assigned to it, or `None` for
+/// keys a gap in the value array left untouched.
+fn interpret_assignment_multi(element: Pair<Rule>, state: &mut State) -> Result<Vec<(String, Option<f64>)>, ParsingError> {
     // assignment_multi =  { variable_array ~ "=" ~ (value_array | value_repeating) }
     let mut inner_pairs = element.into_inner();
     let variable_pair = inner_pairs
@@ -714,14 +716,17 @@ fn interpret_assignment_multi(element: Pair<Rule>, state: &mut State) -> Result<
             actual: values.len(),
         });
     }
-    for (i, key) in keys.iter().enumerate() {
-        if let Some(value) = values.get(i).cloned().flatten() {
-            state.symbol_table.insert(key.clone(), value);
-        } else {
-            // do nothing, the value is not set
-        }
-    }
-    Ok(keys)
+    Ok(keys
+        .into_iter()
+        .enumerate()
+        .map(|(i, key)| {
+            let value = values.get(i).copied().flatten();
+            if let Some(value) = value {
+                state.symbol_table.insert(key.clone(), value);
+            }
+            (key, value)
+        })
+        .collect())
 }
 fn interpret_value_array(pair: Pair<Rule>, state: &mut State) -> Result<Vec<Option<f64>>, ParsingError> {
     let mut values = Vec::new();
@@ -855,7 +860,7 @@ fn interpret_identifier(pair: Pair<Rule>) -> Result<String, ParsingError> {
         })
     }
 }
-fn interpret_definition(element: Pair<Rule>, state: &mut State) -> Result<(), ParsingError> {
+fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
     let pairs = element.into_inner();
     for pair in pairs {
         match pair.as_rule() {
@@ -866,9 +871,14 @@ fn interpret_definition(element: Pair<Rule>, state: &mut State) -> Result<(), Pa
                 } else if state.is_block_address(res.0.as_str()) {
                     return Err(ParsingError::ReservedNameUsedAsVariable { name: res.0 });
                 }
+                output.record_variable_change(&res.0, res.1);
             }
             Rule::assignment_multi => {
-                interpret_assignment_multi(pair, state)?;
+                for (key, value) in interpret_assignment_multi(pair, state)? {
+                    if let Some(value) = value {
+                        output.record_variable_change(&key, value);
+                    }
+                }
             }
             Rule::variable => {
                 let key = interpret_variable(pair, state)?;
@@ -877,12 +887,14 @@ fn interpret_definition(element: Pair<Rule>, state: &mut State) -> Result<(), Pa
                 } else if state.is_block_address(&key) {
                     return Err(ParsingError::ReservedNameUsedAsVariable { name: key });
                 }
-                state.symbol_table.insert(key, 0.0);
+                state.symbol_table.insert(key.clone(), 0.0);
+                output.record_variable_change(&key, 0.0);
             }
             Rule::variable_array => {
                 let keys = interpret_variable_array(pair, state)?;
                 for key in keys {
-                    state.symbol_table.insert(key, 0.0);
+                    state.symbol_table.insert(key.clone(), 0.0);
+                    output.record_variable_change(&key, 0.0);
                 }
             }
             Rule::data_type => {
@@ -1087,7 +1099,8 @@ fn interpret_statement_for(
 
     // Parse and execute the assignment statement
     let assignment = pairs.next().expect("Expected an assignment, got none");
-    let (variable_name, _) = interpret_assignment(assignment, state)?;
+    let (variable_name, initial_value) = interpret_assignment(assignment, state)?;
+    output.record_variable_change(&variable_name, initial_value);
 
     // Evaluate the TO expression to determine the loop's end value
     let to_expression = pairs.next().expect("Expected a TO expression, got none");
@@ -1118,6 +1131,11 @@ fn interpret_statement_for(
                 .get_mut(&variable_name)
                 .expect("Variable should exist");
             *loop_control_value += 1.0; // Increment value directly
+            let new_value = *loop_control_value;
+            // Recorded on the row current at this point: the ENDFOR line,
+            // whose (otherwise empty) block is the loop body's last row -
+            // exactly where the control performs the increment.
+            output.record_variable_change(&variable_name, new_value);
         }
     }
     Ok(BlockFlow::Continue)
@@ -1475,6 +1493,8 @@ fn interpret_statement(
                     last.insert(key, Value::Float(machine_value));
                 } else if state.is_block_address(&key) {
                     last.insert(key, Value::Float(local_value));
+                } else {
+                    output.record_variable_change(&key, local_value);
                 }
             }
             Rule::tool_selection => interpret_tool_selection(statement, output, state)?,
@@ -1608,8 +1628,8 @@ pub(crate) fn interpret_block(
 ) -> Result<BlockFlow, ParsingError> {
     match element.as_rule() {
         Rule::block => {
-            // Create a new HashMap for this block
-            output.push(HashMap::new());
+            // Start this block's output row, flushing the previous one.
+            output.start_row(element.line_col().0)?;
 
             let mut flow = BlockFlow::Continue;
             for item in element.into_inner() {
@@ -1624,7 +1644,7 @@ pub(crate) fn interpret_block(
                     // execution; at execution time they are inert.
                     Rule::label_def => {}
                     Rule::control => flow = interpret_control(item, output, state)?,
-                    Rule::definition => interpret_definition(item, state)?,
+                    Rule::definition => interpret_definition(item, output, state)?,
                     Rule::frame_op => interpret_frame_op(item, state)?,
                     Rule::comment => {
                         let last = output.last_mut().expect("Output vector should not be empty");

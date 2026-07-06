@@ -31,7 +31,7 @@ use crate::types::{NCParser, Pair, Rule, Value};
 use pest::Parser;
 use std::collections::HashMap;
 
-type Output = Vec<HashMap<String, Value>>;
+type Output = crate::output::OutputRows;
 
 /// One word of a decoded trivial line, in source order.
 enum Word {
@@ -191,7 +191,7 @@ fn execute_decoded(line: &DecodedLine, output: &mut Output, state: &mut State) -
     if !line.has_content {
         return Ok(BlockFlow::Continue);
     }
-    output.push(HashMap::new());
+    output.start_row(line.line_no)?;
     let mut flow = BlockFlow::Continue;
     // Split borrows: row insertion vs axis-state updates.
     for word in &line.words {
@@ -206,6 +206,7 @@ fn execute_decoded(line: &DecodedLine, output: &mut Output, state: &mut State) -
                     last.insert(key.clone(), Value::Float(*value));
                 } else {
                     state.symbol_table.insert(key.clone(), *value);
+                    output.record_variable_change(key, *value);
                 }
             }
             Word::GCommand(group, as_written) => {

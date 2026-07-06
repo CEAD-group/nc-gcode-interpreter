@@ -69,6 +69,8 @@ Details: {message}
     UnexpectedOperator { operator: String },
     #[error("Loop limit of {limit} reached")]
     LoopLimit { limit: String },
+    #[error("row stream closed by the consumer")]
+    StreamClosed,
     #[error(r#"
 Too many M commands in a single block on line {line_no}
 ----------------------------------------

@@ -1,6 +1,7 @@
 from typing import Protocol
 import polars as pl
 from ._internal import nc_to_columns as _nc_to_columns
+from ._internal import nc_to_rows as _nc_to_rows
 from ._internal import __doc__  # noqa: F401
 import json
 from pathlib import Path
@@ -13,7 +14,7 @@ class TextFileLike(Protocol):
     def read(self) -> str: ...
 
 
-__all__ = ["nc_to_dataframe", "sanitize_dataframe", "dataframe_to_nc"]
+__all__ = ["nc_to_dataframe", "nc_to_rows", "sanitize_dataframe", "dataframe_to_nc"]
 
 
 def nc_to_dataframe(
@@ -321,3 +322,72 @@ def dataframe_to_nc(df: pl.DataFrame, file_path: str | Path):
         ).alias("line")
     ).select("line")
     df_line.write_csv(file_path, include_header=False, quote_style="never")
+
+
+def nc_to_rows(
+    input: TextFileLike | str,
+    initial_state: TextFileLike | str | None = None,
+    axis_identifiers: list[str] | None = None,
+    extra_axes: list[str] | None = None,
+    iteration_limit: int = 10000,
+    forward_fill: bool = True,
+    include_variables: bool = False,
+    axis_index_map: dict[str, int] | None = None,
+    allow_undefined_variables: bool = False,
+):
+    """Interpret an NC program lazily, yielding one row at a time.
+
+    Returns an iterator of ``(line_no, row)`` tuples: the 1-based source
+    line the block came from (loops and jumps repeat / reorder line
+    numbers), and a dict of column values typed like the batch DataFrame
+    (``N``: int, ``M``: list[str], G-group/T/comment columns: str, axes and
+    other value columns: float). Rows are forward-filled like
+    :func:`nc_to_dataframe` unless ``forward_fill`` is False.
+
+    With ``include_variables=True`` the iterator yields ``(line_no, row,
+    variables)`` instead, where ``variables`` maps each variable the block
+    assigned (``R1=R1+1``, ``DEF REAL Q=5``, FOR counters) to its new float
+    value. Blocks that only assign variables — invisible in the batch
+    DataFrame and in the default stream — are then also yielded, with an
+    empty (never forward-filled) ``row``. Accumulating the ``variables``
+    dicts with ``dict.update`` reconstructs the full variable state at any
+    point of the stream.
+
+    The interpreter runs on a background thread behind a bounded channel:
+    rows arrive as they are produced, memory use is constant, and dropping
+    the iterator aborts interpretation. Breaking out of a ``for`` loop over
+    an anonymous iterator drops it; a stored iterator keeps the worker
+    alive (parked on the bounded channel) until it is deleted or
+    garbage-collected.
+    Errors raise ``ValueError`` from ``next()`` when reached. After the
+    iterator is exhausted, its ``state`` attribute holds the final
+    interpreter state (axes, symbol_table, translation).
+
+    Example:
+    --------
+    >>> for line_no, row in nc_to_rows("G1 X10\nX20 Y5"):
+    ...     print(line_no, row["X"])
+    1 10.0
+    2 20.0
+    >>> for line_no, row, variables in nc_to_rows("R1=5\nX=R1", include_variables=True):
+    ...     print(line_no, row.get("X"), variables)
+    1 None {'R1': 5.0}
+    2 5.0 {}
+    """
+    if input is None:
+        raise ValueError("input cannot be None")
+    if not isinstance(input, str):
+        input = input.read()
+    if initial_state is not None and not isinstance(initial_state, str):
+        initial_state = initial_state.read()
+    return _nc_to_rows(
+        input,
+        initial_state,
+        axis_identifiers,
+        extra_axes,
+        iteration_limit,
+        forward_fill,
+        include_variables,
+        axis_index_map,
+        allow_undefined_variables,
+    )

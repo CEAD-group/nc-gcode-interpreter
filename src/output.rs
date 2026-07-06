@@ -6,10 +6,111 @@
 //! turns it into a polars DataFrame on the Python side, and the CLI writes
 //! CSV directly with the `csv` crate.
 
+use crate::errors::ParsingError;
 use crate::modal_groups::{MODAL_G_GROUPS, NON_MODAL_G_GROUPS};
 use crate::state::BLOCK_ADDRESSES;
 use crate::types::Value;
 use std::collections::{HashMap, HashSet};
+
+/// One interpreter output row: the source line it came from, the values the
+/// block produced, and the variables the block assigned. Loops and jumps emit
+/// repeated / non-monotonic line numbers - exactly what a visualizer needs to
+/// map trace rows to source.
+#[derive(Debug, Default, Clone)]
+pub struct Row {
+    pub line_no: usize,
+    pub cells: HashMap<String, Value>,
+    /// Variable assignments this block performed (`R1=R1+1`, `DEF REAL Q=5`,
+    /// FOR-loop counter updates), in program order with repeats preserved.
+    /// Replaying `variable_changes` row by row reconstructs the symbol table
+    /// as it stood at any point of the stream; the batch table ignores them.
+    pub variable_changes: Vec<(String, f64)>,
+}
+
+/// Where finished rows go: collected for the batch table, or pushed into a
+/// bounded channel that a streaming consumer drains while interpretation is
+/// still running.
+enum RowSink {
+    Collect(Vec<Row>),
+    #[allow(dead_code)] // constructed by the python-feature bindings, not the bin
+    Stream(std::sync::mpsc::SyncSender<Row>),
+}
+
+/// The interpreter's output handle. A block starts a row with `start_row`;
+/// statements fill it via `last_mut`; starting the next row (or finishing)
+/// flushes the previous one to the sink. Empty rows - blocks that only
+/// affected internal state - are dropped at flush time, mirroring the old
+/// whole-table pruning.
+pub struct OutputRows {
+    current: Row,
+    sink: RowSink,
+}
+
+impl OutputRows {
+    pub fn collect() -> Self {
+        OutputRows {
+            current: Row::default(),
+            sink: RowSink::Collect(Vec::new()),
+        }
+    }
+
+    #[allow(dead_code)] // used by the python-feature bindings, not the bin
+    pub fn stream(sender: std::sync::mpsc::SyncSender<Row>) -> Self {
+        OutputRows {
+            current: Row::default(),
+            sink: RowSink::Stream(sender),
+        }
+    }
+
+    fn flush(&mut self) -> Result<(), ParsingError> {
+        if self.current.cells.is_empty() && self.current.variable_changes.is_empty() {
+            return Ok(());
+        }
+        let row = std::mem::take(&mut self.current);
+        match &mut self.sink {
+            RowSink::Collect(rows) => {
+                rows.push(row);
+                Ok(())
+            }
+            // The receiver hung up: the consumer stopped iterating. Abort
+            // interpretation instead of running the rest of the program.
+            RowSink::Stream(sender) => sender.send(row).map_err(|_| ParsingError::StreamClosed),
+        }
+    }
+
+    /// Begin the row for the block at `line_no`, flushing the previous row.
+    pub fn start_row(&mut self, line_no: usize) -> Result<(), ParsingError> {
+        self.flush()?;
+        self.current.line_no = line_no;
+        Ok(())
+    }
+
+    /// The row currently being filled. Named after `Vec::last_mut`, which
+    /// this type replaced; always `Some`.
+    pub fn last_mut(&mut self) -> Option<&mut HashMap<String, Value>> {
+        Some(&mut self.current.cells)
+    }
+
+    /// Record a variable assignment on the row currently being filled.
+    /// Only the streaming iterator consumes variable deltas, so this is a
+    /// no-op in collect mode: the batch path keeps pruning variable-only
+    /// rows at flush and carries no delta allocations.
+    pub fn record_variable_change(&mut self, key: &str, value: f64) {
+        if matches!(self.sink, RowSink::Stream(_)) {
+            self.current.variable_changes.push((key.to_string(), value));
+        }
+    }
+
+    /// Flush the trailing row and return the collected rows (empty when
+    /// streaming).
+    pub fn finish(mut self) -> Result<Vec<Row>, ParsingError> {
+        self.flush()?;
+        Ok(match self.sink {
+            RowSink::Collect(rows) => rows,
+            RowSink::Stream(_) => Vec::new(),
+        })
+    }
+}
 
 /// A single typed column. Values are optional: `None` is a null cell.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,10 +178,19 @@ const KNOWN_AXIS_COLUMNS: &[&str] = &[
     "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V", "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
 ];
 
-fn is_string_column(name: &str) -> bool {
+pub fn is_string_column(name: &str) -> bool {
     MODAL_G_GROUPS.contains(&name)
         || NON_MODAL_G_GROUPS.contains(&name)
         || matches!(name, "T" | "non_returning_function_call" | "comment")
+}
+
+/// Whether a column is forward-filled in the sanitized table: value columns
+/// (anything typed numeric by name, except the spline block addresses) and
+/// the modal G-group columns. Shared by the batch table and the streaming
+/// iterator so both fill identically.
+pub fn is_forward_filled_column(name: &str) -> bool {
+    let is_value = name != "M" && !is_string_column(name) && !BLOCK_ADDRESSES.contains(&name);
+    is_value || MODAL_G_GROUPS.contains(&name)
 }
 
 impl Table {
@@ -88,10 +198,11 @@ impl Table {
     /// canonical order (N, G-group columns, axes, other value columns, T, M,
     /// function calls, comment), with axis and modal G-group columns
     /// forward-filled unless disabled.
-    pub fn from_rows(rows: &[HashMap<String, Value>], disable_forward_fill: bool) -> Table {
-        // Skip rows that carry no values at all (blocks that only affected
-        // internal state, e.g. definitions).
-        let rows: Vec<&HashMap<String, Value>> = rows.iter().filter(|r| !r.is_empty()).collect();
+    pub fn from_rows(rows: &[Row], disable_forward_fill: bool) -> Table {
+        // Skip rows that carry no output values (blocks that only affected
+        // internal state, e.g. definitions - their variable_changes are a
+        // streaming-only concern).
+        let rows: Vec<&HashMap<String, Value>> = rows.iter().map(|r| &r.cells).filter(|r| !r.is_empty()).collect();
 
         let present: HashSet<&str> = rows.iter().flat_map(|r| r.keys().map(|k| k.as_str())).collect();
 
@@ -132,19 +243,12 @@ impl Table {
             push_if_present(name, &mut ordered);
         }
 
-        // The forward-fill set: value columns (axes, block numbers - anything
-        // that is not a known string/list column) plus the modal G-group
-        // columns, matching the previous DataFrame sanitization.
-        let modal: HashSet<&str> = MODAL_G_GROUPS.iter().copied().collect();
-
         let mut columns: Vec<(String, Column)> = Vec::with_capacity(ordered.len());
         for name in ordered {
             let mut column = build_column(&name, &rows);
             // Block addresses (spline PW/SD/PL) are never forward-filled: a
             // point weight applies only to the point it is programmed with.
-            let is_value_column = matches!(column, Column::Float(_) | Column::Int(_))
-                && !BLOCK_ADDRESSES.contains(&name.as_str());
-            if !disable_forward_fill && (is_value_column || modal.contains(name.as_str())) {
+            if !disable_forward_fill && is_forward_filled_column(&name) {
                 column.forward_fill();
             }
             columns.push((name, column));
