@@ -202,3 +202,27 @@ def test_viz_bead_detection_and_travel():
     data, _ = toolpath_arrays(df_plain)
     assert (data[:, 4] == 4.0).all() and (data[:, 5] == 2.0).all()
     assert detect_bead_size(df_plain) == (None, None)
+
+
+def test_g4_dwell_and_run_start_feed():
+    np = pytest.importorskip("numpy")
+    from nc_gcode_interpreter.viz import toolpath_arrays
+
+    # G4 F0.01 must not slow the following (or enclosing) move down, and an
+    # F programmed on a zero-length row prices the NEXT segment, not the one
+    # that arrived.
+    program = (
+        "G1 X0 Y0 F6000\n"
+        "X100 Y0\n"
+        "G4 F0.01\n"      # dwell at (100, 0)
+        "G1 X200 Y0\n"
+    )
+    df, _ = nc_to_dataframe(program)
+    assert df["dwell"].drop_nulls().to_list() == [0.01]
+    assert set(df["F"].drop_nulls().to_list()) == {6000.0}
+
+    data, _ = toolpath_arrays(df)
+    t = data[:, 0]
+    # 200 mm at 6000 mm/min = 100 mm/s -> 2 s total, evenly split.
+    assert abs(t[-1] - 2.0) < 1e-6
+    assert abs(np.diff(t).max() - np.diff(t).min()) < 1e-6

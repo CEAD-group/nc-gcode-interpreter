@@ -8,6 +8,11 @@ released to PyPI.
 
 ### Added
 
+- `dwell` output column: F/S on a `G4` block is the dwell time (seconds /
+  spindle revolutions), a per-block parameter - it now lands in its own
+  never-forward-filled `dwell` column instead of polluting the modal F/S
+  columns (previously `G4 F0.01` set the feed to 0.01 mm/min for every
+  following block until the next real F word)
 - Curve flattening: `flatten_tolerance` on `nc_to_dataframe` / `nc_to_rows` /
   `nc_to_batches` (CLI: `--flatten-tolerance`) converts G2/G3 arcs (I/J/K and
   CR= forms, all planes, helical, full circles) and ASPLINE/BSPLINE/CSPLINE

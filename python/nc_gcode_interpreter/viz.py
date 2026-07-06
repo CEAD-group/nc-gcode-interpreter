@@ -125,13 +125,19 @@ def toolpath_arrays(
     x = column("X", 0.0)
     y = column("Y", 0.0)
     z = column("Z", 0.0)
+    feed_all = np.maximum(column("F", default_feed), 1e-6) / 60.0  # mm/min -> mm/s
 
     # Drop zero-length runs (comment / M-code rows carry forward-filled
     # coordinates): they add no geometry but produce degenerate tube frames
-    # in the client-side mesh. Keep the last point of each run, so the E and
-    # F values that apply to the following segment survive.
+    # in the client-side mesh. Keep the last row of each run (its E value is
+    # the total extruded there), but take the arriving feed from the run's
+    # FIRST row - the one that actually performed the move; later rows of the
+    # run may already program the feed of the next move.
     moved = (np.diff(x) != 0) | (np.diff(y) != 0) | (np.diff(z) != 0)
     kept = np.concatenate((moved, [True]))
+    kept_indices = np.flatnonzero(kept)
+    run_starts = np.concatenate(([0], kept_indices[:-1] + 1))
+    feed = feed_all[run_starts]
     if not kept.all():
         df = df.filter(pl.Series(kept))
         n = df.height
@@ -139,8 +145,7 @@ def toolpath_arrays(
             raise ValueError("toolpath collapses to fewer than 2 distinct points")
         x, y, z = x[kept], y[kept], z[kept]
 
-    # Per-point arrival times from segment length over feed (mm/min -> mm/s).
-    feed = np.maximum(column("F", default_feed), 1e-6) / 60.0
+    # Per-point arrival times from segment length over feed.
     seg = np.sqrt(np.diff(x) ** 2 + np.diff(y) ** 2 + np.diff(z) ** 2)
     t = np.zeros(n, dtype=np.float64)
     t[1:] = np.cumsum(seg / feed[1:])

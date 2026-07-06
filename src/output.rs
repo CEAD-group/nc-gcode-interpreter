@@ -285,7 +285,8 @@ impl OutputRows {
         if self.current.cells.is_empty() && self.current.variable_changes.is_empty() {
             return Ok(());
         }
-        let row = std::mem::take(&mut self.current);
+        let mut row = std::mem::take(&mut self.current);
+        rekey_g4_dwell(&mut row);
         self.deliver(row)
     }
 
@@ -460,9 +461,32 @@ pub fn is_string_column(name: &str) -> bool {
 pub fn is_forward_filled_column(name: &str) -> bool {
     let is_value = name != "M"
         && name != FLATTENED_COLUMN
+        && name != DWELL_COLUMN
         && !is_string_column(name)
         && !BLOCK_ADDRESSES.contains(&name);
     is_value || MODAL_G_GROUPS.contains(&name)
+}
+
+/// Per-block dwell-time column: on a `G4` block the `F` word is the dwell
+/// time in seconds (`S` the dwell in spindle revolutions) - a block-local
+/// parameter, NOT a feed/speed change. Like the block addresses it is never
+/// forward-filled.
+pub const DWELL_COLUMN: &str = "dwell";
+
+/// On a G4 block, move the F (or, failing that, S) value out of the modal
+/// feed/speed columns into the per-block [`DWELL_COLUMN`]. Without this the
+/// dwell time forward-fills as the feed rate (`G4 F0.01` leaves F = 0.01
+/// mm/min for every following block until the next real F word), corrupting
+/// any downstream time computation.
+fn rekey_g4_dwell(row: &mut Row) {
+    let is_g4 = matches!(row.cells.get("gg02_wait"), Some(Value::Str(code)) if code == "G4");
+    if !is_g4 {
+        return;
+    }
+    let dwell = row.cells.remove("F").or_else(|| row.cells.remove("S"));
+    if let Some(value) = dwell {
+        row.cells.insert(intern_column(DWELL_COLUMN), value);
+    }
 }
 
 /// Marker column emitted by the curve flattener: `1.0` on rows it generated
@@ -501,6 +525,7 @@ fn canonical_order(present: &HashSet<&'static str>) -> Vec<&'static str> {
             !ordered.contains(name)
                 && !BLOCK_ADDRESSES.contains(name)
                 && *name != FLATTENED_COLUMN
+                && *name != DWELL_COLUMN
                 && !matches!(*name, "T" | "M" | "non_returning_function_call" | "comment")
         })
         .collect();
@@ -510,6 +535,7 @@ fn canonical_order(present: &HashSet<&'static str>) -> Vec<&'static str> {
     for &name in BLOCK_ADDRESSES {
         push_if_present(name, &mut ordered);
     }
+    push_if_present(intern_column(DWELL_COLUMN), &mut ordered);
     push_if_present(intern_column(FLATTENED_COLUMN), &mut ordered);
     for name in ["T", "M", "non_returning_function_call", "comment"] {
         push_if_present(name, &mut ordered);

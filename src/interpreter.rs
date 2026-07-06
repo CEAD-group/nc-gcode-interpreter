@@ -549,6 +549,20 @@ mod tests {
         assert_eq!(floats(&table, "X").last().unwrap(), &Some(60.0));
     }
 
+    /// F on a G4 block is the dwell time in seconds, not a feed change: it
+    /// must land in the per-block `dwell` column and leave the modal F
+    /// column untouched (no forward-fill pollution).
+    #[test]
+    fn g4_dwell_does_not_pollute_feed() {
+        let table = interpret(
+            "G1 X0 Y0 F1000\n\
+             G4 F0.01\n\
+             G1 X10 Y0\n",
+        );
+        assert_eq!(floats(&table, "F"), &[Some(1000.0), Some(1000.0), Some(1000.0)]);
+        assert_eq!(floats(&table, "dwell"), &[None, Some(0.01), None]);
+    }
+
     /// The CR= radius form is likewise a per-block interpolation parameter and
     /// is accepted both bare (I50) and with `=` (CR=20).
     #[test]
