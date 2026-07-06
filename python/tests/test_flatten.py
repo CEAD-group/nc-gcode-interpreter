@@ -152,3 +152,19 @@ def test_nc_view_cli(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(viz, "view_toolpath", fake_view)
     assert cli.main([str(program), "--no-flatten"]) == 0
     assert "flattened" not in captured["df"].columns
+
+
+def test_nc_view_cli_axis_index_map(tmp_path, monkeypatch):
+    pytest.importorskip("threejs_viewer")
+    from nc_gcode_interpreter import cli, viz
+
+    program = tmp_path / "flow.mpf"
+    program.write_text("G1 X0 Y0 F1000\nFL[E]=10\nG1 X10 Y0\nX20 Y5\n")
+
+    seen = {}
+    monkeypatch.setattr(viz, "view_toolpath", lambda df, **kw: seen.setdefault("df", df))
+    assert cli.main([str(program), "--axis-index-map", "E:8,X:0", "--no-flatten"]) == 0
+    assert seen["df"].height >= 2
+
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["x.mpf", "--axis-index-map", "not-a-map"])

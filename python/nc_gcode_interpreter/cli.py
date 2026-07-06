@@ -13,6 +13,16 @@ import argparse
 from pathlib import Path
 
 
+def _parse_axis_index_map(spec: str) -> dict[str, int]:
+    try:
+        pairs = [pair.split(":") for pair in spec.split(",") if pair.strip()]
+        return {name.strip().upper(): int(index) for name, index in pairs}
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"expected comma-separated name:index pairs like 'E:4,X:0', got {spec!r}"
+        ) from error
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nc-view",
@@ -71,6 +81,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="extra axis identifiers, comma-separated (as in the interpreter CLI)",
     )
     parser.add_argument(
+        "--axis-index-map",
+        type=_parse_axis_index_map,
+        default=None,
+        metavar="E:4,X:0",
+        help="axis-to-index mapping for array assignments like FL[E]=10, "
+        "comma-separated name:index pairs (as in the interpreter CLI)",
+    )
+    parser.add_argument(
+        "--allow-undefined-variables",
+        action="store_true",
+        help="initialize undefined variables to 0.0 instead of erroring (as in the interpreter CLI)",
+    )
+    parser.add_argument(
         "--initial-state",
         type=Path,
         default=None,
@@ -100,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
         args.input,
         initial_state=initial_state,
         extra_axes=args.extra_axes,
+        axis_index_map=args.axis_index_map,
+        allow_undefined_variables=args.allow_undefined_variables,
         flatten_tolerance=tolerance,
     )
     if df.height < 2:
