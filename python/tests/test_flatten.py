@@ -113,6 +113,9 @@ def test_viz_toolpath_arrays():
     df, _ = nc_to_dataframe(ARC_PROGRAM, flatten_tolerance=0.5)
     data, colors = toolpath_arrays(df, bead_width=4.0)
     assert data.shape == (df.height, 6)
+    # float64: float32 frame times collapse to zero-duration frames once the
+    # cumulative time is large (16 ms quantum at 2e5 s).
+    assert data.dtype == np.float64
     # Feed-based time: 1000 mm/min = 16.67 mm/s; the ~157 mm semicircle plus
     # 10 mm exit takes ~10 s.
     total_len = float(np.hypot(np.diff(data[:, 1]), np.diff(data[:, 2])).sum())
@@ -229,6 +232,7 @@ def test_g4_dwell_and_run_start_feed():
 
 
 def test_view_toolpath_nozzle_and_follow():
+    np = pytest.importorskip("numpy")
     pytest.importorskip("threejs_viewer")
     from nc_gcode_interpreter.viz import view_toolpath
 
@@ -263,6 +267,7 @@ def test_view_toolpath_nozzle_and_follow():
         "toolpath_nozzle": "cylinder",
     }
     # The travel line is revealed by the same channel as the bead tube.
+    assert v.animation._frame_times.dtype == np.float64
     draw = next(c for c in v.animation._channels if c.name == "draw_ranges")
     assert draw.ids == ["toolpath", "toolpath_travel"]
     assert draw.data.shape[1] == 2

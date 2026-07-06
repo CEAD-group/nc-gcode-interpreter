@@ -87,7 +87,7 @@ def toolpath_arrays(
 ) -> "tuple[np.ndarray, np.ndarray | None]":
     """Convert an interpreter DataFrame to threejs-viewer toolpath arrays.
 
-    Returns ``(data, colors)``: ``data`` is the ``(N, 6)`` float32
+    Returns ``(data, colors)``: ``data`` is the ``(N, 6)`` float64
     ``[t_s, x, y, z, width, height]`` array a
     :class:`threejs_viewer.Toolpath` is built from — timestamps integrate
     segment length over the ``F`` feed rate (mm/min, ``default_feed`` when
@@ -173,6 +173,11 @@ def toolpath_arrays(
     else:
         extruding = np.ones(n, dtype=bool)
 
+    # float64 throughout: a long program's cumulative time (10^5 s) quantizes
+    # to ~16 ms steps in float32 - thousands of zero-duration frames late in
+    # the print (jerky playback, nozzle/frontier desync). Toolpath casts its
+    # geometry copy to float32 internally, which is fine for positions; the
+    # animation frame times must stay float64 (the wire is JSON, i.e. double).
     data = np.column_stack(
         [
             t,
@@ -182,7 +187,7 @@ def toolpath_arrays(
             np.where(extruding, width, 0.0),
             np.where(extruding, height, 0.0),
         ]
-    ).astype(np.float32)
+    )
 
     colors: np.ndarray | None = None
     if "flattened" in df.columns:
@@ -297,7 +302,9 @@ def view_toolpath(
         camera_follow=f"{id}_nozzle" if track == "follow" else None,
         camera_lookat=f"{id}_nozzle" if track == "lookat" else None,
     )
-    animation.set_frame_times(toolpath.times)
+    # Frame times from the float64 column, NOT toolpath.times (float32 - a
+    # long program's late frames would collapse to zero duration).
+    animation.set_frame_times(data[:, 0])
     fractions = np.linspace(0.0, 1.0, len(toolpath), dtype=np.float32)
     animated_ids = [id]
 
