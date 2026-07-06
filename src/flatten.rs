@@ -44,7 +44,7 @@
 //! thread cutting, and `TURN=` multi-turn helices.
 
 use crate::errors::ParsingError;
-use crate::output::{intern_column, CellMap, Row};
+use crate::output::{intern_column, CellMap, Row, FLATTENED_COLUMN};
 use crate::state::emit_warning;
 use crate::types::Value;
 use std::collections::HashMap;
@@ -351,6 +351,8 @@ impl Flattener {
                 let r = r_start + (r_end - r_start) * f;
                 cells.insert(u_axis, Value::Float(cu + r * angle.cos()));
                 cells.insert(v_axis, Value::Float(cv + r * angle.sin()));
+                // Generated sample, not a programmed position.
+                cells.insert(intern_column(FLATTENED_COLUMN), Value::Float(1.0));
             }
             for &(axis, start, end) in &linear {
                 let value = if k == segments { end } else { start + (end - start) * f };
@@ -472,6 +474,11 @@ impl Flattener {
             }
         }
 
+        // The buffer index of the last point-bearing block: for a B-spline,
+        // only its final sample (the curve end == last control point) is a
+        // programmed position.
+        let last_point_index = point_rows.iter().rev().find_map(|source| *source);
+
         let mut first_motion_pending = true;
         for (index, item) in items.into_iter().enumerate() {
             match item {
@@ -497,10 +504,21 @@ impl Flattener {
                         }
                         emitted.push(Row { line_no: row.line_no, cells, variable_changes: Vec::new() });
                     } else {
-                        for sample in &samples {
+                        for (si, sample) in samples.iter().enumerate() {
                             let mut cells = CellMap::default();
                             for (ci, &c) in channels.iter().enumerate() {
                                 cells.insert(c, Value::Float(sample[ci]));
+                            }
+                            // A run through an interpolating spline ends
+                            // exactly on its programmed point; a B-spline only
+                            // reaches a programmed position at the curve end.
+                            let is_run_end = si + 1 == samples.len();
+                            let programmed = match kind {
+                                SplineKind::BSpline => is_run_end && last_point_index == Some(index),
+                                _ => is_run_end,
+                            };
+                            if !programmed {
+                                cells.insert(intern_column(FLATTENED_COLUMN), Value::Float(1.0));
                             }
                             emitted.push(Row {
                                 line_no: row.line_no,
@@ -1325,6 +1343,62 @@ mod tests {
         // samples of the second.
         assert!(out[..m_index].iter().any(|r| r.line_no == 2));
         assert!(out[m_index + 1..].iter().any(|r| r.line_no == 4));
+    }
+
+    /// Generated samples carry the `flattened` marker; programmed positions
+    /// (arc endpoints, spline through-points, the B-spline curve end) do not.
+    #[test]
+    fn flattened_marker_distinguishes_generated_points() {
+        let marked = |r: &Row| r.cells.get(FLATTENED_COLUMN).is_some();
+
+        // Arc: every sample but the programmed endpoint is marked.
+        let mut fl = flattener(0.01);
+        let out = run(
+            &mut fl,
+            vec![
+                row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
+                row(2, &[("gg01_motion", s("G2")), ("X", f(100.0)), ("Y", f(0.0)), ("I", f(50.0)), ("J", f(0.0))]),
+            ],
+        );
+        assert!(!marked(&out[0]), "passthrough row must not be marked");
+        assert!(out[1..out.len() - 1].iter().all(marked));
+        assert!(!marked(out.last().unwrap()), "programmed arc endpoint must not be marked");
+
+        // Interpolating spline: the programmed points are the unmarked rows.
+        let pts = [(10.0, 20.0), (20.0, 40.0), (30.0, 30.0)];
+        let mut fl = flattener(0.01);
+        let mut rows = vec![
+            row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
+            row(2, &[("gg01_motion", s("ASPLINE")), ("X", f(pts[0].0)), ("Y", f(pts[0].1))]),
+        ];
+        for (i, (x, y)) in pts.iter().enumerate().skip(1) {
+            rows.push(row(3 + i, &[("X", f(*x)), ("Y", f(*y))]));
+        }
+        let out = run(&mut fl, rows);
+        let unmarked: Vec<(f64, f64)> = out[1..]
+            .iter()
+            .filter(|r| !marked(r))
+            .map(|r| xy(r))
+            .collect();
+        assert_eq!(unmarked, pts.to_vec(), "unmarked rows must be exactly the programmed points");
+
+        // B-spline: only the curve end (== last control point) is unmarked.
+        let mut fl = flattener(0.01);
+        let out = run(
+            &mut fl,
+            vec![
+                row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
+                row(2, &[("gg01_motion", s("BSPLINE")), ("X", f(10.0)), ("Y", f(20.0))]),
+                row(3, &[("X", f(20.0)), ("Y", f(-20.0))]),
+                row(4, &[("X", f(30.0)), ("Y", f(0.0))]),
+            ],
+        );
+        let unmarked_coord_rows: Vec<(f64, f64)> = out[1..]
+            .iter()
+            .filter(|r| !marked(r) && r.cells.get("X").is_some())
+            .map(|r| xy(r))
+            .collect();
+        assert_eq!(unmarked_coord_rows, vec![(30.0, 0.0)]);
     }
 
     #[test]

@@ -91,3 +91,16 @@ def test_invalid_tolerance_raises():
         nc_to_dataframe(ARC_PROGRAM, flatten_tolerance=0.0)
     with pytest.raises(ValueError):
         nc_to_dataframe(ARC_PROGRAM, flatten_tolerance=-1.0)
+
+
+def test_flattened_marker_column():
+    df, _ = nc_to_dataframe(ARC_PROGRAM, flatten_tolerance=0.1)
+    assert "flattened" in df.columns
+    # Unmarked rows are exactly the programmed positions: start, arc endpoint,
+    # final G1 — and the marker is never forward-filled.
+    originals = df.filter(pl.col("flattened").is_null())
+    assert originals["X"].to_list() == [0.0, 100.0, 110.0]
+    assert df.filter(pl.col("flattened") == 1.0).height == df.height - 3
+    # Without flattening the column does not exist.
+    df_plain, _ = nc_to_dataframe(ARC_PROGRAM)
+    assert "flattened" not in df_plain.columns

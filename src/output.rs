@@ -458,9 +458,18 @@ pub fn is_string_column(name: &str) -> bool {
 /// the modal G-group columns. Shared by the batch table and the streaming
 /// iterator so both fill identically.
 pub fn is_forward_filled_column(name: &str) -> bool {
-    let is_value = name != "M" && !is_string_column(name) && !BLOCK_ADDRESSES.contains(&name);
+    let is_value = name != "M"
+        && name != FLATTENED_COLUMN
+        && !is_string_column(name)
+        && !BLOCK_ADDRESSES.contains(&name);
     is_value || MODAL_G_GROUPS.contains(&name)
 }
+
+/// Marker column emitted by the curve flattener: `1.0` on rows it generated
+/// (intermediate polyline samples), absent on programmed positions - so
+/// filtering on null recovers the original toolpath points. Per-row like the
+/// block addresses: never forward-filled.
+pub const FLATTENED_COLUMN: &str = "flattened";
 
 /// Canonical output-column order over the set of columns present so far:
 /// N, modal then non-modal G-group columns, the fixed axis columns, any
@@ -491,6 +500,7 @@ fn canonical_order(present: &HashSet<&'static str>) -> Vec<&'static str> {
         .filter(|name| {
             !ordered.contains(name)
                 && !BLOCK_ADDRESSES.contains(name)
+                && *name != FLATTENED_COLUMN
                 && !matches!(*name, "T" | "M" | "non_returning_function_call" | "comment")
         })
         .collect();
@@ -500,6 +510,7 @@ fn canonical_order(present: &HashSet<&'static str>) -> Vec<&'static str> {
     for &name in BLOCK_ADDRESSES {
         push_if_present(name, &mut ordered);
     }
+    push_if_present(intern_column(FLATTENED_COLUMN), &mut ordered);
     for name in ["T", "M", "non_returning_function_call", "comment"] {
         push_if_present(name, &mut ordered);
     }
