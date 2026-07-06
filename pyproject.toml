@@ -26,6 +26,10 @@ dependencies = [
 dev = [
     "jupyter>=1.1.1"
 ]
+viz = [
+    "threejs-viewer>=0.0.39",
+    "numpy>=1.26",
+]
 test = [
     "pytest>=8.3.3",
     "mypy"

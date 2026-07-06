@@ -104,3 +104,26 @@ def test_flattened_marker_column():
     # Without flattening the column does not exist.
     df_plain, _ = nc_to_dataframe(ARC_PROGRAM)
     assert "flattened" not in df_plain.columns
+
+
+def test_viz_toolpath_arrays():
+    np = pytest.importorskip("numpy")
+    from nc_gcode_interpreter.viz import FLATTENED_COLOR, PROGRAMMED_COLOR, toolpath_arrays
+
+    df, _ = nc_to_dataframe(ARC_PROGRAM, flatten_tolerance=0.5)
+    data, colors = toolpath_arrays(df, bead_width=4.0)
+    assert data.shape == (df.height, 6)
+    # Feed-based time: 1000 mm/min = 16.67 mm/s; the ~157 mm semicircle plus
+    # 10 mm exit takes ~10 s.
+    total_len = float(np.hypot(np.diff(data[:, 1]), np.diff(data[:, 2])).sum())
+    assert abs(data[-1, 0] - total_len / (1000 / 60)) < 1e-3
+    assert (np.diff(data[:, 0]) > 0).all()
+    # Programmed vs generated coloring follows the flattened marker.
+    marker = df["flattened"].fill_null(0.0).to_numpy().astype(bool)
+    assert (colors[marker] == FLATTENED_COLOR).all()
+    assert (colors[~marker] == PROGRAMMED_COLOR).all()
+
+    # Without the marker column there is no color override.
+    df_plain, _ = nc_to_dataframe(ARC_PROGRAM)
+    _, colors_plain = toolpath_arrays(df_plain)
+    assert colors_plain is None

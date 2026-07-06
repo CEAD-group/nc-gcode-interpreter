@@ -16,6 +16,9 @@ released to PyPI.
   consumed, source line numbers and auxiliary cells preserved; generated
   samples carry a `flattened = 1` marker column so the original programmed
   points remain distinguishable
+- Optional `viz` extra: `nc_gcode_interpreter.viz.view_toolpath(df)` shows a
+  toolpath in threejs-viewer as an animated bead tube (feed-rate time base,
+  programmed vs flattened point coloring)
 
 - Program jumps and branches: `GOTOF`/`GOTOB`/`GOTO`/`GOTOC`/`GOTOS` and
   `CASE ... OF ... DEFAULT`, with per-scope label/block-number resolution,
