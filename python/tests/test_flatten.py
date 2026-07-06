@@ -168,3 +168,37 @@ def test_nc_view_cli_axis_index_map(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["x.mpf", "--axis-index-map", "not-a-map"])
+
+
+def test_viz_bead_detection_and_travel():
+    np = pytest.importorskip("numpy")
+    from nc_gcode_interpreter.viz import detect_bead_size, toolpath_arrays
+
+    program = (
+        ";Layer height: 1.50\n"
+        ";Deposition width: 6.00\n"
+        "G1 X0 Y0 Z0 E0 F1000\n"
+        "X10 Y0 E1\n"
+        "X20 Y0 E2\n"
+        "G0 X20 Y50\n"        # travel: E constant
+        "G1 X30 Y50 E3\n"
+    )
+    df, _ = nc_to_dataframe(program)
+    assert detect_bead_size(df) == (6.0, 1.5)
+
+    data, _ = toolpath_arrays(df)
+    widths = data[:, 4]
+    # 7 points: 2 comment rows (at the forward-filled position), then the 5
+    # motion blocks. Extruding points get the detected bead; the start cap,
+    # comment rows and the travel move get width 0.
+    assert widths.tolist() == [0.0, 0.0, 6.0, 6.0, 6.0, 0.0, 6.0]
+    assert data[:, 5].max() == 1.5
+    # Explicit arguments beat detection.
+    data, _ = toolpath_arrays(df, bead_width=2.0, bead_height=1.0)
+    assert data[:, 4].max() == 2.0
+
+    # No E column: everything extrudes; no comments: fallback 4.0 x 2.0.
+    df_plain, _ = nc_to_dataframe("G1 X0 Y0 F1000\nX10 Y0\nX20 Y5\n")
+    data, _ = toolpath_arrays(df_plain)
+    assert (data[:, 4] == 4.0).all() and (data[:, 5] == 2.0).all()
+    assert detect_bead_size(df_plain) == (None, None)

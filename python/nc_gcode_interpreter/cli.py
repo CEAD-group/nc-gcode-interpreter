@@ -55,16 +55,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bead-width",
         type=float,
-        default=4.0,
+        default=None,
         metavar="MM",
-        help="tube cross-section width (default: %(default)s)",
+        help="tube cross-section width (default: detected from header comments, else 4.0)",
     )
     parser.add_argument(
         "--bead-height",
         type=float,
         default=None,
         metavar="MM",
-        help="tube cross-section height (default: half the width)",
+        help="tube cross-section height (default: detected from header comments, else half the width)",
     )
     parser.add_argument(
         "--default-feed",
@@ -130,6 +130,18 @@ def main(argv: list[str] | None = None) -> int:
     if df.height < 2:
         print(f"{args.input}: program produced {df.height} output row(s) - nothing to plot")
         return 1
+
+    from .viz import detect_bead_size
+
+    if args.bead_width is None or args.bead_height is None:
+        detected_width, detected_height = detect_bead_size(df)
+        found = [
+            f"{label} {value}"
+            for label, value in (("width", detected_width), ("height", detected_height))
+            if value is not None
+        ]
+        if found:
+            print(f"bead size from program comments: {', '.join(found)}")
 
     generated = int(df["flattened"].sum() or 0) if "flattened" in df.columns else 0
     print(
