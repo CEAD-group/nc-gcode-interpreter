@@ -1,7 +1,8 @@
-from typing import Protocol
+from typing import Protocol, Iterator
+import os
 import polars as pl
-from ._internal import nc_to_columns as _nc_to_columns
 from ._internal import nc_to_rows as _nc_to_rows
+from ._internal import nc_to_batches as _nc_to_batches
 from ._internal import __doc__  # noqa: F401
 import json
 from pathlib import Path
@@ -14,11 +15,43 @@ class TextFileLike(Protocol):
     def read(self) -> str: ...
 
 
-__all__ = ["nc_to_dataframe", "nc_to_rows", "sanitize_dataframe", "dataframe_to_nc"]
+__all__ = [
+    "nc_to_dataframe",
+    "nc_to_rows",
+    "nc_to_batches",
+    "sanitize_dataframe",
+    "dataframe_to_nc",
+]
+
+# Batch size nc_to_dataframe uses internally when draining the batch stream it
+# concatenates. A 1.1 GB / 22M-row sweep put the optimum at 250k-1M (~33 s, a
+# flat minimum); it degrades outside that - 100k pays per-batch overhead, and
+# batches >=2M starve the pipeline (the worker blocks building a huge batch
+# before the consumer sees one) and add first-output latency. 500k measured
+# best and matches the nc_to_batches default, so both paths share one size.
+_COLLECT_BATCH_SIZE = 500_000
+
+
+def _normalize_input(input: "TextFileLike | str | os.PathLike") -> tuple[str, bool]:
+    """Normalize the ``input`` argument into ``(text_or_path, is_path)``.
+
+    Backwards compatible with the historical contract: a ``str`` is the
+    program text and a file-like object is read in Python. A ``pathlib.Path``
+    (or any :class:`os.PathLike`) is passed to Rust as a *path* so the file is
+    read there once, avoiding a Python-side read and the str->String copy over
+    the PyO3 boundary for large programs.
+    """
+    if input is None:
+        raise ValueError("input cannot be None")
+    if isinstance(input, str):
+        return input, False
+    if isinstance(input, os.PathLike):
+        return os.fspath(input), True
+    return input.read(), False
 
 
 def nc_to_dataframe(
-    input: TextFileLike | str,
+    input: "TextFileLike | str | os.PathLike",
     initial_state: TextFileLike | str | None = None,
     axis_identifiers: list[str] | None = None,
     extra_axes: list[str] | None = None,
@@ -79,15 +112,19 @@ def nc_to_dataframe(
     │ G1          ┆ 10.0 ┆ 20.0 ┆ 30.0 │
     └─────────────┴──────┴──────┴──────┘
     """
-    if input is None:
-        raise ValueError("input cannot be None")
-    if not isinstance(input, str):
-        input = input.read()
+    program, input_is_path = _normalize_input(input)
     if initial_state is not None and not isinstance(initial_state, str):
         initial_state = initial_state.read()
 
-    data, schema, state = _nc_to_columns(
-        input,
+    # The whole table is the concatenation of the batch stream: the interpreter
+    # runs on a worker thread, building columnar batches (each a real
+    # pl.DataFrame via pyo3-polars, no Python-list materialization) that this
+    # thread concatenates. Streaming the batches keeps only one batch of
+    # intermediate rows alive at a time - far less peak memory than collecting
+    # all rows up front - and overlaps interpretation with DataFrame assembly.
+    it = _nc_to_batches(
+        program,
+        _COLLECT_BATCH_SIZE,
         initial_state,
         axis_identifiers,
         extra_axes,
@@ -95,19 +132,22 @@ def nc_to_dataframe(
         disable_forward_fill,
         axis_index_map,
         allow_undefined_variables,
+        input_is_path,
     )
-    df = pl.DataFrame(
-        data, schema={name: _DTYPES[dtype] for name, dtype in schema}
-    )
-    return df, state
-
-
-_DTYPES: dict[str, pl.DataType | type[pl.DataType]] = {
-    "f64": pl.Float64,
-    "i64": pl.Int64,
-    "str": pl.String,
-    "list[str]": pl.List(pl.String),
-}
+    frames: list[pl.DataFrame] = list(it)
+    state = it.state
+    if not frames:
+        # A program with no output rows (e.g. only variable assignments) yields
+        # no batches; return an empty frame with the final state, as before.
+        return pl.DataFrame(), state
+    if len(frames) == 1:
+        return frames[0], state
+    # Later batches may introduce a column a header line did not (e.g. `M`
+    # first appears mid-program): a diagonal concat unions them (absent -> null),
+    # and the last batch's columns are the canonical order (the batch builder
+    # applies canonical_order cumulatively, so the final batch has every column
+    # in the same order the whole-table path produced).
+    return pl.concat(frames, how="diagonal").select(frames[-1].columns), state
 
 
 _T = TypeVar("_T")
@@ -201,9 +241,13 @@ def sanitize_dataframe(
         "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
     ]
     string_columns = {*modal, *non_modal, "T", "non_returning_function_call", "comment"}
-    # Spline block addresses: value columns, but never forward-filled (a
-    # point weight applies only to the point it is programmed with).
-    block_addresses = ["PW", "SD", "PL"]
+    # Block addresses: value columns, but never forward-filled. These are the
+    # circular/helical interpolation parameters (I/J/K arc-centre offsets and
+    # the CR radius form) and the spline programming addresses (PW/SD/PL).
+    # Each value belongs only to the block that programs it, so it must not be
+    # carried forward. Keep this list identical (and in the same order) to the
+    # Rust BLOCK_ADDRESSES constant so both output layers agree on columns.
+    block_addresses = ["I", "J", "K", "CR", "PW", "SD", "PL"]
 
     # Value columns: anything that is not a known string/list column.
     value_columns = [
@@ -325,7 +369,7 @@ def dataframe_to_nc(df: pl.DataFrame, file_path: str | Path):
 
 
 def nc_to_rows(
-    input: TextFileLike | str,
+    input: "TextFileLike | str | os.PathLike",
     initial_state: TextFileLike | str | None = None,
     axis_identifiers: list[str] | None = None,
     extra_axes: list[str] | None = None,
@@ -374,14 +418,11 @@ def nc_to_rows(
     1 None {'R1': 5.0}
     2 5.0 {}
     """
-    if input is None:
-        raise ValueError("input cannot be None")
-    if not isinstance(input, str):
-        input = input.read()
+    program, input_is_path = _normalize_input(input)
     if initial_state is not None and not isinstance(initial_state, str):
         initial_state = initial_state.read()
     return _nc_to_rows(
-        input,
+        program,
         initial_state,
         axis_identifiers,
         extra_axes,
@@ -390,4 +431,84 @@ def nc_to_rows(
         include_variables,
         axis_index_map,
         allow_undefined_variables,
+        input_is_path,
     )
+
+
+class _BatchIterator:
+    """Iterator of polars DataFrames returned by :func:`nc_to_batches`.
+
+    Wraps the Rust batch iterator, which yields each batch as a real
+    :class:`polars.DataFrame` built in Rust and transferred via pyo3-polars
+    (the Arrow C data interface) - no Python list of primitives is materialized.
+    After exhaustion its ``state`` attribute holds the final interpreter state
+    (axes, symbol_table, translation), like the iterator returned by
+    :func:`nc_to_rows`.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def __iter__(self) -> "Iterator[pl.DataFrame]":
+        return self
+
+    def __next__(self) -> pl.DataFrame:
+        return next(self._inner)
+
+    @property
+    def state(self) -> dict | None:
+        return self._inner.state
+
+
+def nc_to_batches(
+    input: "TextFileLike | str | os.PathLike",
+    batch_size: int = 500_000,
+    initial_state: TextFileLike | str | None = None,
+    axis_identifiers: list[str] | None = None,
+    extra_axes: list[str] | None = None,
+    iteration_limit: int = 10000,
+    disable_forward_fill: bool = False,
+    axis_index_map: dict[str, int] | None = None,
+    allow_undefined_variables: bool = False,
+) -> _BatchIterator:
+    """Interpret an NC program into a stream of columnar polars DataFrames.
+
+    Yields one :class:`polars.DataFrame` per batch of at most ``batch_size``
+    output rows. Each batch is built column-wise in Rust (the same machinery
+    :func:`nc_to_dataframe` uses), so memory stays bounded by the batch size
+    rather than materializing the whole program at once - the way to process a
+    program too large to fit in one DataFrame.
+
+    Forward-filling (axes, value columns and modal G-groups) carries across
+    batch boundaries, and the canonical column set grows as new columns appear,
+    so concatenating the batches reconstructs :func:`nc_to_dataframe` exactly.
+    When every column already appears in the first batch (the usual case) the
+    batches share one schema and ``pl.concat`` suffices; otherwise concatenate
+    with ``how="diagonal"`` and select the final column order.
+
+    The returned iterator exposes a ``state`` attribute holding the final
+    interpreter state once it is exhausted, like :func:`nc_to_rows`.
+
+    Example:
+    --------
+    >>> batches = nc_to_batches("G1 X10\\nX20 Y5", batch_size=1)
+    >>> frames = list(batches)
+    >>> pl.concat(frames, how="diagonal").height
+    2
+    """
+    program, input_is_path = _normalize_input(input)
+    if initial_state is not None and not isinstance(initial_state, str):
+        initial_state = initial_state.read()
+    inner = _nc_to_batches(
+        program,
+        batch_size,
+        initial_state,
+        axis_identifiers,
+        extra_axes,
+        iteration_limit,
+        disable_forward_fill,
+        axis_index_map,
+        allow_undefined_variables,
+        input_is_path,
+    )
+    return _BatchIterator(inner)

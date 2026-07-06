@@ -1,11 +1,38 @@
 use crate::errors::ParsingError;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+/// Emit an interpreter warning to stderr. Callers pass `format_args!(...)` so
+/// the message is only formatted at the point of emission.
+pub fn emit_warning(args: std::fmt::Arguments) {
+    eprintln!("{}", args);
+}
 
 /// Block addresses: per-block values that are emitted to the output like axes,
-/// but are not axes (no translation applies) and not user variables.
-/// Currently the spline programming addresses (PW: point weight, SD: spline
-/// degree, PL: parameter interval length).
-pub const BLOCK_ADDRESSES: &[&str] = &["PW", "SD", "PL"];
+/// but are not axes (no translation applies) and not user variables. They are
+/// non-modal: each value belongs to the block that programs it and is never
+/// forward-filled onto later blocks.
+///
+/// Two families share these semantics:
+/// * the circular/helical interpolation parameters `I`, `J`, `K` (arc-centre
+///   offsets relative to the start point) and `CR` (the arc-radius form),
+///   programmed on G2/G3 (and CIP/CT) blocks;
+/// * the spline programming addresses `PW` (point weight), `SD` (spline
+///   degree) and `PL` (parameter interval length).
+///
+/// Before these were listed here the arc-centre offsets were silently dropped
+/// from the output (they fell through to the user-variable branch), so arcs
+/// came out as bare straight-line endpoints.
+pub const BLOCK_ADDRESSES: &[&str] = &["I", "J", "K", "CR", "PW", "SD", "PL"];
+
+/// Which kind of output column an assignment key resolves to. Variables (which
+/// never appear as output cells) are represented by the absence of a resolution
+/// (see [`State::resolve_output_key`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColKind {
+    Axis,
+    Block,
+}
 
 #[derive(Debug, Clone)]
 pub struct State {
@@ -23,10 +50,19 @@ pub struct State {
     /// Every jump target seen anywhere during the run (never popped), used
     /// for "did you mean" suggestions when a jump destination is not found.
     pub seen_jump_targets: HashSet<String>,
-    /// Store line offsets for efficient error reporting
-    line_offsets: Vec<usize>,
-    /// Store the input text for error messages
-    input: String,
+    /// Store line offsets for efficient error reporting. Shared (`Arc`) to
+    /// avoid re-copying the offset table when the state is cloned.
+    line_offsets: Arc<[usize]>,
+    /// Store the input text for error messages. Shared (`Arc`) so cloning the
+    /// state does not copy the (up to gigabyte) program buffer.
+    input: Arc<str>,
+    /// Registry resolving an assignment key (axis or block address) to its
+    /// interned `&'static str` output-column name, so output rows carry `Copy`
+    /// keys with no per-row allocation. Keyed by the uppercased name; the
+    /// lookup falls back to uppercasing only when a direct (already-uppercase)
+    /// hit misses. Built once at construction from the axis identifiers and the
+    /// fixed block addresses.
+    output_keys: HashMap<String, (ColKind, &'static str)>,
 }
 
 impl State {
@@ -56,6 +92,23 @@ impl State {
             }
         }
 
+        // Pre-resolve every output-column key to its interned &'static str
+        // once, up front. Axis identifiers are case-insensitive on lookup, so
+        // the registry is keyed by the uppercased name.
+        let mut output_keys: HashMap<String, (ColKind, &'static str)> = HashMap::new();
+        for axis in &axis_identifiers {
+            let upper = axis.to_uppercase();
+            let interned = crate::output::intern_column(&upper);
+            output_keys.insert(upper, (ColKind::Axis, interned));
+        }
+        for &block in BLOCK_ADDRESSES {
+            // Block addresses are constants; a direct static lookup is enough,
+            // but interning keeps a single source of &'static str keys.
+            output_keys
+                .entry(block.to_string())
+                .or_insert((ColKind::Block, crate::output::intern_column(block)));
+        }
+
         State {
             axes: HashMap::new(),
             symbol_table: symbols,
@@ -66,9 +119,22 @@ impl State {
             allow_undefined_variables,
             jump_scopes: Vec::new(),
             seen_jump_targets: HashSet::new(),
-            line_offsets: Vec::new(),
-            input: String::new(),
+            line_offsets: Arc::from(Vec::new()),
+            input: Arc::from(""),
+            output_keys,
         }
+    }
+
+    /// Resolve an assignment key to its output column: `Some((kind, interned
+    /// name))` for an axis or block address, or `None` for a user variable
+    /// (which is never emitted as an output cell). The common case - a key
+    /// already in canonical (uppercase) form - hits without allocating; only a
+    /// mixed/lowercase key pays a single `to_uppercase`.
+    pub fn resolve_output_key(&self, key: &str) -> Option<(ColKind, &'static str)> {
+        if let Some(entry) = self.output_keys.get(key) {
+            return Some(*entry);
+        }
+        self.output_keys.get(&key.to_uppercase()).copied()
     }
 
     /// True if a jump target (canonical key) is defined in any scope on the
@@ -77,13 +143,19 @@ impl State {
         self.jump_scopes.iter().any(|scope| scope.contains(key))
     }
 
-    /// Sets the input text and pre-calculates line offsets for efficient access
-    pub fn set_input(&mut self, input: String) {
+    /// Sets the input text and pre-calculates line offsets for efficient access.
+    /// `Arc::from(&str)` copies the program once into the `Arc<str>` (making
+    /// later `State` clones cheap). Taking `&str` lets the caller pass its
+    /// existing borrow directly; the previous `set_input(input.to_string())`
+    /// call first materialized a throwaway `String` - a second full copy of the
+    /// whole program, a wasted gigabyte on the largest inputs.
+    pub fn set_input(&mut self, input: &str) {
         self.line_offsets = input
             .match_indices('\n')
             .map(|(i, _)| i)
-            .collect();
-        self.input = input;
+            .collect::<Vec<_>>()
+            .into();
+        self.input = Arc::from(input);
     }
 
     /// Gets a line from the input by line number (1-based indexing)

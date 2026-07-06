@@ -1,8 +1,28 @@
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Any, Iterator, Optional, List, Dict, Tuple
 
-# Type hint for the `nc_to_columns` function
-def nc_to_columns(
+# Type stubs for the compiled Rust extension `nc_gcode_interpreter._internal`.
+# mypy cannot introspect the pyo3 module, so the public entry points the Python
+# wrapper imports are declared here. Signatures mirror the `#[pyo3(signature)]`
+# defaults in src/lib.rs.
+
+def nc_to_rows(
     input: str,
+    initial_state: Optional[str] = None,
+    axis_identifiers: Optional[List[str]] = None,
+    extra_axes: Optional[List[str]] = None,
+    iteration_limit: int = 10000,
+    forward_fill: bool = True,
+    include_variables: bool = False,
+    axis_index_map: Optional[Dict[str, int]] = None,
+    allow_undefined_variables: bool = False,
+    input_is_path: bool = False,
+) -> Iterator[Tuple[Any, ...]]:
+    """Interpret an NC program lazily into ``(line_no, row[, variables])`` tuples."""
+    ...
+
+def nc_to_batches(
+    input: str,
+    batch_size: int = 500_000,
     initial_state: Optional[str] = None,
     axis_identifiers: Optional[List[str]] = None,
     extra_axes: Optional[List[str]] = None,
@@ -10,24 +30,9 @@ def nc_to_columns(
     disable_forward_fill: bool = False,
     axis_index_map: Optional[Dict[str, int]] = None,
     allow_undefined_variables: bool = False,
-) -> Tuple[Dict[str, List[Any]], List[Tuple[str, str]], Dict[str, Dict[str, float]]]:
-    """
-    Interpret an NC program and return plain columnar data.
-
-    Returns:
-    --------
-    Tuple[Dict[str, List[Any]], List[Tuple[str, str]], Dict[str, Dict[str, float]]]
-        A tuple of:
-        - data: mapping of column name to a list of cell values (None = null)
-        - schema: ordered list of (column name, dtype name) pairs, where the
-          dtype name is one of "f64", "i64", "str", "list[str]"
-        - state: nested dictionary representing the interpreter state after
-          execution
-
-    The Python wrapper (`nc_gcode_interpreter.nc_to_dataframe`) assembles a
-    polars DataFrame from this; the Rust extension itself has no polars
-    dependency.
-    """
+    input_is_path: bool = False,
+) -> Any:
+    """Interpret an NC program into an iterator of columnar polars DataFrames."""
     ...
 
-__all__ = ["nc_to_columns"]
+__all__ = ["nc_to_rows", "nc_to_batches"]

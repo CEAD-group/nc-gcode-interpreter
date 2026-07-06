@@ -136,8 +136,8 @@ Net effect: 3.74 s → 3.2 s parse (~15%), 17.5M → 14.3M pairs.
    generated gg walls became a Rust lookup table, the grammar recognizes
    only the lexical shapes `G<digits>` and `GFRAME[<n>]`) more than
    halved what remained: **1.43 s** for the 1M-line mixed flood,
-   0.99 s for a pure-`G54` flood (was 3.58 s), 1.47 s for the real
-   319k-line Sheffield program (was 2.37 s). The win applies to *all*
+   0.99 s for a pure-`G54` flood (was 3.58 s), 1.47 s for a real-world
+   21 MB (319k-line) program (was 2.37 s). The win applies to *all*
    line shapes because the compiled parser shrank by hundreds of literal
    matchers. Beyond this, a substantially faster front end means the
    stage-1 line triage below — not more grammar tuning.
@@ -214,7 +214,7 @@ disables the fast path; the differential tests
 (`python/tests/test_stage1.py`) run synthetic edge cases and the whole
 mill-sim corpus through both paths and assert identical output.
 
-Measured on the 319k-line Sheffield program, end to end: the Rust CLI
+Measured on the real-world 21 MB (319k-line) program, end to end: the Rust CLI
 (decode + execute + table + CSV) went 5.0 s → **2.9 s**, and
 `nc_to_dataframe` from Python 33 s → **9 s**. Parsing has left the
 profile entirely; what remains is row assembly (`HashMap` rows,
@@ -236,7 +236,7 @@ on the bounded channel) until it is deleted or garbage-collected.
 Errors raise from `next()` at the offending row; the final state is
 available on the iterator once exhausted.
 
-On the 319k-line Sheffield program: the first row arrives after ~1.6 s
+On the real-world 21 MB (319k-line) program: the first row arrives after ~1.6 s
 (the price of eager whole-file validation — the decode/parse passes run
 before execution starts), a full drain takes ~8.6 s versus ~10 s for the
 batch DataFrame, and memory stays constant. The differential tests

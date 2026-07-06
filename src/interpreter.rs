@@ -95,10 +95,48 @@ pub fn nc_to_row_stream(
     Ok(state)
 }
 
+/// Batch-streaming twin of `nc_to_table`: interpret the program building
+/// completed columnar batches on this worker thread and pushing each finished
+/// [`Table`] into `sender` (every `batch_size` output rows, plus a trailing
+/// partial batch). Forward-fill state is carried across batches, so - rows being
+/// produced in program order - concatenating the batches reconstructs the
+/// whole-file table. Blocks on the channel when the consumer is slower;
+/// aborts with `StreamClosed` when the consumer hangs up.
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // used by the python-feature bindings, not the bin
+pub fn nc_to_batch_stream(
+    input: &str,
+    initial_state: Option<&str>,
+    axis_identifiers: Option<Vec<String>>,
+    extra_axes: Option<Vec<String>>,
+    iteration_limit: usize,
+    disable_forward_fill: bool,
+    axis_index_map: Option<HashMap<String, usize>>,
+    allow_undefined_variables: bool,
+    batch_size: usize,
+    sender: std::sync::mpsc::SyncSender<Table>,
+) -> Result<state::State, ParsingError> {
+    let mut state = build_state(
+        axis_identifiers,
+        extra_axes,
+        iteration_limit,
+        axis_index_map,
+        allow_undefined_variables,
+    );
+    if let Some(initial_state) = initial_state {
+        let mut discard = OutputRows::collect();
+        interpret_file(initial_state, &mut state, &mut discard)?;
+    }
+    let mut output = OutputRows::batch_stream(sender, batch_size, disable_forward_fill);
+    interpret_file(input, &mut state, &mut output)?;
+    output.finish()?;
+    Ok(state)
+}
+
 /// Interpret a file, pushing rows into `output`.
 fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
     // Store input for error messages
-    state.set_input(input.to_string());
+    state.set_input(input);
 
     // Validate control-structure nesting first: a PEG reports an unclosed
     // IF/WHILE at the end of the file; the line scan reports the opener.
@@ -395,5 +433,113 @@ mod parse_speed {
             table.columns.first().map_or(0, |(_, c)| c.len()),
             table.columns.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod interpret_speed {
+    use super::*;
+    use std::time::Instant;
+
+    /// Times pure interpret+materialize into a collect sink (no CSV, no
+    /// python, no table build), plus the whole nc_to_table. Run with:
+    /// BENCH_FILE=... cargo test --release --lib interpret_speed -- --ignored --nocapture
+    #[test]
+    #[ignore = "performance benchmark, run explicitly in release mode"]
+    fn interpret_speed_bench() {
+        let path = std::env::var("BENCH_FILE").expect("set BENCH_FILE");
+        let input = std::fs::read_to_string(&path).expect("readable");
+        let lines = input.lines().count();
+        println!("input: {} ({} lines, {:.1} MB)", path, lines, input.len() as f64 / 1_048_576.0);
+        let extra = Some(vec!["ELX".to_string()]);
+        let aim = Some(HashMap::from([("E".to_string(), 4usize), ("ELX".to_string(), 5usize)]));
+
+        // interpret + materialize into a Vec<Row> collect sink (no table build)
+        let start = Instant::now();
+        let mut state = build_state(None, extra.clone(), 10_000, aim.clone(), true);
+        let mut output = OutputRows::collect();
+        interpret_file(&input, &mut state, &mut output).expect("interpret");
+        let rows = output.finish().expect("finish");
+        let materialize = start.elapsed();
+        println!("interpret+materialize (collect): {:>8.2?}  ({} rows)", materialize, rows.len());
+
+        let start = Instant::now();
+        let _table = Table::from_rows(&rows, false);
+        println!("table build:                     {:>8.2?}", start.elapsed());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::Column;
+
+    fn interpret(input: &str) -> Table {
+        let (table, _state) = nc_to_table(input, None, None, None, 10000, false, None, false)
+            .expect("program should interpret");
+        table
+    }
+
+    fn floats<'a>(table: &'a Table, name: &str) -> &'a [Option<f64>] {
+        table
+            .columns
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, c)| match c {
+                Column::Float(v) => v.as_slice(),
+                other => panic!("column {name} is not a float column: {other:?}"),
+            })
+            .unwrap_or_else(|| panic!("column {name} missing; have {:?}", column_names(table)))
+    }
+
+    fn column_names(table: &Table) -> Vec<&str> {
+        table.columns.iter().map(|(n, _)| n.as_str()).collect()
+    }
+
+    /// The interpolation parameters I/J/K (arc-centre offsets) and the CR
+    /// radius form must be emitted on the arc block that programs them and be
+    /// absent (null) on ordinary linear blocks - never silently dropped and
+    /// never forward-filled.
+    #[test]
+    fn arc_centre_offsets_are_emitted_per_block() {
+        // Rows: 0 G1, 1 G2(I/J), 2 G1, 3 G3(I/J), 4 G2(helical I/J/K), 5 G1.
+        let table = interpret(
+            "G1 X0 Y0 Z0 F1000\n\
+             G2 X100 Y0 I50 J0\n\
+             G1 X100 Y50\n\
+             G3 X0 Y50 I-50 J0\n\
+             G2 X0 Y0 Z10 I0 J-25 K5\n\
+             G1 X60 Y60\n",
+        );
+
+        assert_eq!(
+            floats(&table, "I"),
+            &[None, Some(50.0), None, Some(-50.0), Some(0.0), None]
+        );
+        assert_eq!(
+            floats(&table, "J"),
+            &[None, Some(0.0), None, Some(0.0), Some(-25.0), None]
+        );
+        assert_eq!(
+            floats(&table, "K"),
+            &[None, None, None, None, Some(5.0), None]
+        );
+
+        // Axes are still forward-filled; the arc offsets are not.
+        assert_eq!(floats(&table, "X").last().unwrap(), &Some(60.0));
+    }
+
+    /// The CR= radius form is likewise a per-block interpolation parameter and
+    /// is accepted both bare (I50) and with `=` (CR=20).
+    #[test]
+    fn arc_radius_form_is_emitted_per_block() {
+        // Rows: 0 G1, 1 G2(CR), 2 G1.
+        let table = interpret(
+            "G1 X0 Y0 F1000\n\
+             G2 X40 Y0 CR=20\n\
+             G1 X50 Y0\n",
+        );
+
+        assert_eq!(floats(&table, "CR"), &[None, Some(20.0), None]);
     }
 }

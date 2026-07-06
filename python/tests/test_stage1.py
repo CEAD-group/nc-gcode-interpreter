@@ -39,6 +39,8 @@ def run_both(program, **kwargs):
         "G1 X1 Y1\nG0 X0\nG54\nG17 G94 G90",
         "BSPLINE\nX1 Y1 PW=1.5\nX2 Y2 PW=0.5\nG1",
         "X1 A=0.0 B=-1.5 C=90. ELX=3087.022334",
+        # arcs: I/J/K/CR interpolation parameters are per-block, never sticky
+        "G1 X0 Y0 F1000\nG2 X100 Y0 I50 J0\nG1 X100 Y50\nG3 X0 Y50 CR=60\nG1 X0 Y0",
         # comments, blanks, N-only lines
         "; header\nX1 ; move\n\nN100\nX2",
         # M codes incl. end-of-program mid-file
@@ -51,6 +53,21 @@ def run_both(program, **kwargs):
         "GOTOC NOWHERE\nX2",
         "CASE(5) OF 7 GOTOF SEVEN DEFAULT GOTOF OTHER\nSEVEN: X7\nGOTOF ENDE\nOTHER: X0\nENDE: M30",
         "GOTOS\nX1",
+        # deferred IC() product words (computed extrusion multipliers)
+        "E_MULTIPLIER = 1\nE=0\nG1 X1 E=IC(E_MULTIPLIER*0.02988)\n"
+        "E_MULTIPLIER = 2\nX2 E=IC(E_MULTIPLIER*0.5)\nE=IC(0.25*E_MULTIPLIER)\nE=IC(2)",
+        # underscore-leading identifiers in deferred product words
+        "_MULT = 2\nE=0\nG1 X1 E=IC(_MULT*0.5)\nX2 E=IC(0.25*_MULT)\n_MULT = 4\nX3 E=IC(_MULT*1.5)",
+        # NOT is an operator, not a constant: these must reject to pest
+        "YNEG = 0\nYNEG = NOT YNEG\nX=YNEG\nR1 = NOT 0\nX=R1",
+        # deferred paren product words and constant-expression folding
+        "F_MULTI = 1\nG1 X1 F=(F_MULTI*30000)\nF_MULTI = 2\nX2 F=(F_MULTI*1314)",
+        "MATERIAL_STILL_NEEDED = 149582.2969-17.7451\nPROGRAM_PROGRESS = 100 * 1/2222\n"
+        "MATERIAL_PROGRESS = 100*38.0828/149582.2969\nP_1 = 1+2*3\nP_2 = -2*3",
+        # whitespace around '=' and bare parameterless subprogram calls
+        "E_MULTIPLIER  = 1\nCTOL = 1\nN53 MATERIAL_UPDATE\nN37 EXTRUDER_ON ;(heaters)\nX1 LAYER_CHANGE M3",
+        # word operators must not split into assignment + call
+        "R1=10\nX=5 DIV R1\nX=5 MOD R1",
         # lines the decoder must reject to pest, mixed with claimed ones
         "DEF REAL DEPTH=2.5\nX=DEPTH\nTRANS X10\nX1\nTRANS\nX2",
         "R1=1+2\nX=R1*3\nY=SIN(30)\nZ=IC(5)",
@@ -87,6 +104,25 @@ def test_grammar_heavy_program_declines_the_fast_path():
     df, _state = nc_to_dataframe(program)
     assert df.height == lines
     assert abs(df["X"][0] - 0.5) < 1e-12
+
+
+EXAMPLES = pathlib.Path(__file__).parent.parent.parent / "examples"
+
+
+@pytest.mark.parametrize(
+    "mpf", sorted(EXAMPLES.glob("*.mpf")), ids=lambda p: p.name
+)
+def test_fast_path_matches_on_examples(mpf):
+    """The shipped examples through both paths, with the same kwargs as the
+    golden-CSV test (initial_state, extra axes, index map) so the fast path
+    is differentially covered in CI, where the mill-sim corpus is absent."""
+    run_both(
+        mpf.read_text(),
+        initial_state=(EXAMPLES / "defaults.mpf").read_text(),
+        iteration_limit=10000,
+        extra_axes=["ELX"],
+        axis_index_map={"E": 4},
+    )
 
 
 MILL_SIM = pathlib.Path(

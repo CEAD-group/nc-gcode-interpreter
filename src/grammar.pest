@@ -115,9 +115,12 @@ reserved   = _{
   | ^"ENDLOOP"
 }
 
+// Sinumerik user variables may begin with an underscore: CAM post-processors
+// routinely emit `_`-prefixed temporaries (e.g. `_WITH_M0`). The first
+// character is a letter or underscore; the rest are alphanumeric/underscore.
 identifier = @{
     !(reserved ~ !(ASCII_ALPHANUMERIC | "_"))
-    ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*
+    ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*
 }
 
 variable             =  { (nc_variable | identifier) }
@@ -158,8 +161,12 @@ op_mul           =  { "*" }
 op_div           =  { "/" }
 op_int_div       =  { "DIV" }
 op_mod           =  { "MOD" }
-prefix           = _{ neg }
+prefix           = _{ neg | not_op }
 neg              =  { "-" }
+// Logical negation (unary, binds like unary minus). The word boundary keeps
+// identifiers such as NOTCH out of the operator rule; prefixes are tried
+// before `primary`, so a bare NOT never parses as a variable read.
+not_op           = @{ ^"NOT" ~ !(ASCII_ALPHANUMERIC | "_") }
 primary          =  { arith_fun | value | variable_array | variable | "(" ~ expression ~ ")" }
 float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* ~ !ASCII_ALPHA } // Ensure floats are not followed by letters
 integer          = @{ "-"? ~ ASCII_DIGIT+ ~ !ASCII_ALPHA } // Ensure integers are not followed by letters

@@ -1,0 +1,14 @@
+; Circular interpolation with I/J/K arc-centre offsets and the CR= radius form.
+; I, J, K (arc-centre offsets, relative to the start point) and CR (arc radius)
+; are interpolation parameters: per-block values emitted like axes, but not
+; axes (no TRANS offset) and not forward-filled - each belongs only to the
+; arc block that programs it, so a following linear move has empty I/J/K/CR.
+
+G1 X0 Y0 Z0 F1000
+G2 X100 Y0 I50 J0
+G1 X100 Y50
+G3 X0 Y50 I-50 J0
+G2 X0 Y0 Z10 I0 J-25 K5
+G1 X60 Y60
+G2 X100 Y60 CR=20
+M30

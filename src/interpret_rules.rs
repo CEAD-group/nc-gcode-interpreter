@@ -1,5 +1,5 @@
 use crate::errors::ParsingError;
-use crate::state::State;
+use crate::state::{ColKind, State};
 use crate::types::Pair;
 use crate::types::Rule;
 use crate::types::Value;
@@ -216,7 +216,7 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
                 if let Some(value) = state.symbol_table.get(&key).cloned() {
                     Ok(value)
                 } else if state.allow_undefined_variables {
-                    eprintln!("Warning: Variable '{}' is undefined, initializing to 0.0", key);
+                    crate::state::emit_warning(format_args!("Warning: Variable '{}' is undefined, initializing to 0.0", key));
                     state.symbol_table.insert(key, 0.0);
                     Ok(0.0)
                 } else {
@@ -235,7 +235,7 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
                 if let Some(value) = state.symbol_table.get(key).cloned() {
                     Ok(value)
                 } else if state.allow_undefined_variables {
-                    eprintln!("Warning: Variable array element '{}' is undefined, initializing to 0.0", key);
+                    crate::state::emit_warning(format_args!("Warning: Variable array element '{}' is undefined, initializing to 0.0", key));
                     state.symbol_table.insert(key.clone(), 0.0);
                     Ok(0.0)
                 } else {
@@ -479,9 +479,13 @@ fn evaluate_multiplicative(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut St
 }
 
 fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
-    let mut sign = 1.0f64;
-    while pairs.get(*pos).is_some_and(|p| p.as_rule() == Rule::neg) {
-        sign = -sign;
+    let mut prefixes: Vec<Rule> = Vec::new();
+    while let Some(rule) = pairs
+        .get(*pos)
+        .map(|p| p.as_rule())
+        .filter(|r| matches!(r, Rule::neg | Rule::not_op))
+    {
+        prefixes.push(rule);
         *pos += 1;
     }
     let pair = pairs.get(*pos).ok_or_else(|| {
@@ -507,17 +511,32 @@ fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> R
         });
     }
     *pos += 1;
-    let value = interpret_primary(pair.clone(), state)?;
-    Ok(sign * value)
+    let mut value = interpret_primary(pair.clone(), state)?;
+    // Prefixes apply innermost-first: in `NOT -X` the negation happens
+    // before the logical NOT, so fold over them right to left.
+    for applied in prefixes.iter().rev() {
+        value = match applied {
+            Rule::neg => -value,
+            Rule::not_op => {
+                if value == 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            _ => unreachable!("prefix loop only collects neg/not_op"),
+        };
+    }
+    Ok(value)
 }
 /// Classify a lexically G-shaped command (`G<digits>` or `GFRAME[<n>]`)
 /// against the vocabulary table: the column key is the G-group name, the
 /// value the command as written. An unknown G number is a hard error, like
 /// alarm 12470 "undefined G function" on a real control.
-fn interpret_g_command(g_command: Pair<Rule>, state: &State) -> Result<(String, String), ParsingError> {
+fn interpret_g_command(g_command: Pair<Rule>, state: &State) -> Result<(&'static str, String), ParsingError> {
     let command_str = g_command.as_str().trim().to_string();
     match crate::modal_groups::classify_g_command(&command_str.to_uppercase()) {
-        Some((group, _modal)) => Ok((group.to_string(), command_str)),
+        Some((group, _modal)) => Ok((group, command_str)),
         None => {
             let (line_no, preview) = get_error_context(&g_command, state);
             Err(ParsingError::UnknownGCommand {
@@ -571,18 +590,18 @@ fn interpret_tool_selection(
     }
 
     // Insert the tool name into the output.
-    last.insert("T".to_string(), Value::Str(tool_name));
+    last.insert("T", Value::Str(tool_name));
 
     Ok(())
 }
-fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (String, String) {
+fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (&'static str, String) {
     // Log the interpretd function call for debugging
     //println!("Parsed function call: {:?}", function_call);
 
     let command_str = function_call.as_str().to_string();
 
     // Return the tuple with the rule name as the column header and the specific function call as the value
-    ("non_returning_function_call".to_string(), command_str)
+    ("non_returning_function_call", command_str)
 }
 
 /// Axis and block-address names are case-insensitive; normalize them to
@@ -688,10 +707,10 @@ fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) ->
             Ok(local_coord + increment)
         },
         None => {
-            eprintln!(
+            crate::state::emit_warning(format_args!(
                 "Warning: The axis '{}' is incremented before a fixed value is set, the G-code behavior may be indeterminate.",
                 key
-            );
+            ));
             Ok(increment)
         }
     }
@@ -758,7 +777,10 @@ fn interpret_variable(pair: Pair<Rule>, state: &State) -> Result<String, Parsing
         .ok_or_else(|| annotate_error(&pair, "variable parsing", 
             "Expected inner pair, found none".to_string(), state))?;
     match inner.as_rule() {
-        Rule::identifier => Ok(inner.as_str().to_string()),
+        // A plain user variable, or a `$`-prefixed system variable such as
+        // `$AC_TIMER`. There is no system-variable model, so system variables
+        // are keyed and stored like ordinary variables by their full name.
+        Rule::identifier | Rule::nc_variable => Ok(inner.as_str().to_string()),
         _ => Err(annotate_error(&pair, "variable parsing",
             format!("Expected identifier, found '{:?}'", inner.as_rule()), state)),
     }
@@ -849,7 +871,10 @@ fn interpret_identifier(pair: Pair<Rule>) -> Result<String, ParsingError> {
     let line_no = pair.line_col().0;
     let preview = pair.as_str().to_string();
     
-    if pair.as_rule() == Rule::identifier {
+    // Accept both plain identifiers and `$`-prefixed system variables (e.g.
+    // `$AC_TIMER[1]`); the latter are stored by their full name like ordinary
+    // variables, since there is no dedicated system-variable model.
+    if pair.as_rule() == Rule::identifier || pair.as_rule() == Rule::nc_variable {
         Ok(pair.as_str().to_string())
     } else {
         Err(ParsingError::ParsingContext {
@@ -1029,7 +1054,7 @@ fn interpret_statement_if(
     // Handle the comment
     if let Some(comment_pair) = comment {
         let last = output.last_mut().expect("Output vector should not be empty");
-        last.insert("comment".to_string(), Value::Str(comment_pair.as_str().to_string()));
+        last.insert("comment", Value::Str(comment_pair.as_str().to_string()));
     }
 
     // Evaluate the condition and execute the appropriate block. A jump out
@@ -1151,7 +1176,7 @@ fn interpret_statement_repeat_until(
     match first_pair.as_rule() {
         Rule::comment => {
             let last = output.last_mut().expect("Output vector should not be empty");
-            last.insert("comment".to_string(), Value::Str(first_pair.as_str().to_string()));
+            last.insert("comment", Value::Str(first_pair.as_str().to_string()));
 
             // The next rule are the block
             match pairs.next().expect("Expected a pair, got none").as_rule() {
@@ -1231,10 +1256,10 @@ fn interpret_goto(pair: Pair<Rule>, state: &State) -> Result<BlockFlow, ParsingE
     };
 
     if keyword == "GOTOC" && !state.jump_target_visible(&key) {
-        eprintln!(
+        crate::state::emit_warning(format_args!(
             "Warning: GOTOC destination '{}' not found; alarm suppressed, continuing with the next block (line {})",
             display, line_no
-        );
+        ));
         return Ok(BlockFlow::Continue);
     }
 
@@ -1329,10 +1354,10 @@ fn interpret_control(
                 // restart would produce an unbounded trace, so the
                 // no-request behavior is modeled.
                 let (line_no, _) = get_error_context(&pair, state);
-                eprintln!(
+                crate::state::emit_warning(format_args!(
                     "Warning: GOTOS ignored (line {}): the program restart depends on the PLC signal enableGoToStart; continuing with the next block",
                     line_no
-                );
+                ));
                 BlockFlow::Continue
             }
             _ => {
@@ -1351,7 +1376,7 @@ fn interpret_control(
     }
     Ok(BlockFlow::Continue)
 }
-pub(crate) fn insert_m_key(last: &mut HashMap<String, Value>, value: &str, line_no: usize, preview: String) -> Result<(), ParsingError> {
+pub(crate) fn insert_m_key(last: &mut crate::output::CellMap, value: &str, line_no: usize, preview: String) -> Result<(), ParsingError> {
     let m_key = "M";
     for _i in 1..=5 {
         if let Some(existing_value) = last.get_mut(m_key) {
@@ -1369,7 +1394,7 @@ pub(crate) fn insert_m_key(last: &mut HashMap<String, Value>, value: &str, line_
             }
         } else {
             // If the key doesn't exist, insert a new StrList with the first value
-            last.insert(m_key.to_owned(), Value::StrList(vec![value.to_string()]));
+            last.insert(m_key, Value::StrList(vec![value.to_string()]));
             return Ok(()); // Exit early after insertion
         }
     }
@@ -1390,7 +1415,7 @@ pub(crate) fn is_end_of_program_m_code(code: &str) -> bool {
 /// True for words that look like an axis word with a typo or a missing
 /// space: a letter directly followed by a digit, with more letters later
 /// (Y2O, X10Y20). Legitimate subprogram names rarely have this shape.
-fn looks_like_axis_word_typo(name: &str) -> bool {
+pub(crate) fn looks_like_axis_word_typo(name: &str) -> bool {
     let chars: Vec<char> = name.chars().collect();
     chars.len() >= 3
         && chars[0].is_ascii_alphabetic()
@@ -1447,7 +1472,7 @@ fn interpret_statement(
                         // `value` may carry trailing whitespace from the
                         // backtracked optional argument list; store the
                         // trimmed word like the g_command path does.
-                        last.insert(group.to_string(), Value::Str(name.to_string()));
+                        last.insert(group, Value::Str(name.to_string()));
                         continue;
                     }
                     // A parenless word like Y2O or X10Y20 is far more likely
@@ -1455,10 +1480,10 @@ fn interpret_statement(
                     // toolpath would silently lose a move. Warn, but keep the
                     // call semantics: only the user can tell.
                     if looks_like_axis_word_typo(name) {
-                        eprintln!(
+                        crate::state::emit_warning(format_args!(
                             "Warning: '{}' (line {}) is interpreted as a subprogram call; did you mean one or more axis words (e.g. Y20)?",
                             name, line_no
-                        );
+                        ));
                     }
                 }
                 last.insert(key, Value::Str(value));
@@ -1486,15 +1511,19 @@ fn interpret_statement(
             // alternative; both carry (variable_single_char, value) inners.
             Rule::assignment | Rule::axis_word => {
                 let (key, local_value) = interpret_assignment(statement, state)?;
-                if state.is_axis(&key) {
-                    // State keeps local coordinates; the output row gets the machine
-                    // coordinate under the translation active at this point in the program.
-                    let machine_value = state.get_axis_machine(&key).unwrap_or(local_value);
-                    last.insert(key, Value::Float(machine_value));
-                } else if state.is_block_address(&key) {
-                    last.insert(key, Value::Float(local_value));
-                } else {
-                    output.record_variable_change(&key, local_value);
+                match state.resolve_output_key(&key) {
+                    Some((ColKind::Axis, skey)) => {
+                        // State keeps local coordinates; the output row gets the machine
+                        // coordinate under the translation active at this point in the program.
+                        let machine_value = state.get_axis_machine(skey).unwrap_or(local_value);
+                        last.insert(skey, Value::Float(machine_value));
+                    }
+                    Some((ColKind::Block, skey)) => {
+                        last.insert(skey, Value::Float(local_value));
+                    }
+                    None => {
+                        output.record_variable_change(&key, local_value);
+                    }
                 }
             }
             Rule::tool_selection => interpret_tool_selection(statement, output, state)?,
@@ -1603,7 +1632,7 @@ fn interpret_block_number(element: Pair<Rule>, output: &mut Output) {
         Rule::integer => pair.as_str().to_string(),
         _ => panic!("Unexpected rule: {:?}", pair.as_rule()),
     };
-    last.insert("N".to_string(), Value::Str(value));
+    last.insert("N", Value::Str(value));
 }
 fn get_error_context(pair: &Pair<Rule>, state: &State) -> (usize, String) {
     let (line_no, _) = pair.line_col();
@@ -1648,7 +1677,7 @@ pub(crate) fn interpret_block(
                     Rule::frame_op => interpret_frame_op(item, state)?,
                     Rule::comment => {
                         let last = output.last_mut().expect("Output vector should not be empty");
-                        last.insert("comment".to_string(), Value::Str(item.as_str().to_string()));
+                        last.insert("comment", Value::Str(item.as_str().to_string()));
                     },
                     _ => return Err(annotate_error(&item, "block interpretation",
                         format!("Unexpected rule: {:?}", item.as_rule()), state)),
@@ -1718,3 +1747,4 @@ fn run_blocks(
     }
     Ok(BlockFlow::Continue)
 }
+

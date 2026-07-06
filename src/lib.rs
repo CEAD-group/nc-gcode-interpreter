@@ -18,23 +18,115 @@ mod python_bindings {
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyList};
     use pyo3::wrap_pyfunction;
+    use pyo3_polars::PyDataFrame;
     use std::collections::HashMap;
     use std::sync::{mpsc, Mutex};
 
-    use crate::interpreter::{nc_to_row_stream, nc_to_table};
-    use crate::output::{is_forward_filled_column, is_string_column, Column};
+    use crate::interpreter::{nc_to_batch_stream, nc_to_row_stream};
+    use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table};
     use crate::types::Value;
 
-    /// Interpret an NC program and return plain columnar data:
-    /// (data: dict[str, list], schema: list[(name, dtype)], state: dict).
-    /// The Python wrapper assembles a polars DataFrame from this, keeping
-    /// the Rust crate free of any polars dependency.
-    #[pyfunction]
-    #[pyo3(signature = (input, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables=false))]
+    /// Build a polars [`DataFrame`](polars::prelude::DataFrame) directly from one
+    /// output [`Table`], in column order, and hand it across the PyO3 boundary as
+    /// a [`PyDataFrame`]. Each [`Column`] becomes a polars `Series` straight from
+    /// its `Vec` (a `Vec<Option<f64>>` -> Float64, `Vec<Option<i64>>` -> Int64,
+    /// `Vec<Option<String>>` -> String, list-of-strings -> `List(String)`), so no
+    /// Python list of primitives is ever materialized. `pyo3-polars` transfers
+    /// each series over the Arrow C data interface, so the Rust-side polars
+    /// (0.54) and the Python-side polars need not share a version. Shared by
+    /// `nc_to_columns` (whole table) and `NcBatchIterator` (one batch).
+    fn table_to_pydataframe(table: Table) -> PyResult<PyDataFrame> {
+        use polars::prelude::{
+            DataFrame, IntoColumn, IntoSeries, ListBuilderTrait, ListStringChunkedBuilder,
+            NamedFrom, PlSmallStr, Series,
+        };
+
+        let mut columns: Vec<polars::prelude::Column> = Vec::with_capacity(table.columns.len());
+        for (name, column) in table.columns {
+            let pname = PlSmallStr::from_str(&name);
+            let series = match column {
+                // `from_slice_options` copies the Vec into an Arrow buffer with a
+                // validity bitmap - a bulk memcpy, not the per-element Python
+                // boxing the old dict-of-lists path paid.
+                Column::Float(v) => Series::new(pname, &v),
+                Column::Int(v) => Series::new(pname, &v),
+                Column::Str(v) => Series::new(pname, &v),
+                Column::StrList(v) => {
+                    let values_cap: usize =
+                        v.iter().filter_map(|c| c.as_ref()).map(|l| l.len()).sum();
+                    // Typed builder pins the dtype to List(String) even for an
+                    // all-null batch, so batches concatenate without dtype skew.
+                    let mut builder = ListStringChunkedBuilder::new(pname, v.len(), values_cap);
+                    for cell in &v {
+                        match cell {
+                            Some(list) => builder.append_values_iter(list.iter().map(String::as_str)),
+                            None => builder.append_null(),
+                        }
+                    }
+                    builder.finish().into_series()
+                }
+            };
+            columns.push(series.into_column());
+        }
+        let df = DataFrame::new_infer_height(columns)
+            .map_err(|e| PyErr::new::<PyValueError, _>(format!("failed to build DataFrame: {}", e)))?;
+        Ok(PyDataFrame(df))
+    }
+
+    /// Spawn the interpreter on a worker thread, pushing finished rows into a
+    /// bounded channel. Shared by the row and batch streaming iterators.
     #[allow(clippy::too_many_arguments)]
-    fn nc_to_columns(
-        py: Python<'_>,
-        input: &str,
+    fn spawn_stream(
+        input: String,
+        initial_state: Option<String>,
+        axis_identifiers: Option<Vec<String>>,
+        extra_axes: Option<Vec<String>>,
+        iteration_limit: usize,
+        axis_index_map: Option<HashMap<String, usize>>,
+        allow_undefined_variables: bool,
+    ) -> PyResult<(
+        mpsc::Receiver<Row>,
+        mpsc::Receiver<Result<FinalState, String>>,
+        std::thread::JoinHandle<()>,
+    )> {
+        let (row_sender, row_receiver) = mpsc::sync_channel::<Row>(1024);
+        let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, String>>(1);
+
+        let handle = std::thread::Builder::new()
+            .name("nc-interpreter".to_string())
+            .spawn(move || {
+                let outcome = nc_to_row_stream(
+                    &input,
+                    initial_state.as_deref(),
+                    axis_identifiers,
+                    extra_axes,
+                    iteration_limit,
+                    axis_index_map,
+                    allow_undefined_variables,
+                    row_sender,
+                );
+                let message = match outcome {
+                    Ok(state) => Ok(state.to_python_dict()),
+                    // The consumer hung up: nothing to report to nobody.
+                    Err(crate::errors::ParsingError::StreamClosed) => return,
+                    Err(error) => Err(format!("{}", error)),
+                };
+                let _ = result_sender.send(message);
+            })
+            .map_err(|e| {
+                PyErr::new::<PyValueError, _>(format!("failed to spawn interpreter thread: {}", e))
+            })?;
+        Ok((row_receiver, result_receiver, handle))
+    }
+
+    /// Spawn the interpreter on a worker thread building whole columnar batches.
+    /// Completed [`Table`] batches are pushed into a small bounded channel (a cap
+    /// of a few batches keeps memory bounded while letting one batch build while
+    /// another is consumed). Used by `nc_to_batches`.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_batch_stream(
+        input: String,
+        batch_size: usize,
         initial_state: Option<String>,
         axis_identifiers: Option<Vec<String>>,
         extra_axes: Option<Vec<String>>,
@@ -43,35 +135,43 @@ mod python_bindings {
         axis_index_map: Option<HashMap<String, usize>>,
         allow_undefined_variables: bool,
     ) -> PyResult<(
-        Py<PyDict>,
-        Vec<(String, String)>,
-        HashMap<String, HashMap<String, f64>>,
+        mpsc::Receiver<Table>,
+        mpsc::Receiver<Result<FinalState, String>>,
+        std::thread::JoinHandle<()>,
     )> {
-        let (table, state) = nc_to_table(
-            input,
-            initial_state.as_deref(),
-            axis_identifiers,
-            extra_axes,
-            iteration_limit,
-            disable_forward_fill,
-            axis_index_map,
-            allow_undefined_variables,
-        )
-        .map_err(|e| PyErr::new::<PyValueError, _>(format!("{}", e)))?;
+        // A cap of 3 lets the worker build one batch ahead while the consumer
+        // converts the previous one to a polars DataFrame, without unbounded
+        // buffering.
+        let (batch_sender, batch_receiver) = mpsc::sync_channel::<Table>(3);
+        let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, String>>(1);
 
-        let data = PyDict::new(py);
-        let mut schema: Vec<(String, String)> = Vec::with_capacity(table.columns.len());
-        for (name, column) in table.columns {
-            schema.push((name.clone(), column.dtype_name().to_string()));
-            match column {
-                Column::Float(v) => data.set_item(&name, v)?,
-                Column::Int(v) => data.set_item(&name, v)?,
-                Column::Str(v) => data.set_item(&name, v)?,
-                Column::StrList(v) => data.set_item(&name, v)?,
-            }
-        }
-
-        Ok((data.into(), schema, state.to_python_dict()))
+        let handle = std::thread::Builder::new()
+            .name("nc-interpreter".to_string())
+            .spawn(move || {
+                let outcome = nc_to_batch_stream(
+                    &input,
+                    initial_state.as_deref(),
+                    axis_identifiers,
+                    extra_axes,
+                    iteration_limit,
+                    disable_forward_fill,
+                    axis_index_map,
+                    allow_undefined_variables,
+                    batch_size,
+                    batch_sender,
+                );
+                let message = match outcome {
+                    Ok(state) => Ok(state.to_python_dict()),
+                    // The consumer hung up: nothing to report to nobody.
+                    Err(crate::errors::ParsingError::StreamClosed) => return,
+                    Err(error) => Err(format!("{}", error)),
+                };
+                let _ = result_sender.send(message);
+            })
+            .map_err(|e| {
+                PyErr::new::<PyValueError, _>(format!("failed to spawn interpreter thread: {}", e))
+            })?;
+        Ok((batch_receiver, result_receiver, handle))
     }
 
     type FinalState = HashMap<String, HashMap<String, f64>>;
@@ -86,8 +186,8 @@ mod python_bindings {
         rows: Option<Mutex<mpsc::Receiver<crate::output::Row>>>,
         result: Option<Mutex<mpsc::Receiver<Result<FinalState, String>>>>,
         handle: Option<std::thread::JoinHandle<()>>,
-        /// Running forward-fill values, keyed by column.
-        fill: HashMap<String, Value>,
+        /// Running forward-fill values, keyed by interned column name.
+        fill: HashMap<&'static str, Value>,
         forward_fill: bool,
         include_variables: bool,
         state: Option<FinalState>,
@@ -191,18 +291,18 @@ mod python_bindings {
                         // previous position.
                         if !row.cells.is_empty() {
                             if self.forward_fill {
-                                for (key, value) in &row.cells {
+                                for (&key, value) in row.cells.iter() {
                                     if is_forward_filled_column(key) {
-                                        self.fill.insert(key.clone(), value.clone());
+                                        self.fill.insert(key, value.clone());
                                     }
                                 }
                             }
                             // Forward-filled columns first, then the row's own
                             // values (its fillable ones are already in `fill`).
-                            for (key, value) in &self.fill {
+                            for (&key, value) in &self.fill {
                                 dict.set_item(key, Self::cell_to_py(py, key, value)?)?;
                             }
-                            for (key, value) in &row.cells {
+                            for (&key, value) in row.cells.iter() {
                                 if !self.forward_fill || !is_forward_filled_column(key) {
                                     dict.set_item(key, Self::cell_to_py(py, key, value)?)?;
                                 }
@@ -246,7 +346,7 @@ mod python_bindings {
     /// worker thread. Rows are forward-filled like the batch DataFrame
     /// unless `forward_fill` is false.
     #[pyfunction]
-    #[pyo3(signature = (input, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, forward_fill = true, include_variables = false, axis_index_map = None, allow_undefined_variables = false))]
+    #[pyo3(signature = (input, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, forward_fill = true, include_variables = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_rows(
         input: String,
@@ -258,32 +358,28 @@ mod python_bindings {
         include_variables: bool,
         axis_index_map: Option<HashMap<String, usize>>,
         allow_undefined_variables: bool,
+        input_is_path: bool,
     ) -> PyResult<NcRowIterator> {
-        let (row_sender, row_receiver) = mpsc::sync_channel::<crate::output::Row>(1024);
-        let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, String>>(1);
-
-        let handle = std::thread::Builder::new()
-            .name("nc-interpreter".to_string())
-            .spawn(move || {
-                let outcome = nc_to_row_stream(
-                    &input,
-                    initial_state.as_deref(),
-                    axis_identifiers,
-                    extra_axes,
-                    iteration_limit,
-                    axis_index_map,
-                    allow_undefined_variables,
-                    row_sender,
-                );
-                let message = match outcome {
-                    Ok(state) => Ok(state.to_python_dict()),
-                    // The consumer hung up: nothing to report to nobody.
-                    Err(crate::errors::ParsingError::StreamClosed) => return,
-                    Err(error) => Err(format!("{}", error)),
-                };
-                let _ = result_sender.send(message);
-            })
-            .map_err(|e| PyErr::new::<PyValueError, _>(format!("failed to spawn interpreter thread: {}", e)))?;
+        // When `input_is_path` is set, `input` is a filesystem path: read the
+        // program here (once) instead of copying a 1.1 GB Python str across the
+        // PyO3 boundary. Reading before the worker spawns surfaces a missing
+        // file as an immediate, clean error.
+        let input = if input_is_path {
+            std::fs::read_to_string(&input).map_err(|e| {
+                PyErr::new::<PyValueError, _>(format!("Error reading input file '{}': {}", input, e))
+            })?
+        } else {
+            input
+        };
+        let (row_receiver, result_receiver, handle) = spawn_stream(
+            input,
+            initial_state,
+            axis_identifiers,
+            extra_axes,
+            iteration_limit,
+            axis_index_map,
+            allow_undefined_variables,
+        )?;
 
         Ok(NcRowIterator {
             rows: Some(Mutex::new(row_receiver)),
@@ -296,12 +392,150 @@ mod python_bindings {
         })
     }
 
+    /// Iterator over columnar batches: `next()` returns a polars DataFrame (via
+    /// `pyo3-polars`) for up to `batch_size` output rows, built column-wise in
+    /// Rust (the same machinery `nc_to_columns` uses), while the interpreter runs
+    /// on a worker thread behind a bounded channel. Memory stays bounded by the
+    /// batch size.
+    /// A `BatchBuilder` carries forward-fill state and the growing canonical
+    /// column set across batches, so concatenating the batches reconstructs the
+    /// whole-file `nc_to_dataframe` table.
+    #[pyclass]
+    struct NcBatchIterator {
+        batches: Option<Mutex<mpsc::Receiver<Table>>>,
+        result: Option<Mutex<mpsc::Receiver<Result<FinalState, String>>>>,
+        handle: Option<std::thread::JoinHandle<()>>,
+        state: Option<FinalState>,
+    }
+
+    impl NcBatchIterator {
+        fn finish(&mut self, py: Python<'_>) -> PyResult<()> {
+            if let Some(result) = self.result.take() {
+                let receiver = result.into_inner().expect("result receiver mutex poisoned");
+                match py.detach(move || receiver.recv()) {
+                    Ok(Ok(state)) => self.state = Some(state),
+                    Ok(Err(message)) => {
+                        self.join();
+                        return Err(PyErr::new::<PyValueError, _>(message));
+                    }
+                    Err(_) => {}
+                }
+            }
+            self.join();
+            Ok(())
+        }
+
+        fn join(&mut self) {
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    #[pymethods]
+    impl NcBatchIterator {
+        fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+            slf
+        }
+
+        fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+            let Some(mutex) = self.batches.take() else {
+                // The channel closed on a previous call (its final batch was
+                // already yielded); finalize now - capture the state or raise
+                // the interpreter's error, mirroring nc_to_rows.
+                self.finish(py)?;
+                return Ok(None);
+            };
+            // Wait for the next whole batch with the GIL released; the owned
+            // Receiver moves into the detached closure and back out. The worker
+            // built the columnar `Table` already (off this thread), so all that
+            // remains here is converting it to a polars DataFrame below.
+            let receiver = mutex.into_inner().expect("batch receiver mutex poisoned");
+            let (received, receiver) = py.detach(move || {
+                let received = receiver.recv();
+                (received, receiver)
+            });
+            match received {
+                Ok(table) => {
+                    self.batches = Some(Mutex::new(receiver));
+                    let dataframe = table_to_pydataframe(table)?;
+                    Ok(Some(dataframe.into_pyobject(py)?.into_any().unbind()))
+                }
+                // Channel closed: interpretation is done (or failed). Capture
+                // the final state / raise the error.
+                Err(_) => {
+                    self.batches = None;
+                    self.finish(py)?;
+                    Ok(None)
+                }
+            }
+        }
+
+        /// The final interpreter state (axes, symbol_table, translation),
+        /// available once the iterator is exhausted.
+        #[getter]
+        fn state(&self) -> Option<FinalState> {
+            self.state.clone()
+        }
+    }
+
+    /// Interpret an NC program lazily into columnar batches: returns an iterator
+    /// of polars DataFrames (transferred via `pyo3-polars`), each covering up to
+    /// `batch_size` output rows and built column-wise on a worker thread.
+    /// Concatenating them reconstructs `nc_to_dataframe`.
+    #[pyfunction]
+    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false))]
+    #[allow(clippy::too_many_arguments)]
+    fn nc_to_batches(
+        input: String,
+        batch_size: usize,
+        initial_state: Option<String>,
+        axis_identifiers: Option<Vec<String>>,
+        extra_axes: Option<Vec<String>>,
+        iteration_limit: usize,
+        disable_forward_fill: bool,
+        axis_index_map: Option<HashMap<String, usize>>,
+        allow_undefined_variables: bool,
+        input_is_path: bool,
+    ) -> PyResult<NcBatchIterator> {
+        if batch_size == 0 {
+            return Err(PyErr::new::<PyValueError, _>("batch_size must be greater than 0"));
+        }
+        // Read the program here when given a path (see nc_to_rows).
+        let input = if input_is_path {
+            std::fs::read_to_string(&input).map_err(|e| {
+                PyErr::new::<PyValueError, _>(format!("Error reading input file '{}': {}", input, e))
+            })?
+        } else {
+            input
+        };
+        let (batch_receiver, result_receiver, handle) = spawn_batch_stream(
+            input,
+            batch_size,
+            initial_state,
+            axis_identifiers,
+            extra_axes,
+            iteration_limit,
+            disable_forward_fill,
+            axis_index_map,
+            allow_undefined_variables,
+        )?;
+
+        Ok(NcBatchIterator {
+            batches: Some(Mutex::new(batch_receiver)),
+            result: Some(Mutex::new(result_receiver)),
+            handle: Some(handle),
+            state: None,
+        })
+    }
+
     /// Define the Python module
     #[pymodule(name = "_internal")]
     pub fn nc_gcode_interpreter(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-        m.add_function(wrap_pyfunction!(nc_to_columns, m)?)?;
         m.add_function(wrap_pyfunction!(nc_to_rows, m)?)?;
+        m.add_function(wrap_pyfunction!(nc_to_batches, m)?)?;
         m.add_class::<NcRowIterator>()?;
+        m.add_class::<NcBatchIterator>()?;
         Ok(())
     }
 }
