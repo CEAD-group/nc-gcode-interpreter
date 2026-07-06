@@ -81,6 +81,18 @@ impl CellMap {
         self.entries.iter_mut().find(|(k, _)| *k == key).map(|(_, v)| v)
     }
 
+    #[inline]
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.entries.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+    }
+
+    /// Remove `key`, returning its value if present.
+    #[inline]
+    pub fn remove(&mut self, key: &str) -> Option<Value> {
+        let position = self.entries.iter().position(|(k, _)| *k == key)?;
+        Some(self.entries.remove(position).1)
+    }
+
     /// Iterate `(&key, &value)` pairs, mirroring `HashMap::iter` so call sites
     /// that destructure `(&key, value)` keep working unchanged.
     #[inline]
@@ -183,6 +195,10 @@ pub struct OutputRows {
     /// streaming sink (the row iterator consumes them); off for the batch/table
     /// collect path, which prunes variable-only rows.
     record_variables: bool,
+    /// Optional curve flattener sitting between the interpreter and the
+    /// sink: arc and spline rows are replaced by sampled runs of G1 rows
+    /// before they reach the sink (see [`crate::flatten`]).
+    flattener: Option<crate::flatten::Flattener>,
 }
 
 impl OutputRows {
@@ -191,6 +207,7 @@ impl OutputRows {
             current: Row::default(),
             sink: RowSink::Collect(Vec::new()),
             record_variables: false,
+            flattener: None,
         }
     }
 
@@ -200,6 +217,7 @@ impl OutputRows {
             current: Row::default(),
             sink: RowSink::Stream(sender),
             record_variables: true,
+            flattener: None,
         }
     }
 
@@ -223,12 +241,34 @@ impl OutputRows {
                 batch_size,
             }),
             record_variables: false,
+            flattener: None,
         }
     }
 
-    /// Route a finished row to the sink: collected, streamed row-at-a-time, or
-    /// fed to the worker-side batch producer. Shared by `flush`.
+    /// Install a curve flattener: every subsequent row passes through it on
+    /// its way to the sink (arcs and splines come out as sampled G1 runs).
+    pub fn set_flattener(&mut self, flattener: crate::flatten::Flattener) {
+        self.flattener = Some(flattener);
+    }
+
+    /// Route a finished row to the sink, passing it through the flattener
+    /// first when one is installed. Shared by `flush`.
     fn deliver(&mut self, row: Row) -> Result<(), ParsingError> {
+        if let Some(mut flattener) = self.flattener.take() {
+            let mut flattened = Vec::new();
+            flattener.push(row, &mut flattened);
+            self.flattener = Some(flattener);
+            for row in flattened {
+                self.deliver_to_sink(row)?;
+            }
+            return Ok(());
+        }
+        self.deliver_to_sink(row)
+    }
+
+    /// Route a finished row to the sink: collected, streamed row-at-a-time, or
+    /// fed to the worker-side batch producer.
+    fn deliver_to_sink(&mut self, row: Row) -> Result<(), ParsingError> {
         match &mut self.sink {
             RowSink::Collect(rows) => {
                 rows.push(row);
@@ -276,6 +316,14 @@ impl OutputRows {
     /// streaming).
     pub fn finish(mut self) -> Result<Vec<Row>, ParsingError> {
         self.flush()?;
+        // A program ending inside a spline still owes its buffered curve.
+        if let Some(mut flattener) = self.flattener.take() {
+            let mut flattened = Vec::new();
+            flattener.finish(&mut flattened);
+            for row in flattened {
+                self.deliver_to_sink(row)?;
+            }
+        }
         match self.sink {
             RowSink::Collect(rows) => Ok(rows),
             RowSink::Stream(_) => Ok(Vec::new()),

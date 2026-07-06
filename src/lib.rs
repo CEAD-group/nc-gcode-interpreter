@@ -4,6 +4,7 @@ extern crate pest_derive;
 mod types;
 
 mod errors;
+pub mod flatten;
 mod interpret_rules;
 pub mod interpreter;
 mod modal_groups;
@@ -84,6 +85,7 @@ mod python_bindings {
         iteration_limit: usize,
         axis_index_map: Option<HashMap<String, usize>>,
         allow_undefined_variables: bool,
+        flatten_tolerance: Option<f64>,
     ) -> PyResult<(
         mpsc::Receiver<Row>,
         mpsc::Receiver<Result<FinalState, String>>,
@@ -103,6 +105,7 @@ mod python_bindings {
                     iteration_limit,
                     axis_index_map,
                     allow_undefined_variables,
+                    flatten_tolerance,
                     row_sender,
                 );
                 let message = match outcome {
@@ -134,6 +137,7 @@ mod python_bindings {
         disable_forward_fill: bool,
         axis_index_map: Option<HashMap<String, usize>>,
         allow_undefined_variables: bool,
+        flatten_tolerance: Option<f64>,
     ) -> PyResult<(
         mpsc::Receiver<Table>,
         mpsc::Receiver<Result<FinalState, String>>,
@@ -157,6 +161,7 @@ mod python_bindings {
                     disable_forward_fill,
                     axis_index_map,
                     allow_undefined_variables,
+                    flatten_tolerance,
                     batch_size,
                     batch_sender,
                 );
@@ -346,7 +351,7 @@ mod python_bindings {
     /// worker thread. Rows are forward-filled like the batch DataFrame
     /// unless `forward_fill` is false.
     #[pyfunction]
-    #[pyo3(signature = (input, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, forward_fill = true, include_variables = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false))]
+    #[pyo3(signature = (input, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, forward_fill = true, include_variables = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_rows(
         input: String,
@@ -359,6 +364,7 @@ mod python_bindings {
         axis_index_map: Option<HashMap<String, usize>>,
         allow_undefined_variables: bool,
         input_is_path: bool,
+        flatten_tolerance: Option<f64>,
     ) -> PyResult<NcRowIterator> {
         // When `input_is_path` is set, `input` is a filesystem path: read the
         // program here (once) instead of copying a 1.1 GB Python str across the
@@ -379,6 +385,7 @@ mod python_bindings {
             iteration_limit,
             axis_index_map,
             allow_undefined_variables,
+            flatten_tolerance,
         )?;
 
         Ok(NcRowIterator {
@@ -484,7 +491,7 @@ mod python_bindings {
     /// `batch_size` output rows and built column-wise on a worker thread.
     /// Concatenating them reconstructs `nc_to_dataframe`.
     #[pyfunction]
-    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false))]
+    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_batches(
         input: String,
@@ -497,6 +504,7 @@ mod python_bindings {
         axis_index_map: Option<HashMap<String, usize>>,
         allow_undefined_variables: bool,
         input_is_path: bool,
+        flatten_tolerance: Option<f64>,
     ) -> PyResult<NcBatchIterator> {
         if batch_size == 0 {
             return Err(PyErr::new::<PyValueError, _>("batch_size must be greater than 0"));
@@ -519,6 +527,7 @@ mod python_bindings {
             disable_forward_fill,
             axis_index_map,
             allow_undefined_variables,
+            flatten_tolerance,
         )?;
 
         Ok(NcBatchIterator {

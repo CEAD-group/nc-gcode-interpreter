@@ -59,6 +59,7 @@ def nc_to_dataframe(
     disable_forward_fill: bool = False,
     axis_index_map: dict[str, int] | None = None,
     allow_undefined_variables: bool = False,
+    flatten_tolerance: float | None = None,
 ) -> tuple[pl.DataFrame, dict]:
     """
     Parses Sinumerik-flavored NC G-code and converts it into a Polars DataFrame along with the final state.
@@ -86,6 +87,12 @@ def nc_to_dataframe(
         This allows user-configurable mapping of axis names to indices. Example: {'E': 4, 'X': 0}.
     allow_undefined_variables: bool, optional
         If True, allows undefined variables to be used in expressions with a value of 0 [default: False].
+    flatten_tolerance: float | None, optional
+        When set, flatten curved motions (G2/G3 arcs and ASPLINE/BSPLINE/CSPLINE
+        splines) into runs of G1 moves whose polyline stays within this maximum
+        deviation (in path units, i.e. mm) of the true curve. The interpolation
+        parameters (I/J/K/CR, PW/SD/PL) are consumed and do not appear in the
+        output. Default None (curves pass through untouched).
 
     Returns:
     --------
@@ -133,6 +140,7 @@ def nc_to_dataframe(
         axis_index_map,
         allow_undefined_variables,
         input_is_path,
+        flatten_tolerance,
     )
     frames: list[pl.DataFrame] = list(it)
     state = it.state
@@ -378,6 +386,7 @@ def nc_to_rows(
     include_variables: bool = False,
     axis_index_map: dict[str, int] | None = None,
     allow_undefined_variables: bool = False,
+    flatten_tolerance: float | None = None,
 ):
     """Interpret an NC program lazily, yielding one row at a time.
 
@@ -432,6 +441,7 @@ def nc_to_rows(
         axis_index_map,
         allow_undefined_variables,
         input_is_path,
+        flatten_tolerance,
     )
 
 
@@ -470,6 +480,7 @@ def nc_to_batches(
     disable_forward_fill: bool = False,
     axis_index_map: dict[str, int] | None = None,
     allow_undefined_variables: bool = False,
+    flatten_tolerance: float | None = None,
 ) -> _BatchIterator:
     """Interpret an NC program into a stream of columnar polars DataFrames.
 
@@ -510,5 +521,6 @@ def nc_to_batches(
         axis_index_map,
         allow_undefined_variables,
         input_is_path,
+        flatten_tolerance,
     )
     return _BatchIterator(inner)

@@ -8,6 +8,13 @@ released to PyPI.
 
 ### Added
 
+- Curve flattening: `flatten_tolerance` on `nc_to_dataframe` / `nc_to_rows` /
+  `nc_to_batches` (CLI: `--flatten-tolerance`) converts G2/G3 arcs (I/J/K and
+  CR= forms, all planes, helical, full circles) and ASPLINE/BSPLINE/CSPLINE
+  splines (PW weights, SD degree) into runs of G1 rows within a single
+  max-deviation tolerance of the true curve; interpolation addresses are
+  consumed, source line numbers and auxiliary cells preserved
+
 - Program jumps and branches: `GOTOF`/`GOTOB`/`GOTO`/`GOTOC`/`GOTOS` and
   `CASE ... OF ... DEFAULT`, with per-scope label/block-number resolution,
   jumps out of IF bodies and loops, and alarm-14080 semantics for an

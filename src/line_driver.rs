@@ -987,6 +987,7 @@ mod tests {
             false,
             Some(HashMap::from([("E".to_string(), 4)])),
             allow_undefined,
+            None,
         );
         std::env::remove_var("NC_STAGE1");
         result

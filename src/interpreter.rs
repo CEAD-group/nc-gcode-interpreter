@@ -21,6 +21,7 @@ pub fn nc_to_table(
     disable_forward_fill: bool,
     axis_index_map: Option<HashMap<String, usize>>, // axis identifier to index mapping
     allow_undefined_variables: bool,
+    flatten_tolerance: Option<f64>,
 ) -> Result<(Table, state::State), ParsingError> {
     let mut state = build_state(
         axis_identifiers,
@@ -39,6 +40,7 @@ pub fn nc_to_table(
 
     // Now interpret the main input using the axis_index_map from state
     let mut output = OutputRows::collect();
+    install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_file(input, &mut state, &mut output)?;
     let rows = output.finish()?;
 
@@ -62,6 +64,20 @@ fn build_state(
     state::State::new(axis_identifiers, iteration_limit, axis_index_map, allow_undefined_variables)
 }
 
+/// Install the curve flattener on the output when a tolerance was given
+/// (see [`crate::flatten`]): G2/G3 arcs and spline blocks come out as runs
+/// of G1 rows sampled within `flatten_tolerance` of the true curve.
+fn install_flattener(
+    output: &mut OutputRows,
+    state: &State,
+    flatten_tolerance: Option<f64>,
+) -> Result<(), ParsingError> {
+    if let Some(tolerance) = flatten_tolerance {
+        output.set_flattener(crate::flatten::Flattener::new(tolerance, &state.axis_identifiers)?);
+    }
+    Ok(())
+}
+
 /// Streaming twin of `nc_to_table`: interpret the program pushing each
 /// finished row into `sender` as `(line_no, row)`, returning the final
 /// state. Blocks on the channel when the consumer is slower than the
@@ -76,6 +92,7 @@ pub fn nc_to_row_stream(
     iteration_limit: usize,
     axis_index_map: Option<HashMap<String, usize>>,
     allow_undefined_variables: bool,
+    flatten_tolerance: Option<f64>,
     sender: std::sync::mpsc::SyncSender<Row>,
 ) -> Result<state::State, ParsingError> {
     let mut state = build_state(
@@ -90,6 +107,7 @@ pub fn nc_to_row_stream(
         interpret_file(initial_state, &mut state, &mut discard)?;
     }
     let mut output = OutputRows::stream(sender);
+    install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_file(input, &mut state, &mut output)?;
     output.finish()?;
     Ok(state)
@@ -113,6 +131,7 @@ pub fn nc_to_batch_stream(
     disable_forward_fill: bool,
     axis_index_map: Option<HashMap<String, usize>>,
     allow_undefined_variables: bool,
+    flatten_tolerance: Option<f64>,
     batch_size: usize,
     sender: std::sync::mpsc::SyncSender<Table>,
 ) -> Result<state::State, ParsingError> {
@@ -128,6 +147,7 @@ pub fn nc_to_batch_stream(
         interpret_file(initial_state, &mut state, &mut discard)?;
     }
     let mut output = OutputRows::batch_stream(sender, batch_size, disable_forward_fill);
+    install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_file(input, &mut state, &mut output)?;
     output.finish()?;
     Ok(state)
@@ -426,7 +446,7 @@ mod parse_speed {
 
         let start = Instant::now();
         let (table, _state) =
-            nc_to_table(&input, None, None, None, 10_000, false, None, false).expect("interpret");
+            nc_to_table(&input, None, None, None, 10_000, false, None, false, None).expect("interpret");
         println!(
             "full nc_to_table:{:>8.2?}  ({} rows, {} columns)",
             start.elapsed(),
@@ -475,7 +495,7 @@ mod tests {
     use crate::output::Column;
 
     fn interpret(input: &str) -> Table {
-        let (table, _state) = nc_to_table(input, None, None, None, 10000, false, None, false)
+        let (table, _state) = nc_to_table(input, None, None, None, 10000, false, None, false, None)
             .expect("program should interpret");
         table
     }
