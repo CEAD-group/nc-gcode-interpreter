@@ -127,3 +127,28 @@ def test_viz_toolpath_arrays():
     df_plain, _ = nc_to_dataframe(ARC_PROGRAM)
     _, colors_plain = toolpath_arrays(df_plain)
     assert colors_plain is None
+
+
+def test_nc_view_cli(tmp_path, monkeypatch, capsys):
+    pytest.importorskip("threejs_viewer")
+    from nc_gcode_interpreter import cli, viz
+
+    program = tmp_path / "demo.mpf"
+    program.write_text(ARC_PROGRAM)
+
+    captured = {}
+
+    def fake_view(df, **kwargs):
+        captured["df"] = df
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(viz, "view_toolpath", fake_view)
+    assert cli.main([str(program), "--speed", "30", "--flatten-tolerance", "0.5"]) == 0
+    assert captured["kwargs"]["speed"] == 30.0
+    assert "flattened" in captured["df"].columns
+    assert "from flattened curves" in capsys.readouterr().out
+
+    # --no-flatten interprets without the marker column.
+    monkeypatch.setattr(viz, "view_toolpath", fake_view)
+    assert cli.main([str(program), "--no-flatten"]) == 0
+    assert "flattened" not in captured["df"].columns

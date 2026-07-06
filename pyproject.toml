@@ -41,6 +41,9 @@ module-name = "nc_gcode_interpreter._internal"
 python-source = "python"
 include = ["python/nc_gcode_interpreter/py.typed", "python/nc_gcode_interpreter/ggroups.json"]
 
+[project.scripts]
+nc-view = "nc_gcode_interpreter.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/CEAD-group/nc-gcode-interpreter"
 Repository = "https://github.com/CEAD-group/nc-gcode-interpreter.git"
