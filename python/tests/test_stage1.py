@@ -106,6 +106,25 @@ def test_grammar_heavy_program_declines_the_fast_path():
     assert abs(df["X"][0] - 0.5) < 1e-12
 
 
+EXAMPLES = pathlib.Path(__file__).parent.parent.parent / "examples"
+
+
+@pytest.mark.parametrize(
+    "mpf", sorted(EXAMPLES.glob("*.mpf")), ids=lambda p: p.name
+)
+def test_fast_path_matches_on_examples(mpf):
+    """The shipped examples through both paths, with the same kwargs as the
+    golden-CSV test (initial_state, extra axes, index map) so the fast path
+    is differentially covered in CI, where the mill-sim corpus is absent."""
+    run_both(
+        mpf.read_text(),
+        initial_state=(EXAMPLES / "defaults.mpf").read_text(),
+        iteration_limit=10000,
+        extra_axes=["ELX"],
+        axis_index_map={"E": 4},
+    )
+
+
 MILL_SIM = pathlib.Path(
     # Override with NC_TEST_CORPUS to run the corpus tests elsewhere; they
     # are skipped when the directory does not exist.

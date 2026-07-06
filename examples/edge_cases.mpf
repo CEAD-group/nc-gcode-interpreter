@@ -1,0 +1,73 @@
+; Stage-1 edge cases: structure-free forms that stress the fast-path
+; byte decoder and its hand-off to the per-line grammar. Every line is
+; either claimed by the decoder or must reject to pest transparently.
+
+; flood shapes, block numbers, blank and N-only lines
+N10 G1 X1.5 Y-2. Z0.001 F2400 S8000 D1
+
+N20
+N30 X2 ; trailing comment
+
+; arcs: I/J/K/CR interpolation parameters are per-block, never sticky
+G1 X0 Y0 F1000
+G2 X100 Y0 I50 J0
+G3 X0 Y50 CR=60
+G1 X0 Y0
+
+; extra axis and negative/trailing-dot numbers
+X1 A=0.0 B=-1.5 C=90. ELX=3087.022334
+
+; word operators must not split into assignment + call
+R1=10
+X=5 DIV R1
+Y=5 MOD R1
+
+; expressions and functions reject to pest, mixed with claimed lines
+R2=1+2*3
+Z=SIN(30)
+X=R2
+
+; deferred IC() and paren product words (computed multipliers)
+E_MULTIPLIER = 1
+E=0
+G1 X1 E=IC(E_MULTIPLIER*0.02988)
+E_MULTIPLIER = 2
+X2 E=IC(0.25*E_MULTIPLIER)
+F_MULTI = 2
+X3 F=(F_MULTI*1314)
+
+; declarations and frames take the grammar; TRANS is sticky, bare TRANS resets
+DEF REAL DEPTH = 2.5
+Z=DEPTH
+TRANS X10
+X1
+TRANS
+X2
+
+; bare parameterless subprogram calls; lowercase word is a call, not an axis
+N53 MATERIAL_UPDATE
+x100
+X100
+
+; labels, backward jump with a loop counter (single-line IF is not a block)
+N40 R3=30 R4=3
+LA1: X=R3
+R3=R3+10 R4=R4-1
+IF R4>0 GOTOB LA1
+
+; conditional jump to a label that is never taken
+GOTOC NOWHERE
+
+; duplicate block numbers with a directional jump
+N100 X1
+GOTOF N100
+N100 X5
+
+; computed CASE dispatch
+CASE(4+3) OF 7 GOTOF SEVEN 9 GOTOF NINE DEFAULT GOTOF OTHER
+NINE: X9
+GOTOF ENDE
+SEVEN: X7
+GOTOF ENDE
+OTHER: X0
+ENDE: M30

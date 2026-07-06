@@ -195,7 +195,10 @@ MILL_SIM = pathlib.Path(
 
 @pytest.mark.skipif(not MILL_SIM.exists(), reason="mill-sim corpus not available")
 def test_stream_matches_batch_on_real_program():
-    program = (MILL_SIM / "Test Sheffield_ROUGHmpf.mpf").read_text(errors="replace")
+    # Largest corpus file under 10 MB: a real multi-MB program, without the
+    # huge finishing file that would dominate the test's runtime.
+    candidates = [p for p in MILL_SIM.glob("*.mpf") if p.stat().st_size < 10_000_000]
+    program = max(candidates, key=lambda p: p.stat().st_size).read_text(errors="replace")
     assert_stream_matches_batch(
         program, extra_axes=["ELX"], allow_undefined_variables=True
     )
