@@ -292,6 +292,12 @@ def view_toolpath(
     animated_ids = [id]
 
     if travels:
+        # Workaround for the missing travel-line support in threejs-viewer
+        # (CEAD-group/threejs-viewer#88): one native line over the WHOLE path,
+        # revealed by the same draw fractions as the tube - occlusion by the
+        # opaque bead leaves exactly the travel hops visible. Relies on the
+        # tube being opaque: an opacity < 1 tube would expose the line on
+        # extrusion stretches too.
         travel_id = f"{id}_travel"
         v.add_polyline(
             travel_id,
