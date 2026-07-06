@@ -226,3 +226,49 @@ def test_g4_dwell_and_run_start_feed():
     # 200 mm at 6000 mm/min = 100 mm/s -> 2 s total, evenly split.
     assert abs(t[-1] - 2.0) < 1e-6
     assert abs(np.diff(t).max() - np.diff(t).min()) < 1e-6
+
+
+def test_view_toolpath_nozzle_and_follow():
+    pytest.importorskip("threejs_viewer")
+    from nc_gcode_interpreter.viz import view_toolpath
+
+    df, _ = nc_to_dataframe("G1 X0 Y0 F1000\nX100 Y0\nX100 Y50\n")
+
+    class Stub:
+        def __init__(self):
+            self.objects = {}
+            self.animation = None
+
+        def add_toolpath(self, id, tp, **kw):
+            self.objects[id] = "toolpath"
+
+        def add_cylinder(self, id, **kw):
+            self.objects[id] = "cylinder"
+
+        def load_animation(self, anim):
+            self.animation = anim
+
+        def wait_for_assets(self):
+            pass
+
+    v = Stub()
+    view_toolpath(df, viewer=v, follow="follow")
+    assert v.objects == {"toolpath": "toolpath", "toolpath_nozzle": "cylinder"}
+    assert v.animation.camera_follow == "toolpath_nozzle"
+    assert v.animation.camera_lookat is None
+    # Nozzle transforms ride the tip: one keyframe per point.
+    channel = next(c for c in v.animation._channels if c.name == "transforms")
+    assert channel.ids == ["toolpath_nozzle"]
+
+    v = Stub()
+    view_toolpath(df, viewer=v, follow="lookat")
+    assert v.animation.camera_lookat == "toolpath_nozzle"
+
+    # follow=None keeps the nozzle (T button can still track it), camera free.
+    v = Stub()
+    view_toolpath(df, viewer=v)
+    assert "toolpath_nozzle" in v.objects
+    assert v.animation.camera_follow is None and v.animation.camera_lookat is None
+
+    with pytest.raises(ValueError):
+        view_toolpath(df, viewer=Stub(), follow="chase")

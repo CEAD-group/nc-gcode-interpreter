@@ -24,7 +24,8 @@ released to PyPI.
 - Optional `viz` extra: `nc_gcode_interpreter.viz.view_toolpath(df)` shows a
   toolpath in threejs-viewer as an animated bead tube (feed-rate time base,
   programmed vs flattened point coloring), and the `nc-view` console command
-  interprets + flattens + animates an .mpf in one step
+  interprets + flattens + animates an .mpf in one step, with a nozzle
+  marker riding the path tip and camera follow/look-at tracking
 
 - Program jumps and branches: `GOTOF`/`GOTOB`/`GOTO`/`GOTOC`/`GOTOS` and
   `CASE ... OF ... DEFAULT`, with per-scope label/block-number resolution,

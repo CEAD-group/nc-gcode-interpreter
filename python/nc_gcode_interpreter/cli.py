@@ -74,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="feed rate assumed when the program sets no F (default: %(default)s)",
     )
     parser.add_argument(
+        "--follow",
+        choices=["off", "follow", "lookat"],
+        default="follow",
+        help="camera tracking of the path tip during playback: 'follow' moves the "
+        "camera along with the nozzle, 'lookat' turns it in place, 'off' leaves it "
+        "free (the viewer's T button cycles modes at runtime) (default: %(default)s)",
+    )
+    parser.add_argument(
         "--scale",
         type=float,
         default=0.001,
@@ -164,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         default_feed=args.default_feed,
         speed=args.speed,
         scale=args.scale,
+        follow=None if args.follow == "off" else args.follow,
     )
     return 0
 

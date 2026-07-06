@@ -196,6 +196,8 @@ def view_toolpath(
     default_feed: float = 1000.0,
     speed: float = 1.0,
     scale: float = 0.001,
+    follow: str | None = None,
+    nozzle: bool = True,
     id: str = "toolpath",
     viewer: Any = None,
     wait: bool = True,
@@ -223,6 +225,14 @@ def view_toolpath(
             Defaults to 0.001 (mm -> m): threejs-viewer scenes are
             meter-scale, and a millimetre-sized scene wrecks the adaptive
             depth-buffer precision when zoomed in (surfaces z-fight).
+        follow: camera tracking of the path tip: ``"follow"`` (camera
+            translates with the nozzle, keeping its relative offset),
+            ``"lookat"`` (camera stays put and turns to keep the nozzle
+            centered), or None/``"off"`` (free camera). The viewer's T
+            button cycles these modes at runtime either way.
+        nozzle: add a cone marker riding the path tip - the visible
+            progress indicator the camera modes track. Forced on when
+            ``follow`` is set.
         id: viewer object id (reuse to replace a previous path).
         viewer: an existing ``threejs_viewer`` client; a new one is started
             (opening the browser) when None.
@@ -255,13 +265,49 @@ def view_toolpath(
         toolpath.colorize("viridis")
     v.add_toolpath(id, toolpath, **tube_kwargs)
 
+    if follow not in (None, "off", "follow", "lookat"):
+        raise ValueError(f"follow must be 'follow', 'lookat' or None, got {follow!r}")
+    track = follow if follow in ("follow", "lookat") else None
+    nozzle = nozzle or track is not None
+
     # One keyframe per point: the drawn fraction grows linearly in point
     # index while frame times follow the feed-rate time base, so dense
     # flattened regions draw at the same physical speed as long G1 moves.
-    animation = Animation(loop=True)
+    animation = Animation(
+        loop=True,
+        camera_follow=f"{id}_nozzle" if track == "follow" else None,
+        camera_lookat=f"{id}_nozzle" if track == "lookat" else None,
+    )
     animation.set_frame_times(toolpath.times)
     fractions = np.linspace(0.0, 1.0, len(toolpath), dtype=np.float32)
     animation.set_draw_range_data([id], fractions[:, None])
+
+    if nozzle:
+        # Cone marker riding the path tip (the progress indicator the camera
+        # modes track). Y-up cylinder -> +90deg about X stands it upright in
+        # the Z-up scene; per-frame transforms put it at every spine point.
+        bead = float(data[:, 4].max())
+        nozzle_id = f"{id}_nozzle"
+        nozzle_height = bead * 3.0
+        v.add_cylinder(
+            nozzle_id,
+            radius_top=bead * 0.6,
+            radius_bottom=bead * 0.2,
+            height=nozzle_height,
+            color=0xCD7F32,
+            roughness=0.3,
+            metalness=0.8,
+        )
+        tips = toolpath.points
+        rx90 = np.array(
+            [1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1], dtype=np.float32
+        )
+        transforms = np.tile(rx90, (len(tips), 1, 1)).reshape(len(tips), 1, 16)
+        transforms[:, 0, 12] = tips[:, 0]
+        transforms[:, 0, 13] = tips[:, 1]
+        transforms[:, 0, 14] = tips[:, 2] + nozzle_height / 2.0
+        animation.set_transform_data([nozzle_id], transforms)
+
     v.load_animation(animation)
 
     if wait:
