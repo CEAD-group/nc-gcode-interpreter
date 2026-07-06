@@ -271,6 +271,19 @@ def test_view_toolpath_nozzle_and_follow():
     v_no_travel = Stub()
     view_toolpath(df, viewer=v_no_travel, travels=False, nozzle=True)
     assert "toolpath_travel" not in v_no_travel.objects
+
+    # A client whose add_toolpath supports travel= (threejs-viewer > 0.0.39,
+    # CEAD-group/threejs-viewer#88) gets the native travel line: no separate
+    # polyline, one draw-range channel on the group.
+    class NativeStub(Stub):
+        def add_toolpath(self, id, tp, travel=None, travel_color=None, **kw):
+            self.objects[id] = f"toolpath(travel={travel})"
+
+    v_native = NativeStub()
+    view_toolpath(df, viewer=v_native, nozzle=False)
+    assert v_native.objects == {"toolpath": "toolpath(travel=line)"}
+    draw = next(c for c in v_native.animation._channels if c.name == "draw_ranges")
+    assert draw.ids == ["toolpath"]
     assert v.animation.camera_follow == "toolpath_nozzle"
     assert v.animation.camera_lookat is None
     # Nozzle transforms ride the tip: one keyframe per point.
