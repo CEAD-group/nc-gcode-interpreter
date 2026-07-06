@@ -113,6 +113,10 @@ def toolpath_arrays(
     if n < 2:
         raise ValueError(f"toolpath needs at least 2 rows, got {n}")
 
+    # Detect the bead from comments BEFORE dropping zero-length rows: the
+    # header comments live on exactly the rows the dedupe removes.
+    detected_width, detected_height = detect_bead_size(df)
+
     def column(name: str, default: float) -> np.ndarray:
         if name in df.columns:
             return df[name].fill_null(default).to_numpy().astype(np.float64)
@@ -122,13 +126,25 @@ def toolpath_arrays(
     y = column("Y", 0.0)
     z = column("Z", 0.0)
 
+    # Drop zero-length runs (comment / M-code rows carry forward-filled
+    # coordinates): they add no geometry but produce degenerate tube frames
+    # in the client-side mesh. Keep the last point of each run, so the E and
+    # F values that apply to the following segment survive.
+    moved = (np.diff(x) != 0) | (np.diff(y) != 0) | (np.diff(z) != 0)
+    kept = np.concatenate((moved, [True]))
+    if not kept.all():
+        df = df.filter(pl.Series(kept))
+        n = df.height
+        if n < 2:
+            raise ValueError("toolpath collapses to fewer than 2 distinct points")
+        x, y, z = x[kept], y[kept], z[kept]
+
     # Per-point arrival times from segment length over feed (mm/min -> mm/s).
     feed = np.maximum(column("F", default_feed), 1e-6) / 60.0
     seg = np.sqrt(np.diff(x) ** 2 + np.diff(y) ** 2 + np.diff(z) ** 2)
     t = np.zeros(n, dtype=np.float64)
     t[1:] = np.cumsum(seg / feed[1:])
 
-    detected_width, detected_height = detect_bead_size(df)
     width = bead_width if bead_width is not None else detected_width
     if width is None:
         width = 4.0
@@ -174,6 +190,7 @@ def view_toolpath(
     bead_height: float | None = None,
     default_feed: float = 1000.0,
     speed: float = 1.0,
+    scale: float = 0.001,
     id: str = "toolpath",
     viewer: Any = None,
     wait: bool = True,
@@ -197,6 +214,10 @@ def view_toolpath(
             (:func:`detect_bead_size`), falling back to 4.0 x 2.0.
         default_feed: feed (mm/min) assumed when ``F`` is absent.
         speed: animation time-lapse factor.
+        scale: scene scale applied to all lengths (coordinates and bead).
+            Defaults to 0.001 (mm -> m): threejs-viewer scenes are
+            meter-scale, and a millimetre-sized scene wrecks the adaptive
+            depth-buffer precision when zoomed in (surfaces z-fight).
         id: viewer object id (reuse to replace a previous path).
         viewer: an existing ``threejs_viewer`` client; a new one is started
             (opening the browser) when None.
@@ -218,6 +239,8 @@ def view_toolpath(
     )
     if speed != 1.0:
         data[:, 0] /= float(speed)
+    if scale != 1.0:
+        data[:, 1:6] *= float(scale)  # xyz + bead cross-section; time untouched
     toolpath = Toolpath(data)
 
     v = viewer if viewer is not None else start_viewer()

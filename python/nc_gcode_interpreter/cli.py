@@ -74,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="feed rate assumed when the program sets no F (default: %(default)s)",
     )
     parser.add_argument(
+        "--scale",
+        type=float,
+        default=0.001,
+        metavar="FACTOR",
+        help="scene scale applied to all lengths (default: %(default)s = mm to m; "
+        "threejs-viewer is meter-scale and mm-sized scenes z-fight when zoomed in)",
+    )
+    parser.add_argument(
         "--extra-axes",
         type=lambda s: [a.strip() for a in s.split(",")],
         default=None,
@@ -155,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         bead_height=args.bead_height,
         default_feed=args.default_feed,
         speed=args.speed,
+        scale=args.scale,
     )
     return 0
 

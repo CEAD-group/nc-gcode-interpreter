@@ -188,10 +188,10 @@ def test_viz_bead_detection_and_travel():
 
     data, _ = toolpath_arrays(df)
     widths = data[:, 4]
-    # 7 points: 2 comment rows (at the forward-filled position), then the 5
-    # motion blocks. Extruding points get the detected bead; the start cap,
-    # comment rows and the travel move get width 0.
-    assert widths.tolist() == [0.0, 0.0, 6.0, 6.0, 6.0, 0.0, 6.0]
+    # The 2 comment rows sit at the forward-filled position and are deduped
+    # away (zero-length segments); 5 motion points remain. Extruding points
+    # get the detected bead; the start cap and the travel move get width 0.
+    assert widths.tolist() == [0.0, 6.0, 6.0, 0.0, 6.0]
     assert data[:, 5].max() == 1.5
     # Explicit arguments beat detection.
     data, _ = toolpath_arrays(df, bead_width=2.0, bead_height=1.0)
