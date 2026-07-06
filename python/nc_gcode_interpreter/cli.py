@@ -82,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
         "free (the viewer's T button cycles modes at runtime) (default: %(default)s)",
     )
     parser.add_argument(
+        "--no-travels",
+        action="store_true",
+        help="hide the thin 1px travel-move lines (drawn and animated with the bead by default)",
+    )
+    parser.add_argument(
         "--scale",
         type=float,
         default=0.001,
@@ -173,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         speed=args.speed,
         scale=args.scale,
         follow=None if args.follow == "off" else args.follow,
+        travels=not args.no_travels,
     )
     return 0
 

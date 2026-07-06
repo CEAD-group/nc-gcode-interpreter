@@ -245,6 +245,10 @@ def test_view_toolpath_nozzle_and_follow():
         def add_cylinder(self, id, **kw):
             self.objects[id] = "cylinder"
 
+        def add_polyline(self, id, points, **kw):
+            assert kw.get("fat") is False, "travel line must be a native 1px line"
+            self.objects[id] = "polyline"
+
         def load_animation(self, anim):
             self.animation = anim
 
@@ -253,7 +257,20 @@ def test_view_toolpath_nozzle_and_follow():
 
     v = Stub()
     view_toolpath(df, viewer=v, follow="follow")
-    assert v.objects == {"toolpath": "toolpath", "toolpath_nozzle": "cylinder"}
+    assert v.objects == {
+        "toolpath": "toolpath",
+        "toolpath_travel": "polyline",
+        "toolpath_nozzle": "cylinder",
+    }
+    # The travel line is revealed by the same channel as the bead tube.
+    draw = next(c for c in v.animation._channels if c.name == "draw_ranges")
+    assert draw.ids == ["toolpath", "toolpath_travel"]
+    assert draw.data.shape[1] == 2
+    assert (draw.data[:, 0] == draw.data[:, 1]).all()
+
+    v_no_travel = Stub()
+    view_toolpath(df, viewer=v_no_travel, travels=False, nozzle=True)
+    assert "toolpath_travel" not in v_no_travel.objects
     assert v.animation.camera_follow == "toolpath_nozzle"
     assert v.animation.camera_lookat is None
     # Nozzle transforms ride the tip: one keyframe per point.

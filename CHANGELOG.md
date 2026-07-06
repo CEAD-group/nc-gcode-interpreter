@@ -25,7 +25,8 @@ released to PyPI.
   toolpath in threejs-viewer as an animated bead tube (feed-rate time base,
   programmed vs flattened point coloring), and the `nc-view` console command
   interprets + flattens + animates an .mpf in one step, with a nozzle
-  marker riding the path tip and camera follow/look-at tracking
+  marker riding the path tip, camera follow/look-at tracking, and travel
+  moves drawn as a thin animated line
 
 - Program jumps and branches: `GOTOF`/`GOTOB`/`GOTO`/`GOTOC`/`GOTOS` and
   `CASE ... OF ... DEFAULT`, with per-scope label/block-number resolution,

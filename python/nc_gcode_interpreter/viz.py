@@ -34,6 +34,9 @@ if TYPE_CHECKING:
 PROGRAMMED_COLOR = 0xFF9500  # orange
 FLATTENED_COLOR = 0x2E86DE  # blue
 
+#: Color of the 1 px travel-move line (slicer convention: cool blue).
+TRAVEL_COLOR = 0x4488FF
+
 _INSTALL_HINT = (
     "threejs-viewer is not installed; visualization needs the viz extra: "
     "pip install 'nc-gcode-interpreter[viz]'"
@@ -198,6 +201,7 @@ def view_toolpath(
     scale: float = 0.001,
     follow: str | None = None,
     nozzle: bool = True,
+    travels: bool = True,
     id: str = "toolpath",
     viewer: Any = None,
     wait: bool = True,
@@ -233,6 +237,11 @@ def view_toolpath(
         nozzle: add a cone marker riding the path tip - the visible
             progress indicator the camera modes track. Forced on when
             ``follow`` is set.
+        travels: draw non-extruding moves as a thin (1 px) line, revealed in
+            lockstep with the bead. Implemented as a single native line over
+            the whole path driven by the same draw fractions: on extrusion
+            stretches it hides inside the opaque bead tube, so only the
+            travel hops show.
         id: viewer object id (reuse to replace a previous path).
         viewer: an existing ``threejs_viewer`` client; a new one is started
             (opening the browser) when None.
@@ -280,7 +289,22 @@ def view_toolpath(
     )
     animation.set_frame_times(toolpath.times)
     fractions = np.linspace(0.0, 1.0, len(toolpath), dtype=np.float32)
-    animation.set_draw_range_data([id], fractions[:, None])
+    animated_ids = [id]
+
+    if travels:
+        travel_id = f"{id}_travel"
+        v.add_polyline(
+            travel_id,
+            toolpath.points,
+            color=TRAVEL_COLOR,
+            fat=False,  # native 1 px line, one draw call even at millions of points
+            pickable=False,
+        )
+        animated_ids.append(travel_id)
+
+    animation.set_draw_range_data(
+        animated_ids, np.repeat(fractions[:, None], len(animated_ids), axis=1)
+    )
 
     if nozzle:
         # Cone marker riding the path tip (the progress indicator the camera
