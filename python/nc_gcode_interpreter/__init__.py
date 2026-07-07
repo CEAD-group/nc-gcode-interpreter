@@ -498,6 +498,29 @@ class _BatchIterator:
     def state(self) -> dict | None:
         return self._inner.state
 
+    @property
+    def variable_events(self) -> "pl.DataFrame | None":
+        """Sparse variable-change events (``include_variables=True``).
+
+        A :class:`polars.DataFrame` with columns ``row_idx`` (the output-row
+        index the change is seen at), ``name_id`` (index into
+        :attr:`variable_names`) and ``value``. ``None`` unless the iterator was
+        created with ``include_variables=True``. Available once exhausted.
+        Replaying the events in order (decoding ``name_id`` via
+        :attr:`variable_names`) reconstructs the symbol table at any row, the
+        batch-path twin of the per-row ``variables`` dict ``nc_to_rows`` yields.
+        """
+        batch = self._inner.variable_events
+        return None if batch is None else pl.DataFrame(batch)
+
+    @property
+    def variable_names(self) -> list[str] | None:
+        """Variable names ``variable_events.name_id`` indexes into.
+
+        ``None`` unless ``include_variables=True``; available once exhausted.
+        """
+        return self._inner.variable_names
+
 
 def nc_to_batches(
     input: "TextFileLike | str | os.PathLike",
@@ -511,6 +534,7 @@ def nc_to_batches(
     allow_undefined_variables: bool = False,
     flatten_tolerance: float | None = None,
     include_line_numbers: bool = False,
+    include_variables: bool = False,
 ) -> _BatchIterator:
     """Interpret an NC program into a stream of columnar polars DataFrames.
 
@@ -541,6 +565,12 @@ def nc_to_batches(
     a loop, non-monotonic across a jump), never forward-filled. Default False
     leaves the schema unchanged.
 
+    With ``include_variables=True`` the iterator additionally exposes
+    ``variable_events`` (a sparse :class:`polars.DataFrame` of ``row_idx`` /
+    ``name_id`` / ``value``) and ``variable_names`` once exhausted — the
+    batch-path equivalent of the per-row ``variables`` dict :func:`nc_to_rows`
+    yields; replaying the events reconstructs the symbol table at any row.
+
     Example:
     --------
     >>> batches = nc_to_batches("G1 X10\\nX20 Y5", batch_size=1)
@@ -564,5 +594,6 @@ def nc_to_batches(
         input_is_path,
         flatten_tolerance,
         include_line_numbers,
+        include_variables,
     )
     return _BatchIterator(inner)

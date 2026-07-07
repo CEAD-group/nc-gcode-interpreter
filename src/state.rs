@@ -288,14 +288,31 @@ impl State {
         }
     }
 
+    /// Snapshot the end-of-run state for the Python-facing `.state` dict. The
+    /// numeric maps (`axes`, `symbol_table`, `translation`) and the string
+    /// variables (`string_table`, from `DEF STRING`) are carried apart because
+    /// they have different value types; the Python binding renders them as one
+    /// dict `{axes, symbol_table, translation, string_table}`.
     #[allow(dead_code)]
-    pub fn to_python_dict(&self) -> HashMap<String, HashMap<String, f64>> {
-        let mut result = HashMap::new();
-
-        result.insert("axes".to_string(), self.axes.clone());
-        result.insert("symbol_table".to_string(), self.symbol_table.clone());
-        result.insert("translation".to_string(), self.translation.clone());
-
-        result
+    pub fn final_state(&self) -> FinalState {
+        FinalState {
+            axes: self.axes.clone(),
+            symbol_table: self.symbol_table.clone(),
+            translation: self.translation.clone(),
+            string_table: self.string_table.clone(),
+        }
     }
+}
+
+/// End-of-run interpreter state handed to Python as the `.state` dict. The
+/// numeric sub-tables keep their `f64` values; `string_table` carries the
+/// `DEF STRING` variables (a numeric sub-dict cannot hold them). The Python
+/// binding turns this into `{axes, symbol_table, translation, string_table}`.
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)] // fields read only by the python-feature bindings, not the bin
+pub struct FinalState {
+    pub axes: HashMap<String, f64>,
+    pub symbol_table: HashMap<String, f64>,
+    pub translation: HashMap<String, f64>,
+    pub string_table: HashMap<String, String>,
 }

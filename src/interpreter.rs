@@ -156,6 +156,8 @@ pub fn nc_to_batch_stream(
     flatten_tolerance: Option<f64>,
     batch_size: usize,
     sender: std::sync::mpsc::SyncSender<Table>,
+    include_variables: bool,
+    events_sender: std::sync::mpsc::Sender<crate::output::VariableEvents>,
 ) -> Result<state::State, ParsingError> {
     // Back-compatible entry point: never emits the opt-in line_no column.
     nc_to_batch_stream_with_line_numbers(
@@ -171,6 +173,8 @@ pub fn nc_to_batch_stream(
         batch_size,
         false,
         sender,
+        include_variables,
+        events_sender,
     )
 }
 
@@ -191,6 +195,8 @@ pub fn nc_to_batch_stream_with_line_numbers(
     batch_size: usize,
     emit_line_no: bool,
     sender: std::sync::mpsc::SyncSender<Table>,
+    include_variables: bool,
+    events_sender: std::sync::mpsc::Sender<crate::output::VariableEvents>,
 ) -> Result<state::State, ParsingError> {
     let mut state = build_state(
         axis_identifiers,
@@ -203,7 +209,14 @@ pub fn nc_to_batch_stream_with_line_numbers(
         let mut discard = OutputRows::collect();
         interpret_file(initial_state, &mut state, &mut discard)?;
     }
-    let mut output = OutputRows::batch_stream_with_line_numbers(sender, batch_size, disable_forward_fill, emit_line_no);
+    let mut output = OutputRows::batch_stream_with_line_numbers(
+        sender,
+        batch_size,
+        disable_forward_fill,
+        include_variables,
+        events_sender,
+        emit_line_no,
+    );
     install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_file(input, &mut state, &mut output)?;
     output.finish()?;
@@ -584,8 +597,9 @@ mod tests {
     /// emitted [`Table`] carries the whole program's `line_no` column.
     fn interpret_with_line_numbers(input: &str) -> Table {
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let (events_tx, _events_rx) = std::sync::mpsc::channel();
         nc_to_batch_stream_with_line_numbers(
-            input, None, None, None, 10000, false, None, false, None, 1_000_000, true, tx,
+            input, None, None, None, 10000, false, None, false, None, 1_000_000, true, tx, false, events_tx,
         )
         .expect("program should interpret");
         rx.into_iter().next().expect("one batch for a small program")

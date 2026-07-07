@@ -4,6 +4,22 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- Variable-change events on the batch path: `nc_to_batches(...,
+  include_variables=True)` exposes, once exhausted, a sparse `variable_events`
+  DataFrame (`row_idx` / `name_id` / `value`) plus a `variable_names` list -
+  the batch-path twin of the per-row `variables` dict `nc_to_rows` already
+  yields. `row_idx` is the output-row index a change is seen at (a change on a
+  variable-only block is attributed to the next output row), so replaying the
+  events reconstructs the symbol table at any row. Off by default (no cost).
+- `string_table` in the interpreter state dict: `DEF STRING` variables now
+  round-trip into `.state` / the `nc_to_dataframe` state tuple as
+  `state["string_table"]` (`dict[str, str]`), alongside the existing `axes` /
+  `symbol_table` / `translation` numeric tables (previously omitted).
+
 ## [v0.2.1] - 2026-07-07
 
 ### Added

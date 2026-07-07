@@ -43,8 +43,15 @@ def nc_to_batches(
     input_is_path: bool = False,
     flatten_tolerance: Optional[float] = None,
     include_line_numbers: bool = False,
+    include_variables: bool = False,
 ) -> Any:
-    """Interpret an NC program into an iterator of columnar polars DataFrames."""
+    """Interpret an NC program into an iterator of columnar polars DataFrames.
+
+    The returned iterator exposes ``state`` (dict with ``axes``,
+    ``symbol_table``, ``translation`` and ``string_table``) once exhausted, and
+    - when ``include_variables`` is set - ``variable_events`` (an Arrow batch of
+    ``row_idx`` / ``name_id`` / ``value``) and ``variable_names`` (list[str]).
+    """
     ...
 
 __all__ = ["nc_to_rows", "nc_to_batches"]
