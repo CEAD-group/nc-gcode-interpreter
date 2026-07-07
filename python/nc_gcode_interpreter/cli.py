@@ -124,7 +124,53 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+#: Default machine axis order (mirrors the interpreter's built-in axis
+#: identifiers); used to suggest a plausible index for --axis-index-map.
+_DEFAULT_AXIS_ORDER = [
+    "N", "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V",
+    "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
+]
+
+
+def _retry_hint(message: str, argv: list[str]) -> str | None:
+    """A corrected nc-view command for the two most common interpreter
+    errors on new machines: a missing axis-index mapping and undefined
+    (machine-parameter) variables."""
+    import re
+    import shlex
+
+    extra_flags: list[str] = []
+    note = ""
+    match = re.search(r"No mapping found for axis '(\w+)'", message)
+    if match:
+        axis = match.group(1)
+        index = _DEFAULT_AXIS_ORDER.index(axis) if axis in _DEFAULT_AXIS_ORDER else len(_DEFAULT_AXIS_ORDER)
+        argv = list(argv)
+        merged = False
+        for i, arg in enumerate(argv):
+            if arg == "--axis-index-map" and i + 1 < len(argv):
+                argv[i + 1] += f",{axis}:{index}"
+                merged = True
+            elif arg.startswith("--axis-index-map="):
+                argv[i] += f",{axis}:{index}"
+                merged = True
+        if not merged:
+            extra_flags += ["--axis-index-map", f"{axis}:{index}"]
+        note = f" (index {index} assumes the default axis order; adjust to your machine)"
+    elif re.search(r"[Uu]ndefined variable|Variable( array element)? '[^']+' is (undefined|not defined)", message):
+        if "--allow-undefined-variables" in argv:
+            return None
+        extra_flags += ["--allow-undefined-variables"]
+    else:
+        return None
+    command = shlex.join(["nc-view", *argv, *extra_flags])
+    return f"retry with{note}:\n  {command}"
+
+
 def main(argv: list[str] | None = None) -> int:
+    import sys
+
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
 
     try:
@@ -140,14 +186,21 @@ def main(argv: list[str] | None = None) -> int:
 
     tolerance = None if args.no_flatten else args.flatten_tolerance
     initial_state = args.initial_state.read_text() if args.initial_state else None
-    df, _state = nc_to_dataframe(
-        args.input,
-        initial_state=initial_state,
-        extra_axes=args.extra_axes,
-        axis_index_map=args.axis_index_map,
-        allow_undefined_variables=args.allow_undefined_variables,
-        flatten_tolerance=tolerance,
-    )
+    try:
+        df, _state = nc_to_dataframe(
+            args.input,
+            initial_state=initial_state,
+            extra_axes=args.extra_axes,
+            axis_index_map=args.axis_index_map,
+            allow_undefined_variables=args.allow_undefined_variables,
+            flatten_tolerance=tolerance,
+        )
+    except ValueError as error:
+        print(error)
+        hint = _retry_hint(str(error), raw_argv)
+        if hint:
+            print(hint)
+        return 1
     if df.height < 2:
         print(f"{args.input}: program produced {df.height} output row(s) - nothing to plot")
         return 1

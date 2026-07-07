@@ -196,6 +196,30 @@ def test_nc_view_cli_axis_index_map(tmp_path, monkeypatch):
         cli.build_parser().parse_args(["x.mpf", "--axis-index-map", "not-a-map"])
 
 
+def test_nc_view_cli_retry_hints(tmp_path, capsys):
+    """nc-view failures on the two classic new-machine errors print a
+    corrected command to retry with."""
+    from nc_gcode_interpreter import cli
+
+    program = tmp_path / "needs_map.mpf"
+    program.write_text("G1 X0 Y0 F100\nATOL[E] = 1\nX10\n")
+    assert cli.main([str(program)]) == 1
+    out = capsys.readouterr().out
+    assert "retry with" in out
+    assert f"nc-view {program} --axis-index-map E:8" in out
+
+    # An existing mapping argument is merged into, not duplicated.
+    assert cli.main([str(program), "--axis-index-map", "A:4"]) == 1
+    out = capsys.readouterr().out
+    assert "--axis-index-map A:4,E:8" in out
+
+    program = tmp_path / "needs_vars.mpf"
+    program.write_text("G1 X0 Y0 F100\nX = SOME_MACHINE_PARAM\n")
+    assert cli.main([str(program), "--speed", "30"]) == 1
+    out = capsys.readouterr().out
+    assert f"nc-view {program} --speed 30 --allow-undefined-variables" in out
+
+
 def test_viz_bead_detection_and_travel():
     pytest.importorskip("numpy")
     from nc_gcode_interpreter.viz import detect_bead_size, toolpath_arrays
