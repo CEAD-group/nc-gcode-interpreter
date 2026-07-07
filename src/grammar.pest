@@ -85,7 +85,7 @@ axis_word              =  { variable_single_char ~ value ~ !"[" }
 
 // local variable definitions
 definition = { ^"DEF" ~ data_type ~ (assignment_multi | assignment | variable_array | variable) ~ ("," ~ (assignment_multi | assignment | variable_array | variable))* }
-data_type  = { ^"INT" | ^"REAL" | ^"BOOL" }
+data_type  = { ^"INT" | ^"REAL" | ^"BOOL" | (^"STRING" ~ "[" ~ integer ~ "]") }
 
 // basic math expression interpreter
 expression =  { prefix* ~ primary ~ (op ~ prefix* ~ primary)* }
@@ -143,9 +143,14 @@ assignment     = {
 
   | (variable ~ "=" ~ expression) // variable may be an axis, and may be a normal variable. Sort it out after parsing
 
+  | (variable ~ "=" ~ string_value) // string variable (DEF STRING or reassignment); never an axis
+
   | (variable_array ~ "=" ~ expression) // variable may not be an axis
 }
 axis_increment = { ^"IC" ~ "(" ~ expression ~ ")" }
+// A quoted string as assignment RHS. Non-silent (unlike quoted_string) so an
+// empty "" still yields a pair to interpret.
+string_value   = { QUOTE ~ string? ~ QUOTE }
 
 assignment_multi =  { variable_array ~ "=" ~ (value_array | value_repeating) }
 value_array      =  { "SET" ~ "(" ~ (expression | value_none) ~ ("," ~ (expression | value_none))* ~ ")" }
