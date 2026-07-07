@@ -871,7 +871,7 @@ fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) ->
         },
         None => {
             crate::state::emit_warning(format_args!(
-                "Warning: The axis '{}' is incremented before a fixed value is set, the G-code behavior may be indeterminate.",
+                "Warning: axis '{}' is incremented with IC() before any absolute position was set; assuming it starts at 0 (a real control would start from the actual axis position).",
                 key
             ));
             Ok(increment)
@@ -943,7 +943,9 @@ fn interpret_variable(pair: Pair<Rule>, state: &State) -> Result<String, Parsing
         // A plain user variable, or a `$`-prefixed system variable such as
         // `$AC_TIMER`. There is no system-variable model, so system variables
         // are keyed and stored like ordinary variables by their full name.
-        Rule::identifier | Rule::nc_variable => Ok(inner.as_str().to_string()),
+        // Uppercased: the language is case-insensitive (manual 3.3.2), so
+        // `lAYER_HEIGHT` and `LAYER_HEIGHT` are the same variable.
+        Rule::identifier | Rule::nc_variable => Ok(inner.as_str().to_uppercase()),
         _ => Err(annotate_error(&pair, "variable parsing",
             format!("Expected identifier, found '{:?}'", inner.as_rule()), state)),
     }
@@ -1107,7 +1109,8 @@ fn interpret_identifier(pair: Pair<Rule>) -> Result<String, ParsingError> {
     // `$AC_TIMER[1]`); the latter are stored by their full name like ordinary
     // variables, since there is no dedicated system-variable model.
     if pair.as_rule() == Rule::identifier || pair.as_rule() == Rule::nc_variable {
-        Ok(pair.as_str().to_string())
+        // Uppercased: identifiers are case-insensitive (manual 3.3.2).
+        Ok(pair.as_str().to_uppercase())
     } else {
         Err(ParsingError::ParsingContext {
             line_no,

@@ -660,6 +660,47 @@ mod tests {
         assert_eq!(floats(&table, "X").len(), 1);
     }
 
+    /// User-variable identifiers are case-insensitive (manual 3.3.2: "No
+    /// distinction is made between uppercase and lowercase characters"):
+    /// a real program declares `lAYER_HEIGHT` (typo) but assigns
+    /// `LAYER_HEIGHT` - on the control that is ONE variable, and treating
+    /// them as two silently zeroed every layer increment.
+    #[test]
+    fn variable_identifiers_are_case_insensitive() {
+        let (_, state) = nc_to_table(
+            "DEF REAL lAYER_HEIGHT\nLAYER_HEIGHT = 4\nR1 = layer_height * 2\nZ_STEP = Layer_Height\nG1 Z=Z_step F100\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            None,
+        )
+        .expect("program should interpret");
+        assert_eq!(state.symbol_table["LAYER_HEIGHT"], 4.0);
+        assert_eq!(state.symbol_table["R1"], 8.0);
+        assert!(!state.symbol_table.contains_key("lAYER_HEIGHT"));
+        assert_eq!(state.axes["Z"], 4.0);
+        // $-prefixed system variables normalize the same way.
+        let (_, state) = nc_to_table(
+            "$AC_MARKER = 7\nR2 = $ac_marker + 1\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            None,
+        )
+        .expect("program should interpret");
+        assert_eq!(state.symbol_table["$AC_MARKER"], 7.0);
+        assert_eq!(state.symbol_table["R2"], 8.0);
+        assert!(!state.symbol_table.contains_key("$ac_marker"));
+    }
+
     /// Strings must stay out of the numeric pipeline - loudly. Using a
     /// STRING variable in a numeric expression, initializing a STRING with a
     /// number, or a numeric variable with a string are all hard errors, never

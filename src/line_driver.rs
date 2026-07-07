@@ -378,11 +378,14 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                     }
                     None => {
                         state.warn_unsupported_address(key, line.line_no);
-                        // Same one-type-per-name rule as interpret_assignment:
-                        // a STRING variable must not silently become numeric.
-                        reject_string_variable(key, state, line.line_no)?;
-                        output.record_variable_change(key, *value);
-                        state.symbol_table.insert(key.to_string(), *value);
+                        // User variable: identifiers are case-insensitive, so
+                        // the symbol key is the uppercased name (manual 3.3.2),
+                        // and every name has exactly one type - a STRING
+                        // variable must not silently become numeric.
+                        let key = key.to_uppercase();
+                        reject_string_variable(&key, state, line.line_no)?;
+                        output.record_variable_change(&key, *value);
+                        state.symbol_table.insert(key, *value);
                     }
                 }
             }
@@ -391,11 +394,20 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                 // undefined-variable behavior of interpret_primary.
                 let value = match *ident {
                     Some(name) => {
-                        let ident_value = match state.symbol_table.get(name).copied() {
+                        // Case-insensitive lookup: same normalization as the
+                        // grammar path (interpret_variable uppercases). Symbol
+                        // keys are uppercase, so the typical all-uppercase CAM
+                        // name borrows; only mixed-case names allocate.
+                        let name: std::borrow::Cow<str> = if name.bytes().any(|b| b.is_ascii_lowercase()) {
+                            std::borrow::Cow::Owned(name.to_uppercase())
+                        } else {
+                            std::borrow::Cow::Borrowed(name)
+                        };
+                        let ident_value = match state.symbol_table.get(name.as_ref()).copied() {
                             Some(v) => v,
                             None if state.allow_undefined_variables => {
                                 crate::state::emit_warning(format_args!("Warning: Variable '{}' is undefined, initializing to 0.0", name));
-                                state.symbol_table.insert(name.to_string(), 0.0);
+                                state.symbol_table.insert(name.clone().into_owned(), 0.0);
                                 0.0
                             }
                             None => {
@@ -406,7 +418,7 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                                 return Err(ParsingError::UndefinedVariable {
                                     line_no: line.line_no,
                                     preview,
-                                    name: name.to_string(),
+                                    name: name.into_owned(),
                                 });
                             }
                         };
@@ -427,7 +439,7 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                         Some(local) => local + value,
                         None => {
                             crate::state::emit_warning(format_args!(
-                                "Warning: The axis '{}' is incremented before a fixed value is set, the G-code behavior may be indeterminate.",
+                                "Warning: axis '{}' is incremented with IC() before any absolute position was set; assuming it starts at 0 (a real control would start from the actual axis position).",
                                 name
                             ));
                             value
@@ -448,10 +460,11 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                     }
                     None => {
                         state.warn_unsupported_address(key, line.line_no);
-                        reject_string_variable(key, state, line.line_no)?;
-                        let local_value = increment_local(state, key, value);
-                        output.record_variable_change(key, local_value);
-                        state.symbol_table.insert(key.to_string(), local_value);
+                        let key = key.to_uppercase();
+                        reject_string_variable(&key, state, line.line_no)?;
+                        let local_value = increment_local(state, &key, value);
+                        output.record_variable_change(&key, local_value);
+                        state.symbol_table.insert(key, local_value);
                     }
                 }
             }
