@@ -19,9 +19,14 @@ thiserror = "2.0.18"
 clap = { version = "4.6", features = ["derive"] }
 rayon = "1.10"
 
-[dependencies.pyo3]
-version = "0.29"
-optional = true
+# NOTE: keep every dependency version inline (`crate = { version = "..." }`),
+# NOT as a `[dependencies.crate]` block with a standalone `version = "..."`
+# line. The release CI rewrites the package version with
+# `sed s/^version = "..."/.../`, which would also clobber any standalone dep
+# version line (turning e.g. arrow-array into "= 0.2.0"). Inline form keeps the
+# `[package]` version the only `^version = ` line in the file.
+
+pyo3 = { version = "0.29", optional = true }
 
 # The Table -> Python handoff is a zero-copy Arrow C array: we build a
 # RecordBatch with the minimal arrow-rs crates (arrow-array with just the `ffi`
@@ -31,24 +36,12 @@ optional = true
 # pyo3-arrow, so none of numpy/chrono-tz/comfy_table come along. The Python side
 # turns the capsule into a polars DataFrame with `pl.DataFrame(...)` (no pyarrow).
 # Pulled in ONLY under the `python` feature, so the pure-Rust lib/CLI (used by
-# mill-sim + the CLI) stay Arrow-free.
-[dependencies.arrow-array]
-version = "59"
-optional = true
-default-features = false
-features = ["ffi"]
-
-[dependencies.arrow-schema]
-version = "59"
-optional = true
-default-features = false
-
-# Already pulled transitively by arrow-array/ffi; named directly only so the
-# `ArrayData` handed to Python has a public type path.
-[dependencies.arrow-data]
-version = "59"
-optional = true
-default-features = false
+# the CLI + downstream consumers) stay Arrow-free. arrow-data is already pulled
+# transitively by arrow-array/ffi; named only so the `ArrayData` handed to
+# Python has a public type path.
+arrow-array = { version = "59", optional = true, default-features = false, features = ["ffi"] }
+arrow-schema = { version = "59", optional = true, default-features = false }
+arrow-data = { version = "59", optional = true, default-features = false }
 
 [features]
 default = []
