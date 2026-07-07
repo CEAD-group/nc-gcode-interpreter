@@ -61,8 +61,10 @@ for_statement          =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ blocks ~ 
 while_statement        =  { ^"WHILE" ~ condition ~ blocks ~ ^"ENDWHILE" }
 repeat_until_statement =  { ^"REPEAT" ~ blocks ~ ^"UNTIL" ~ condition }
 block_number           =  { integer }
-condition              =  { base_condition | ("(" ~ base_condition ~ ")") }
-base_condition         = _{ (expression ~ relational_operator ~ expression) | expression }
+// A condition is just an expression: comparison and logic operators are
+// expression operators (manual 4.1.3.3 "Priority of the operations"), so
+// forms like `(A == 1 AND B == 1)` and `R11 = R10 >= 100` parse uniformly.
+condition              =  { expression }
 relational_operator    =  { "<=" | ">=" | "==" | "<>" | "<" | ">" }
 statement              =  {
     axis_word
@@ -85,7 +87,7 @@ axis_word              =  { variable_single_char ~ value ~ !"[" }
 
 // local variable definitions
 definition = { ^"DEF" ~ data_type ~ (assignment_multi | assignment | variable_array | variable) ~ ("," ~ (assignment_multi | assignment | variable_array | variable))* }
-data_type  = { ^"INT" | ^"REAL" | ^"BOOL" }
+data_type  = { ^"INT" | ^"REAL" | ^"BOOL" | (^"STRING" ~ "[" ~ ASCII_DIGIT+ ~ "]") }
 
 // basic math expression interpreter
 expression =  { prefix* ~ primary ~ (op ~ prefix* ~ primary)* }
@@ -124,13 +126,15 @@ identifier = @{
 }
 
 variable             =  { (nc_variable | identifier) }
+// Case-insensitive: the language ignores case, and a lowercase x100 falling
+// through to the subprogram-call rule silently loses the move.
 variable_single_char = @{
-    "X" | "Y" | "Z"
-  | "A" | "B" | "C"
-  | "U" | "V" | "W"
-  | "I" | "J" | "K"
-  | "T" | "S" | "F"
-  | "D" | "H" | "E"
+    ^"X" | ^"Y" | ^"Z"
+  | ^"A" | ^"B" | ^"C"
+  | ^"U" | ^"V" | ^"W"
+  | ^"I" | ^"J" | ^"K"
+  | ^"T" | ^"S" | ^"F"
+  | ^"D" | ^"H" | ^"E"
 }
 
 // must be an axis
@@ -143,9 +147,14 @@ assignment     = {
 
   | (variable ~ "=" ~ expression) // variable may be an axis, and may be a normal variable. Sort it out after parsing
 
+  | (variable ~ "=" ~ string_value) // string variable (DEF STRING or reassignment); never an axis
+
   | (variable_array ~ "=" ~ expression) // variable may not be an axis
 }
 axis_increment = { ^"IC" ~ "(" ~ expression ~ ")" }
+// A quoted string as assignment RHS. Non-silent (unlike quoted_string) so an
+// empty "" still yields a pair to interpret.
+string_value   = { QUOTE ~ string? ~ QUOTE }
 
 assignment_multi =  { variable_array ~ "=" ~ (value_array | value_repeating) }
 value_array      =  { "SET" ~ "(" ~ (expression | value_none) ~ ("," ~ (expression | value_none))* ~ ")" }
@@ -154,13 +163,29 @@ value_none       =  { "" }
 // Atomic: the interpreter only reads the full lexeme (as_str), so the inner
 // float/integer pairs would be two dead tokens per coordinate on the queue.
 value            = @{ float | integer }
-op               = _{ op_add | op_sub | op_mul | op_div | op_int_div | op_mod }
+op               = _{
+    op_add | op_sub | op_mul | op_div | op_int_div | op_mod
+  | op_b_and | op_b_xor | op_b_or
+  | op_and | op_xor | op_or
+  | relational_operator
+}
 op_add           =  { "+" }
 op_sub           =  { "-" }
 op_mul           =  { "*" }
 op_div           =  { "/" }
-op_int_div       =  { "DIV" }
-op_mod           =  { "MOD" }
+// Word-bounded like the logic operators: DIVISOR / MODAL in an expression
+// must stay identifiers, not tokenize as DIV/MOD plus a trailing name.
+op_int_div       = @{ ^"DIV" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_mod           = @{ ^"MOD" ~ !(ASCII_ALPHANUMERIC | "_") }
+// Logic and bit-by-bit operators (manual 4.1.3.2); word-bounded so
+// identifiers like ANDGATE or ORIGIN never match an operator. B_* first:
+// they must not be shadowed by a bare variable read of `B_AND`.
+op_b_and         = @{ ^"B_AND" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_b_xor         = @{ ^"B_XOR" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_b_or          = @{ ^"B_OR" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_and           = @{ ^"AND" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_xor           = @{ ^"XOR" ~ !(ASCII_ALPHANUMERIC | "_") }
+op_or            = @{ ^"OR" ~ !(ASCII_ALPHANUMERIC | "_") }
 prefix           = _{ neg | not_op }
 neg              =  { "-" }
 // Logical negation (unary, binds like unary minus). The word boundary keeps

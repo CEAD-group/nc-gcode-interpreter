@@ -21,6 +21,7 @@ pub fn nc_to_table(
     disable_forward_fill: bool,
     axis_index_map: Option<HashMap<String, usize>>, // axis identifier to index mapping
     allow_undefined_variables: bool,
+    flatten_tolerance: Option<f64>,
 ) -> Result<(Table, state::State), ParsingError> {
     let mut state = build_state(
         axis_identifiers,
@@ -39,6 +40,7 @@ pub fn nc_to_table(
 
     // Now interpret the main input using the axis_index_map from state
     let mut output = OutputRows::collect();
+    install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_file(input, &mut state, &mut output)?;
     let rows = output.finish()?;
 
@@ -62,6 +64,29 @@ fn build_state(
     state::State::new(axis_identifiers, iteration_limit, axis_index_map, allow_undefined_variables)
 }
 
+/// Install the curve flattener on the output when a tolerance was given
+/// (see [`crate::flatten`]): G2/G3 arcs and spline blocks come out as runs
+/// of G1 rows sampled within `flatten_tolerance` of the true curve.
+fn install_flattener(
+    output: &mut OutputRows,
+    state: &State,
+    flatten_tolerance: Option<f64>,
+) -> Result<(), ParsingError> {
+    if let Some(tolerance) = flatten_tolerance {
+        let mut flattener = crate::flatten::Flattener::new(tolerance, &state.axis_identifiers)?;
+        // Seed with the machine positions the state already knows (an
+        // initial-state file may have established the start point of the
+        // first arc/spline of the main program).
+        for axis in state.axes.keys() {
+            if let Some(machine_value) = state.get_axis_machine(axis) {
+                flattener.seed_position(axis, machine_value);
+            }
+        }
+        output.set_flattener(flattener);
+    }
+    Ok(())
+}
+
 /// Streaming twin of `nc_to_table`: interpret the program pushing each
 /// finished row into `sender` as `(line_no, row)`, returning the final
 /// state. Blocks on the channel when the consumer is slower than the
@@ -76,6 +101,7 @@ pub fn nc_to_row_stream(
     iteration_limit: usize,
     axis_index_map: Option<HashMap<String, usize>>,
     allow_undefined_variables: bool,
+    flatten_tolerance: Option<f64>,
     sender: std::sync::mpsc::SyncSender<Row>,
 ) -> Result<state::State, ParsingError> {
     let mut state = build_state(
@@ -90,6 +116,7 @@ pub fn nc_to_row_stream(
         interpret_file(initial_state, &mut state, &mut discard)?;
     }
     let mut output = OutputRows::stream(sender);
+    install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_file(input, &mut state, &mut output)?;
     output.finish()?;
     Ok(state)
@@ -113,6 +140,7 @@ pub fn nc_to_batch_stream(
     disable_forward_fill: bool,
     axis_index_map: Option<HashMap<String, usize>>,
     allow_undefined_variables: bool,
+    flatten_tolerance: Option<f64>,
     batch_size: usize,
     sender: std::sync::mpsc::SyncSender<Table>,
 ) -> Result<state::State, ParsingError> {
@@ -128,6 +156,7 @@ pub fn nc_to_batch_stream(
         interpret_file(initial_state, &mut state, &mut discard)?;
     }
     let mut output = OutputRows::batch_stream(sender, batch_size, disable_forward_fill);
+    install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_file(input, &mut state, &mut output)?;
     output.finish()?;
     Ok(state)
@@ -251,7 +280,8 @@ fn describe_rule(rule: Rule) -> &'static str {
         Rule::frame_op | Rule::frame_kw => "a frame instruction (TRANS/ROT/...)",
         Rule::m_command => "an M code",
         Rule::g_command | Rule::g_command_numbered => "a G code",
-        Rule::op_add | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_int_div | Rule::op_mod | Rule::neg => {
+        Rule::op_add | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_int_div | Rule::op_mod | Rule::neg
+        | Rule::op_and | Rule::op_or | Rule::op_xor | Rule::op_b_and | Rule::op_b_or | Rule::op_b_xor => {
             "an operator"
         }
         Rule::value_array | Rule::value_repeating | Rule::value_none => "SET/REP values",
@@ -426,7 +456,7 @@ mod parse_speed {
 
         let start = Instant::now();
         let (table, _state) =
-            nc_to_table(&input, None, None, None, 10_000, false, None, false).expect("interpret");
+            nc_to_table(&input, None, None, None, 10_000, false, None, false, None).expect("interpret");
         println!(
             "full nc_to_table:{:>8.2?}  ({} rows, {} columns)",
             start.elapsed(),
@@ -475,7 +505,7 @@ mod tests {
     use crate::output::Column;
 
     fn interpret(input: &str) -> Table {
-        let (table, _state) = nc_to_table(input, None, None, None, 10000, false, None, false)
+        let (table, _state) = nc_to_table(input, None, None, None, 10000, false, None, false, None)
             .expect("program should interpret");
         table
     }
@@ -503,7 +533,7 @@ mod tests {
     #[test]
     fn actual_position_sysvars_read_axis_state() {
         let run = |src: &str| {
-            nc_to_table(src, None, None, None, 10000, false, None, false)
+            nc_to_table(src, None, None, None, 10000, false, None, false, None)
                 .expect("program should interpret")
         };
         // Layer loop: Z climbs 1 mm per pass until above 4.5.
@@ -526,20 +556,133 @@ mod tests {
     /// allow_undefined_variables), and $AA_IW/$AA_IM are read-only.
     #[test]
     fn actual_position_sysvars_boundaries() {
-        let err = nc_to_table("R1 = $AA_IW[Z]\n", None, None, None, 10000, false, None, false).unwrap_err();
+        let err = nc_to_table("R1 = $AA_IW[Z]\n", None, None, None, 10000, false, None, false, None).unwrap_err();
         assert!(format!("{err}").contains("before axis Z has a position"), "got: {err}");
         // With allow_undefined_variables it degrades to a warned 0.0.
-        let (_, state) = nc_to_table("R1 = $AA_IW[Z]\n", None, None, None, 10000, false, None, true)
+        let (_, state) = nc_to_table("R1 = $AA_IW[Z]\n", None, None, None, 10000, false, None, true, None)
             .expect("allow_undefined_variables tolerates the early read");
         assert_eq!(state.symbol_table["R1"], 0.0);
-        let err = nc_to_table("G1 Z0 F100\n$AA_IW[Z] = 5\n", None, None, None, 10000, false, None, false)
+        let err = nc_to_table("G1 Z0 F100\n$AA_IW[Z] = 5\n", None, None, None, 10000, false, None, false, None)
             .unwrap_err();
         assert!(format!("{err}").contains("read-only"), "got: {err}");
         // The guard is structural, not textual: whitespace inside the
         // subscript must not sneak the assignment past it.
-        let err = nc_to_table("G1 Z0 F100\n$AA_IW[ Z ] = 5\n", None, None, None, 10000, false, None, false)
+        let err = nc_to_table("G1 Z0 F100\n$AA_IW[ Z ] = 5\n", None, None, None, 10000, false, None, false, None)
             .unwrap_err();
         assert!(format!("{err}").contains("read-only"), "got: {err}");
+    }
+
+    /// Logic operators in conditions (manual 4.1.3.2/4.1.3.3): AND/OR/XOR/
+    /// NOT link truth values with comparisons at the manual's priorities;
+    /// `IF (A == 1 AND B == 1)` is the ubiquitous real-world form.
+    #[test]
+    fn logic_operators_in_conditions() {
+        let run = |src: &str| {
+            nc_to_table(src, None, None, None, 10000, false, None, false, None)
+                .expect("program should interpret")
+                .0
+        };
+        // The guarded G1 X10 ran iff an X column exists in the output.
+        let branch_ran = |src: &str| run(src).columns.iter().any(|(n, _)| n == "X");
+        // Parenthesized comparisons joined by AND - both true and one false.
+        assert!(branch_ran("R1=1 R2=1\nIF ((R1 == 1) AND (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"));
+        assert!(!branch_ran("R1=1 R2=0\nIF ((R1 == 1) AND (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"));
+        // OR and NOT.
+        assert!(branch_ran("R1=0 R2=1\nIF ((R1 == 1) OR (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"));
+        assert!(branch_ran("R1=0\nIF NOT R1\nG1 X10 F100\nENDIF\nM30\n"));
+        // XOR.
+        assert!(!branch_ran("R1=1 R2=1\nIF ((R1==1) XOR (R2==1))\nG1 X10 F100\nENDIF\nM30\n"));
+        assert!(branch_ran("R1=0 R2=1\nIF ((R1==1) XOR (R2==1))\nG1 X10 F100\nENDIF\nM30\n"));
+    }
+
+    /// The manual's exact priority table (4.1.3.3): AND (7) binds TIGHTER
+    /// than comparisons (11), so `A == 1 AND B == 1` groups as
+    /// `(A == (1 AND B)) == 1` - the control's actual (surprising) grouping,
+    /// reproduced faithfully rather than the intuitive one.
+    #[test]
+    fn operator_priorities_match_the_manual() {
+        let value_of_r9 = |src: &str| {
+            let (_, state) = nc_to_table(src, None, None, None, 10000, false, None, false, None)
+                .expect("program should interpret");
+            state.symbol_table["R9"]
+        };
+        // A=0, B=0: 1 AND 0 = 0; 0 == 0 = TRUE(1); 1 == 1 = TRUE.
+        assert_eq!(value_of_r9("R1=0 R2=0\nR9 = R1 == 1 AND R2 == 1\n"), 1.0);
+        // Comparison results are assignable BOOL->REAL (manual example
+        // R11=R10>=100).
+        assert_eq!(value_of_r9("R10=150\nR9 = R10 >= 100\n"), 1.0);
+        assert_eq!(value_of_r9("R10=50\nR9 = R10 >= 100\n"), 0.0);
+        // Bit-by-bit operators, tier 4-6: B_AND above B_XOR above B_OR.
+        assert_eq!(value_of_r9("R9 = 6 B_AND 3\n"), 2.0);
+        assert_eq!(value_of_r9("R9 = 6 B_XOR 3\n"), 5.0);
+        assert_eq!(value_of_r9("R9 = 6 B_OR 3\n"), 7.0);
+        // AND has higher priority than OR: 1 OR (0 AND 0) = 1.
+        assert_eq!(value_of_r9("R9 = 1 OR 0 AND 0\n"), 1.0);
+        // Word boundaries: ANDGATE / ORIGIN / DIVISOR / MODAL are variables,
+        // not operators followed by trailing names.
+        assert_eq!(value_of_r9("ANDGATE=3 ORIGIN=4\nR9 = ANDGATE + ORIGIN\n"), 7.0);
+        assert_eq!(value_of_r9("DIVISOR=2 MODAL=3\nR9 = DIVISOR * MODAL\n"), 6.0);
+        // DIV/MOD still work word-bounded (and now case-insensitively).
+        assert_eq!(value_of_r9("R9 = 7 DIV 2\n"), 3.0);
+        assert_eq!(value_of_r9("R9 = 7 mod 2\n"), 1.0);
+        // Bit-by-bit operators reject non-integer operands loudly instead of
+        // silently truncating (manual 4.1.3.2: CHAR/INT only).
+        let err = nc_to_table("R9 = 6.5 B_AND 3\n", None, None, None, 10000, false, None, false, None).unwrap_err();
+        assert!(format!("{err}").contains("integer operands"), "got: {err}");
+    }
+
+    /// DEF STRING[n] declares string variables (manual 1.3: STRING is a
+    /// standard data type): declaration with and without initialization,
+    /// plus reassignment, must all parse; strings live outside the numeric
+    /// pipeline and never produce output columns.
+    #[test]
+    fn def_string_variables() {
+        let (table, state) = nc_to_table(
+            "DEF STRING[28] CALIBRATION_TOOLPATH = \"move_grid_baseline\"\n\
+             DEF STRING[200] _LOGFILENAME\n\
+             DEF STRING[8] TAG = \"x\", NOTE = \"\"\n\
+             _LOGFILENAME = \"LOG_TRACKER.MPF\"\n\
+             G1 X0 Y0 F100\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            None,
+        )
+        .expect("program should interpret");
+        assert_eq!(state.string_table["CALIBRATION_TOOLPATH"], "move_grid_baseline");
+        assert_eq!(state.string_table["_LOGFILENAME"], "LOG_TRACKER.MPF");
+        assert_eq!(state.string_table["TAG"], "x");
+        assert_eq!(state.string_table["NOTE"], "");
+        assert_eq!(floats(&table, "X").len(), 1);
+    }
+
+    /// Strings must stay out of the numeric pipeline - loudly. Using a
+    /// STRING variable in a numeric expression, initializing a STRING with a
+    /// number, or a numeric variable with a string are all hard errors, never
+    /// a silent 0.0.
+    #[test]
+    fn string_numeric_boundaries_error_loudly() {
+        let run = |src: &str| nc_to_table(src, None, None, None, 10000, false, None, false, None);
+        let err = run("DEF STRING[8] NAME = \"abc\"\nX = NAME + 1\n").unwrap_err();
+        assert!(format!("{err}").contains("STRING variable"), "got: {err}");
+        let err = run("DEF STRING[8] NAME = 5\n").unwrap_err();
+        assert!(format!("{err}").contains("initialized with a number"), "got: {err}");
+        let err = run("DEF REAL R1 = \"abc\"\n").unwrap_err();
+        assert!(format!("{err}").contains("initialized with a string"), "got: {err}");
+        let err = run("DEF STRING[8] NAME\nG1 X=\"abc\"\n").unwrap_err();
+        assert!(format!("{err}").contains("cannot assign a string"), "got: {err}");
+        // Every name has exactly one type: no numeric->string or
+        // string->numeric flips after definition.
+        let err = run("DEF REAL R_VAL = 1\nR_VAL = \"abc\"\n").unwrap_err();
+        assert!(format!("{err}").contains("numeric variable"), "got: {err}");
+        let err = run("DEF STRING[8] NAME = \"abc\"\nNAME = 5\n").unwrap_err();
+        assert!(format!("{err}").contains("STRING variable"), "got: {err}");
+        // A negative declared length must not parse.
+        assert!(run("DEF STRING[-1] NAME\n").is_err());
     }
 
     /// The interpolation parameters I/J/K (arc-centre offsets) and the CR
@@ -573,6 +716,128 @@ mod tests {
 
         // Axes are still forward-filled; the arc offsets are not.
         assert_eq!(floats(&table, "X").last().unwrap(), &Some(60.0));
+    }
+
+    /// F on a G4 block is the dwell time in seconds, not a feed change: it
+    /// must land in the per-block `dwell` column and leave the modal F
+    /// column untouched (no forward-fill pollution).
+    #[test]
+    fn g4_dwell_does_not_pollute_feed() {
+        let table = interpret(
+            "G1 X0 Y0 F1000\n\
+             G4 F0.01\n\
+             G1 X10 Y0\n",
+        );
+        assert_eq!(floats(&table, "F"), &[Some(1000.0), Some(1000.0), Some(1000.0)]);
+        assert_eq!(floats(&table, "dwell"), &[None, Some(0.01), None]);
+    }
+
+    /// The NC language is case-insensitive: lowercase axis words are axis
+    /// words (not silently-swallowed subprogram calls), and G/M values are
+    /// normalized to uppercase in the output - a lowercase g18 must never
+    /// reach the flattener as a distinct plane string.
+    #[test]
+    fn lowercase_program_is_normalized() {
+        let table = interpret("g17 g1 x0 y0 f100 m8\ng2 x10 y0 i5 j0\n");
+        assert_eq!(floats(&table, "X"), &[Some(0.0), Some(10.0)]);
+        assert_eq!(floats(&table, "I"), &[None, Some(5.0)]);
+        assert!(
+            !column_names(&table).contains(&"non_returning_function_call"),
+            "lowercase axis word was treated as a subprogram call: {:?}",
+            column_names(&table)
+        );
+        let strs = |name: &str| -> Vec<Option<String>> {
+            match &table.columns.iter().find(|(n, _)| n == name).unwrap().1 {
+                Column::Str(v) => v.clone(),
+                other => panic!("column {name} is not a str column: {other:?}"),
+            }
+        };
+        assert_eq!(
+            strs("gg01_motion"),
+            &[Some("G1".to_string()), Some("G2".to_string())]
+        );
+        assert_eq!(
+            strs("gg06_plane_select"),
+            &[Some("G17".to_string()), Some("G17".to_string())]
+        );
+        match &table.columns.iter().find(|(n, _)| n == "M").unwrap().1 {
+            Column::StrList(v) => assert_eq!(v[0], Some(vec!["M8".to_string()])),
+            other => panic!("M is not a str-list column: {other:?}"),
+        }
+    }
+
+    /// A G4 block that programs BOTH F and S must consume both: the dwell
+    /// value is F, and neither may forward-fill into the modal F/S columns.
+    #[test]
+    fn g4_consumes_both_f_and_s() {
+        let (table, _state) = nc_to_table(
+            "G1 X0 Y0 F1000 S200\n\
+             G4 F0.5 S2\n\
+             G1 X10 Y0\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            None,
+        )
+        .expect("program should interpret");
+        assert_eq!(floats(&table, "F"), &[Some(1000.0), Some(1000.0), Some(1000.0)]);
+        assert_eq!(floats(&table, "S"), &[Some(200.0), Some(200.0), Some(200.0)]);
+        assert_eq!(floats(&table, "dwell"), &[None, Some(0.5), None]);
+    }
+
+    /// A start position established by the initial-state file must seed the
+    /// flattener: the first arc of the main program flattens from the correct
+    /// start point instead of warning that the position is unknown.
+    #[test]
+    fn initial_state_position_seeds_flattener() {
+        let (table, _state) = nc_to_table(
+            "G2 X100 Y0 I50 J0 F1000\n",
+            Some("G1 X0 Y0 Z0 F100\n"),
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            Some(0.1),
+        )
+        .expect("program should interpret");
+        let x = floats(&table, "X");
+        // A half circle of radius 50 at 0.1 mm tolerance needs ~25 samples;
+        // an unseeded flattener would pass the single G2 row through instead.
+        assert!(x.len() > 10, "arc was not flattened: {} row(s)", x.len());
+        assert_eq!(x.last().unwrap(), &Some(100.0));
+        // The intermediate samples sit on the r=50 circle around (50, 0).
+        let y = floats(&table, "Y");
+        for (xv, yv) in x.iter().zip(y).filter_map(|(a, b)| a.zip(*b)) {
+            let r = ((xv - 50.0).powi(2) + yv.powi(2)).sqrt();
+            assert!((r - 50.0).abs() < 1e-6, "sample ({xv}, {yv}) off the circle: r={r}");
+        }
+    }
+
+    /// A pathologically tight tolerance must not materialize a gigabyte-scale
+    /// row burst: the per-arc sample count is clamped (loudly) at 100k.
+    #[test]
+    fn arc_segment_count_is_clamped() {
+        let (table, _state) = nc_to_table(
+            "G1 X0 Y0 F1000\n\
+             G2 X0 Y0 I1000 J0\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            Some(1e-9),
+        )
+        .expect("program should interpret");
+        // Full circle of radius 1000 at 1e-9 tolerance wants ~2.2M segments.
+        assert_eq!(floats(&table, "X").len(), 1 + 100_000);
     }
 
     /// The CR= radius form is likewise a per-block interpolation parameter and
