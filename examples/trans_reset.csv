@@ -1,11 +1,11 @@
-X,Y,comment
-,,; TRANS is a substituting frame instruction (manual 3.12.2.2):
-,,"; every TRANS deletes ALL previously programmed offsets, including on"
-,,; axes not mentioned in the block. A bare absolute frame instruction
-,,"; (TRANS, ROT, SCALE, MIRROR) deletes the whole programmable frame."
-1.000,1.000,
-102.000,22.000,
-13.000,3.000,"; X offset replaced (13), Y offset deleted (3)"
-4.000,4.000,"; bare TRANS: no offsets (4, 4)"
-55.000,5.000,"; additive on empty frame (55, 5)"
-6.000,6.000,"; bare absolute ROT deletes the frame too (6, 6)"
+line_no,X,Y,comment
+1,,,; TRANS is a substituting frame instruction (manual 3.12.2.2):
+2,,,"; every TRANS deletes ALL previously programmed offsets, including on"
+3,,,; axes not mentioned in the block. A bare absolute frame instruction
+4,,,"; (TRANS, ROT, SCALE, MIRROR) deletes the whole programmable frame."
+5,1.000,1.000,
+7,102.000,22.000,
+9,13.000,3.000,"; X offset replaced (13), Y offset deleted (3)"
+11,4.000,4.000,"; bare TRANS: no offsets (4, 4)"
+13,55.000,5.000,"; additive on empty frame (55, 5)"
+15,6.000,6.000,"; bare absolute ROT deletes the frame too (6, 6)"

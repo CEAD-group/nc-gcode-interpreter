@@ -7,7 +7,7 @@ import pathlib
 
 import polars as pl
 import pytest
-from nc_gcode_interpreter import nc_to_batches, nc_to_dataframe
+from nc_gcode_interpreter import nc_to_batches, nc_to_dataframe, nc_to_rows
 from polars.testing import assert_frame_equal
 
 
@@ -146,6 +146,61 @@ def test_interpreter_error_propagates_from_batches():
 def test_invalid_batch_size_raises():
     with pytest.raises(ValueError):
         list(nc_to_batches("X10", batch_size=0))
+
+
+def test_line_no_is_the_leading_column():
+    df, _ = nc_to_dataframe("G1 X0 Y0 F100\nX10\nX20\n")
+    assert df.columns[0] == "line_no"
+    assert df["line_no"].dtype == pl.Int64
+    # 1-based, one value per output row, never null.
+    assert df["line_no"].to_list() == [1, 2, 3]
+    assert df["line_no"].null_count() == 0
+
+
+@pytest.mark.parametrize(
+    "program, expected",
+    [
+        # WHILE loop: the body line repeats; the plain-variable line emits no
+        # row; the line after the loop follows.
+        ("R1=0\nWHILE R1<2\nX=R1\nR1=R1+1\nENDWHILE\nX9\n", [3, 3, 6]),
+        # GOTO reorders execution: source lines appear in execution order,
+        # non-monotonic across the jump.
+        ("N10 X1\nGOTOF 40\nN30 X999\nN40 X4\n", [1, 4]),
+    ],
+)
+def test_line_no_matches_streaming_under_loops_and_jumps(program, expected):
+    # The batch/dataframe line_no must equal the streaming nc_to_rows line_no
+    # row-for-row (repeated under loops, non-monotonic across jumps).
+    df, _ = nc_to_dataframe(program)
+    stream_lines = [line for line, *_ in nc_to_rows(program)]
+    assert df["line_no"].to_list() == expected
+    assert df["line_no"].to_list() == stream_lines
+
+
+def test_line_no_survives_flattening():
+    # Flatten-generated samples keep the originating block's source line, so a
+    # flattened arc/spline block yields many rows all carrying its line_no.
+    program = "G1 X0 Y0 F1000\nG2 X100 Y0 I50 J0\nG1 X100 Y50\n"
+    df, _ = nc_to_dataframe(program, flatten_tolerance=0.1)
+    assert df.columns[0] == "line_no"
+    assert df["line_no"].null_count() == 0
+    # The arc on line 2 expands to many G1 samples, every one tagged line 2.
+    per_line = df["line_no"].to_list()
+    assert per_line.count(2) > 5
+    # And it still matches the streaming path row-for-row.
+    stream_lines = [line for line, *_ in nc_to_rows(program, flatten_tolerance=0.1)]
+    assert per_line == stream_lines
+
+
+def test_line_no_reconstructs_across_batches():
+    # Concatenating batches restores the same per-row line_no as the whole-file
+    # dataframe, so batch boundaries never disturb the column.
+    program = "R1=0\nWHILE R1<5\nX=R1 Y=R1\nR1=R1+1\nENDWHILE\nX9\n"
+    df, _ = nc_to_dataframe(program)
+    for batch_size in (1, 2, 3):
+        frames = list(nc_to_batches(program, batch_size=batch_size))
+        concatenated = pl.concat(frames, how="diagonal").select(df.columns)
+        assert concatenated["line_no"].to_list() == df["line_no"].to_list()
 
 
 def test_path_input_batches(tmp_path):

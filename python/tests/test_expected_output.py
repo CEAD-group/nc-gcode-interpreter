@@ -68,4 +68,9 @@ def test_mpf_file_roundtrip(mpf_file, tmp_path, initial_state):
 
     df, _state = nc_to_dataframe(tmp_file.read_text(), axis_index_map=axis_index_map)
 
+    # `line_no` is source provenance, not an emittable G-code word: rewriting
+    # the program renumbers lines (blank/comment lines collapse), so it does
+    # not survive a round-trip. Compare the reconstructable columns only.
+    df_expected = df_expected.drop("line_no")
+    df = df.drop("line_no")
     assert_frame_equal(df_expected, df, atol=1e-3)

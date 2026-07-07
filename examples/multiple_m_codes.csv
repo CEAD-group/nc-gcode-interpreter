@@ -1,9 +1,9 @@
-gg01_motion,X,M,comment
-G1,,,
-G1,1.000,M101,;one m code
-G1,2.000,M102,;one m code
-G1,3.000,M103,; five m codes
-G1,3.000,M2,; five m codes
-G1,3.000,M3,; five m codes
-G1,3.000,M4,; five m codes
-G1,3.000,M5,; five m codes
+line_no,gg01_motion,X,M,comment
+1,G1,,,
+2,G1,1.000,M101,;one m code
+3,G1,2.000,M102,;one m code
+4,G1,3.000,M103,; five m codes
+4,G1,3.000,M2,; five m codes
+4,G1,3.000,M3,; five m codes
+4,G1,3.000,M4,; five m codes
+4,G1,3.000,M5,; five m codes

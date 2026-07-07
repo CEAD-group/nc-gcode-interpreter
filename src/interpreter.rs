@@ -522,8 +522,41 @@ mod tests {
             .unwrap_or_else(|| panic!("column {name} missing; have {:?}", column_names(table)))
     }
 
+    fn ints<'a>(table: &'a Table, name: &str) -> &'a [Option<i64>] {
+        table
+            .columns
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, c)| match c {
+                Column::Int(v) => v.as_slice(),
+                other => panic!("column {name} is not an int column: {other:?}"),
+            })
+            .unwrap_or_else(|| panic!("column {name} missing; have {:?}", column_names(table)))
+    }
+
     fn column_names(table: &Table) -> Vec<&str> {
         table.columns.iter().map(|(n, _)| n.as_str()).collect()
+    }
+
+    /// The batch/table path carries a leading `line_no` column: one 1-based
+    /// source line per output row, repeated under a loop and non-monotonic
+    /// across a jump - matching what the streaming `nc_to_rows` yields.
+    #[test]
+    fn line_no_column_tracks_source_lines() {
+        // Straight-line program: line_no is 1-based and leads the columns.
+        let table = interpret("G1 X0 Y0 F100\nX10\nX20\n");
+        assert_eq!(column_names(&table).first(), Some(&"line_no"));
+        assert_eq!(ints(&table, "line_no"), &[Some(1), Some(2), Some(3)]);
+
+        // WHILE loop: the body (line 3) repeats; line 4 assigns a plain
+        // variable and emits no output row; line 6 follows the loop.
+        let table = interpret("R1=0\nWHILE R1<2\nX=R1\nR1=R1+1\nENDWHILE\nX9\n");
+        assert_eq!(ints(&table, "line_no"), &[Some(3), Some(3), Some(6)]);
+
+        // GOTO reorders execution: only the source lines that ran appear, in
+        // execution order (line 1, then the jump target line 4).
+        let table = interpret("N10 X1\nGOTOF 40\nN30 X999\nN40 X4\n");
+        assert_eq!(ints(&table, "line_no"), &[Some(1), Some(4)]);
     }
 
     /// $AA_IW[<axis>] / $AA_IM[<axis>] read the interpreted actual position

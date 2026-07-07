@@ -1,6 +1,6 @@
-N,X,M,comment
-,,,; Program branch (CASE ... OF ... DEFAULT ...)
-30,,,
-40,1.000,,
-45,1.000,,
-70,1.000,M30,
+line_no,N,X,M,comment
+1,,,,; Program branch (CASE ... OF ... DEFAULT ...)
+5,30,,,
+6,40,1.000,,
+7,45,1.000,,
+11,70,1.000,M30,

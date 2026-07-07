@@ -1,3 +1,3 @@
-gg01_motion,X,non_returning_function_call
-,,SETAL(12345)
-G1,1.000,
+line_no,gg01_motion,X,non_returning_function_call
+1,,,SETAL(12345)
+2,G1,1.000,

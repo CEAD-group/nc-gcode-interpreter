@@ -76,22 +76,26 @@ $ cargo run -- Example.MPF
 ```
 
 ```csv
-X			,Y			,Z			,F			,M	 ,gg01_motion	,comment
-			,			,			,			,	 ,			    ,;size of the square
-			,			,			,			,	 ,			    ,;size of the square
-			,			,			,			,	 ,			    ,; move up all z coordinates by 0.5
-			,			,			,1000.000	,	 ,G1			,; Set feed rate in millimeters per minute
-0.000		,500.000	,0.500		,1000.000	,	 ,G1			,; move to the starting point
-100.000		,500.000	,0.500		,1000.000	,	 ,G1			,
-100.000		,600.000	,0.500		,1000.000	,	 ,G1			,
-0.000		,600.000	,0.500		,1000.000	,	 ,G1			,
-0.000		,500.000	,5.000		,1000.000	,	 ,G1			,
-100.000		,500.000	,5.000		,1000.000	,	 ,G1			,
-100.000		,600.000	,5.000		,1000.000	,	 ,G1			,
-0.000		,600.000	,5.000		,1000.000	,	 ,G1			,
-0.000		,500.000	,9.500		,1000.000	,	 ,G1			,
-0.000		,500.000	,9.500		,1000.000	,M31 ,G1			,; end of program
+line_no,gg01_motion,X,Y,Z,F,M,comment
+1,,,,,,,;size of the square
+2,,,,,,,;size of the square
+3,,,,,,,; move up all z coordinates by 0.5
+5,G1,,,,1000.000,,; Set feed rate in millimeters per minute
+6,G1,0.000,500.000,0.500,1000.000,,; move to the starting point
+7,G1,100.000,500.000,0.500,1000.000,,
+8,G1,100.000,600.000,0.500,1000.000,,
+9,G1,0.000,600.000,0.500,1000.000,,
+10,G1,0.000,500.000,5.000,1000.000,,
+11,G1,100.000,500.000,5.000,1000.000,,
+12,G1,100.000,600.000,5.000,1000.000,,
+13,G1,0.000,600.000,5.000,1000.000,,
+14,G1,0.000,500.000,9.500,1000.000,,
+15,G1,0.000,500.000,9.500,1000.000,M31,; end of program
 ```
+
+The leading `line_no` column is the 1-based source line each output row came from
+(loops repeat it, jumps make it non-monotonic); it mirrors the `line_no` the
+streaming `nc_to_rows` yields.
 
 
 ### python example
@@ -109,24 +113,26 @@ from nc_gcode_interpreter import nc_to_dataframe; \
 from pathlib import Path; \
 df, state = nc_to_dataframe(Path('Example.MPF').open()); \
 print(df)"
-shape: (14, 7)
-┌───────┬───────┬──────┬────────┬───────────┬─────────────┬─────────────────────────────────┐
-│ X     ┆ Y     ┆ Z    ┆ F      ┆ M         ┆ gg01_motion ┆ comment                         │
-│ ---   ┆ ---   ┆ ---  ┆ ---    ┆ ---       ┆ ---         ┆ ---                             │
-│ f64   ┆ f64   ┆ f64  ┆ f64    ┆ list[str] ┆ str         ┆ str                             │
-╞═══════╪═══════╪══════╪════════╪═══════════╪═════════════╪═════════════════════════════════╡
-│ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ null        ┆ ;size of the square             │
-│ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ null        ┆ ;size of the square             │
-│ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ null        ┆ ; move up all z coordinates by… │
-│ null  ┆ null  ┆ null ┆ 1000.0 ┆ null      ┆ G1          ┆ ; Set feed rate in millimeters… │
-│ 0.0   ┆ 500.0 ┆ 0.5  ┆ 1000.0 ┆ null      ┆ G1          ┆ ; move to the starting point    │
-│ …     ┆ …     ┆ …    ┆ …      ┆ …         ┆ …           ┆ …                               │
-│ 100.0 ┆ 500.0 ┆ 5.0  ┆ 1000.0 ┆ null      ┆ G1          ┆ null                            │
-│ 100.0 ┆ 600.0 ┆ 5.0  ┆ 1000.0 ┆ null      ┆ G1          ┆ null                            │
-│ 0.0   ┆ 600.0 ┆ 5.0  ┆ 1000.0 ┆ null      ┆ G1          ┆ null                            │
-│ 0.0   ┆ 500.0 ┆ 9.5  ┆ 1000.0 ┆ null      ┆ G1          ┆ null                            │
-│ 0.0   ┆ 500.0 ┆ 9.5  ┆ 1000.0 ┆ ["M31"]   ┆ G1          ┆ ; end of program                │
-└───────┴───────┴──────┴────────┴───────────┴─────────────┴─────────────────────────────────┘
+shape: (14, 8)
+┌─────────┬─────────────┬───────┬───────┬──────┬────────┬───────────┬──────────────────────────────┐
+│ line_no ┆ gg01_motion ┆ X     ┆ Y     ┆ Z    ┆ F      ┆ M         ┆ comment                      │
+│ ---     ┆ ---         ┆ ---   ┆ ---   ┆ ---  ┆ ---    ┆ ---       ┆ ---                          │
+│ i64     ┆ str         ┆ f64   ┆ f64   ┆ f64  ┆ f64    ┆ list[str] ┆ str                          │
+╞═════════╪═════════════╪═══════╪═══════╪══════╪════════╪═══════════╪══════════════════════════════╡
+│ 1       ┆ null        ┆ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ ;size of the square          │
+│ 2       ┆ null        ┆ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ ;size of the square          │
+│ 3       ┆ null        ┆ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ ; move up all z coordinates  │
+│         ┆             ┆       ┆       ┆      ┆        ┆           ┆ by…                          │
+│ 5       ┆ G1          ┆ null  ┆ null  ┆ null ┆ 1000.0 ┆ null      ┆ ; Set feed rate in           │
+│         ┆             ┆       ┆       ┆      ┆        ┆           ┆ millimeters…                 │
+│ 6       ┆ G1          ┆ 0.0   ┆ 500.0 ┆ 0.5  ┆ 1000.0 ┆ null      ┆ ; move to the starting point │
+│ …       ┆ …           ┆ …     ┆ …     ┆ …    ┆ …      ┆ …         ┆ …                            │
+│ 11      ┆ G1          ┆ 100.0 ┆ 500.0 ┆ 5.0  ┆ 1000.0 ┆ null      ┆ null                         │
+│ 12      ┆ G1          ┆ 100.0 ┆ 600.0 ┆ 5.0  ┆ 1000.0 ┆ null      ┆ null                         │
+│ 13      ┆ G1          ┆ 0.0   ┆ 600.0 ┆ 5.0  ┆ 1000.0 ┆ null      ┆ null                         │
+│ 14      ┆ G1          ┆ 0.0   ┆ 500.0 ┆ 9.5  ┆ 1000.0 ┆ null      ┆ null                         │
+│ 15      ┆ G1          ┆ 0.0   ┆ 500.0 ┆ 9.5  ┆ 1000.0 ┆ ["M31"]   ┆ ; end of program             │
+└─────────┴─────────────┴───────┴───────┴──────┴────────┴───────────┴──────────────────────────────┘
 ```
 
 The Python bindings also return the state of the program after execution, which can be used for inspection.

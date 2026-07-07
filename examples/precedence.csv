@@ -1,13 +1,13 @@
-X,comment
-,"; Operator priority per the NC programming manual (""Priority of the"
-,"; operations""): *, /, DIV, MOD before +, -; equal priority left to right;"
-,; parentheses override.
-14.000,;= 14
-4.000,;= 4
-7.000,;= 7
-3.000,;= 3
-4.000,;= 4
-20.000,;= 20
-1.000,;= 1
--6.000,;= -6
-85.000,;= 85
+line_no,X,comment
+1,,"; Operator priority per the NC programming manual (""Priority of the"
+2,,"; operations""): *, /, DIV, MOD before +, -; equal priority left to right;"
+3,,; parentheses override.
+4,14.000,;= 14
+5,4.000,;= 4
+6,7.000,;= 7
+7,3.000,;= 3
+8,4.000,;= 4
+9,20.000,;= 20
+10,1.000,;= 1
+11,-6.000,;= -6
+12,85.000,;= 85

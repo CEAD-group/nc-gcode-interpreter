@@ -17,8 +17,11 @@ def assert_stream_matches_batch(program, **kwargs):
     rows = list(iterator)
 
     assert len(rows) == df.height
+    # The batch DataFrame carries a leading `line_no` column; the streaming
+    # path exposes the same value as the tuple's first element. Fold it back in
+    # so the two agree column-for-column (and line_no parity is pinned).
     streamed = pl.DataFrame(
-        [row for _line, row in rows],
+        [{"line_no": line, **row} for line, row in rows],
         schema={name: df.schema[name] for name in df.columns},
     )
     assert_frame_equal(df, streamed, check_column_order=False)

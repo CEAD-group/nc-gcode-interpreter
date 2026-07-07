@@ -1,14 +1,14 @@
-gg01_motion,X,Y,Z,F,I,J,K,CR,M,comment
-,,,,,,,,,,; Circular interpolation with I/J/K arc-centre offsets and the CR= radius form.
-,,,,,,,,,,"; I, J, K (arc-centre offsets, relative to the start point) and CR (arc radius)"
-,,,,,,,,,,"; are interpolation parameters: per-block values emitted like axes, but not"
-,,,,,,,,,,; axes (no TRANS offset) and not forward-filled - each belongs only to the
-,,,,,,,,,,"; arc block that programs it, so a following linear move has empty I/J/K/CR."
-G1,0.000,0.000,0.000,1000.000,,,,,,
-G2,100.000,0.000,0.000,1000.000,50.000,0.000,,,,
-G1,100.000,50.000,0.000,1000.000,,,,,,
-G3,0.000,50.000,0.000,1000.000,-50.000,0.000,,,,
-G2,0.000,0.000,10.000,1000.000,0.000,-25.000,5.000,,,
-G1,60.000,60.000,10.000,1000.000,,,,,,
-G2,100.000,60.000,10.000,1000.000,,,,20.000,,
-G2,100.000,60.000,10.000,1000.000,,,,,M30,
+line_no,gg01_motion,X,Y,Z,F,I,J,K,CR,M,comment
+1,,,,,,,,,,,; Circular interpolation with I/J/K arc-centre offsets and the CR= radius form.
+2,,,,,,,,,,,"; I, J, K (arc-centre offsets, relative to the start point) and CR (arc radius)"
+3,,,,,,,,,,,"; are interpolation parameters: per-block values emitted like axes, but not"
+4,,,,,,,,,,,; axes (no TRANS offset) and not forward-filled - each belongs only to the
+5,,,,,,,,,,,"; arc block that programs it, so a following linear move has empty I/J/K/CR."
+7,G1,0.000,0.000,0.000,1000.000,,,,,,
+8,G2,100.000,0.000,0.000,1000.000,50.000,0.000,,,,
+9,G1,100.000,50.000,0.000,1000.000,,,,,,
+10,G3,0.000,50.000,0.000,1000.000,-50.000,0.000,,,,
+11,G2,0.000,0.000,10.000,1000.000,0.000,-25.000,5.000,,,
+12,G1,60.000,60.000,10.000,1000.000,,,,,,
+13,G2,100.000,60.000,10.000,1000.000,,,,20.000,,
+14,G2,100.000,60.000,10.000,1000.000,,,,,M30,

@@ -1,19 +1,19 @@
-gg01_motion,gg19_curve_start_spline,gg20_curve_end_spline,X,Y,F,PW,SD,M,comment
-,,,,,,,,,"; Spline interpolation: ASPLINE / BSPLINE / CSPLINE with PW, SD, PL"
-,,,,,,,,,"; PW (point weight), SD (spline degree) and PL (parameter interval length)"
-,,,,,,,,,; are block addresses: they appear in the output but are not axes
-,,,,,,,,,; (no TRANS offset) and are not forward-filled (a point weight belongs
-,,,,,,,,,; to the point it is programmed with).
-G1,,,0.000,0.000,1000.000,,,,
-G1,,,0.000,0.000,1000.000,,,,"; B spline of degree 2, control points with individual weights"
-BSPLINE,,,0.000,0.000,1000.000,,2.000,,
-BSPLINE,,,10.000,20.000,1000.000,2.000,,,
-BSPLINE,,,30.000,40.000,1000.000,,,,
-BSPLINE,,,50.000,10.000,1000.000,0.500,,,
-BSPLINE,,,60.000,20.000,1000.000,,,,
-BSPLINE,,,60.000,20.000,1000.000,,,,; Akima spline with natural start and tangential end condition
-ASPLINE,BNAT,ETAN,60.000,20.000,1000.000,,,,
-ASPLINE,BNAT,ETAN,70.000,30.000,1000.000,,,,
-ASPLINE,BNAT,ETAN,80.000,0.000,1000.000,,,,
-G1,BNAT,ETAN,90.000,0.000,1000.000,,,,
-G1,BNAT,ETAN,90.000,0.000,1000.000,,,M30,
+line_no,gg01_motion,gg19_curve_start_spline,gg20_curve_end_spline,X,Y,F,PW,SD,M,comment
+1,,,,,,,,,,"; Spline interpolation: ASPLINE / BSPLINE / CSPLINE with PW, SD, PL"
+2,,,,,,,,,,"; PW (point weight), SD (spline degree) and PL (parameter interval length)"
+3,,,,,,,,,,; are block addresses: they appear in the output but are not axes
+4,,,,,,,,,,; (no TRANS offset) and are not forward-filled (a point weight belongs
+5,,,,,,,,,,; to the point it is programmed with).
+7,G1,,,0.000,0.000,1000.000,,,,
+9,G1,,,0.000,0.000,1000.000,,,,"; B spline of degree 2, control points with individual weights"
+10,BSPLINE,,,0.000,0.000,1000.000,,2.000,,
+11,BSPLINE,,,10.000,20.000,1000.000,2.000,,,
+12,BSPLINE,,,30.000,40.000,1000.000,,,,
+13,BSPLINE,,,50.000,10.000,1000.000,0.500,,,
+14,BSPLINE,,,60.000,20.000,1000.000,,,,
+16,BSPLINE,,,60.000,20.000,1000.000,,,,; Akima spline with natural start and tangential end condition
+17,ASPLINE,BNAT,ETAN,60.000,20.000,1000.000,,,,
+18,ASPLINE,BNAT,ETAN,70.000,30.000,1000.000,,,,
+19,ASPLINE,BNAT,ETAN,80.000,0.000,1000.000,,,,
+21,G1,BNAT,ETAN,90.000,0.000,1000.000,,,,
+22,G1,BNAT,ETAN,90.000,0.000,1000.000,,,M30,

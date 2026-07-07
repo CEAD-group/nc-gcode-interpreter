@@ -1,10 +1,10 @@
-gg01_motion,X,Y,Z,F,M,comment
-,,,,,,"; Variable identifiers are case-insensitive (manual 3.3.2: ""No distinction"
-,,,,,,"; is made between uppercase and lowercase characters""): lAYER_HEIGHT,"
-,,,,,,; LAYER_HEIGHT and layer_height are all the same variable. Seen in a real
-,,,,,,; program that declares a typo'd name but assigns the intended one.
-G1,0.000,0.000,0.000,1000.000,,
-G1,0.000,0.000,2.500,1000.000,,
-G1,0.000,0.000,5.000,1000.000,,
-G1,10.000,0.000,5.000,1000.000,,
-G1,10.000,0.000,5.000,1000.000,M30,
+line_no,gg01_motion,X,Y,Z,F,M,comment
+1,,,,,,,"; Variable identifiers are case-insensitive (manual 3.3.2: ""No distinction"
+2,,,,,,,"; is made between uppercase and lowercase characters""): lAYER_HEIGHT,"
+3,,,,,,,; LAYER_HEIGHT and layer_height are all the same variable. Seen in a real
+4,,,,,,,; program that declares a typo'd name but assigns the intended one.
+8,G1,0.000,0.000,0.000,1000.000,,
+9,G1,0.000,0.000,2.500,1000.000,,
+10,G1,0.000,0.000,5.000,1000.000,,
+12,G1,10.000,0.000,5.000,1000.000,,
+13,G1,10.000,0.000,5.000,1000.000,M30,

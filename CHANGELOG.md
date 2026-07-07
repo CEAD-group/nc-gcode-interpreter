@@ -21,6 +21,13 @@ released to PyPI.
 
 ### Added
 
+- `line_no` output column (leading, `Int64`, never forward-filled): the
+  1-based source line each output row came from, on the batch/dataframe path
+  (`nc_to_dataframe` / `nc_to_batches`) - previously only the streaming
+  `nc_to_rows` exposed it. Loops repeat it and jumps make it non-monotonic,
+  matching `nc_to_rows` row-for-row; flatten-generated samples keep the
+  originating block's line number. `dataframe_to_nc` ignores it (source
+  provenance, not an emittable word).
 - `dwell` output column: F/S on a `G4` block is the dwell time (seconds /
   spindle revolutions), a per-block parameter - it now lands in its own
   never-forward-filled `dwell` column instead of polluting the modal F/S

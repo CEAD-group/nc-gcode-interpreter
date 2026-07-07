@@ -245,6 +245,11 @@ def sanitize_dataframe(
     pl.DataFrame
         The sanitized DataFrame ready for analysis or conversion back to G-code.
     """
+    # `line_no` is source-provenance metadata, not an emittable G-code word;
+    # drop it up front so it never gets cast/forward-filled or written back out.
+    if "line_no" in df.columns:
+        df = df.drop("line_no")
+
     modal = [g["short_name"] for g in GGroups.g_groups if g["effectiveness"] == "modal"]
     non_modal = [g["short_name"] for g in GGroups.g_groups if g["effectiveness"] != "modal"]
     known_axes = [

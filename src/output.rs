@@ -516,6 +516,13 @@ fn rekey_g4_dwell(row: &mut Row) {
 /// block addresses: never forward-filled.
 pub const FLATTENED_COLUMN: &str = "flattened";
 
+/// Leading column carrying each output row's 1-based source line number (the
+/// `Row::line_no` the streaming path yields). One value per row, never
+/// forward-filled and never null; loops and jumps produce repeated /
+/// non-monotonic values, exactly matching `nc_to_rows`. Not a cell key, so it
+/// sits outside `canonical_order` and is prepended to every batch.
+pub const LINE_NO_COLUMN: &str = "line_no";
+
 /// Canonical output-column order over the set of columns present so far:
 /// N, modal then non-modal G-group columns, the fixed axis columns, any
 /// remaining value columns (e.g. user extra axes) in alphabetical order, the
@@ -601,9 +608,10 @@ impl BatchBuilder {
     pub fn build_batch(&mut self, rows: &[Row]) -> Table {
         // Skip rows that carry no output values (blocks that only affected
         // internal state, e.g. definitions - their variable_changes are a
-        // streaming-only concern).
-        let cells: Vec<&CellMap> =
-            rows.iter().map(|r| &r.cells).filter(|r| !r.is_empty()).collect();
+        // streaming-only concern). Keep the whole `Row` so the source line
+        // number survives alongside the cells.
+        let kept: Vec<&Row> = rows.iter().filter(|r| !r.cells.is_empty()).collect();
+        let cells: Vec<&CellMap> = kept.iter().map(|r| &r.cells).collect();
 
         // Union of every column seen so far with those present in this batch.
         let mut present: HashSet<&'static str> = self.columns.iter().copied().collect();
@@ -632,7 +640,12 @@ impl BatchBuilder {
             }
         }
 
-        let mut columns: Vec<(String, Column)> = Vec::with_capacity(self.columns.len());
+        // The source line number leads every batch: one value per kept row,
+        // never null, never forward-filled. It is not a cell key, so it stays
+        // out of `self.columns` / `canonical_order` and is simply prepended.
+        let line_no_column = Column::Int(kept.iter().map(|r| Some(r.line_no as i64)).collect());
+        let mut columns: Vec<(String, Column)> = Vec::with_capacity(self.columns.len() + 1);
+        columns.push((LINE_NO_COLUMN.to_string(), line_no_column));
         for (&name, builder) in self.columns.iter().zip(builders) {
             let mut column = builder.into_column();
             // Block addresses (spline PW/SD/PL) are never forward-filled: a
