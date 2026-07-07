@@ -6,27 +6,40 @@
 /// is not a known G command.
 pub fn classify_g_command(word: &str) -> Option<(&'static str, bool)> {
     Some(match word {
-        "G0" | "G1" | "G2" | "G3" | "CIP" | "ASPLINE" | "BSPLINE" | "CSPLINE" | "POLY" | "G33" | "G331" | "G332" | "OEMIPO1" | "OEMIPO2" | "CT" | "G34" | "G35" | "INVCW" | "INVCCW" | "G335" | "G336" => ("gg01_motion", true),
-        "G4" | "G63" | "G74" | "G75" | "REPOSL" | "REPOSQ" | "REPOSH" | "REPOSA" | "REPOSQA" | "REPOSHA" | "G147" | "G247" | "G347" | "G148" | "G248" | "G348" | "G5" | "G7" => ("gg02_wait", false),
-        "TRANS" | "ROT" | "SCALE" | "MIRROR" | "ATRANS" | "AROT" | "ASCALE" | "AMIRROR" | "G25" | "G26" | "G110" | "G111" | "G112" | "G58" | "G59" | "ROTS" | "AROTS" => ("gg03_frame_area_limit", false),
+        "G0" | "G1" | "G2" | "G3" | "CIP" | "ASPLINE" | "BSPLINE" | "CSPLINE" | "POLY" | "G33" | "G331" | "G332"
+        | "OEMIPO1" | "OEMIPO2" | "CT" | "G34" | "G35" | "INVCW" | "INVCCW" | "G335" | "G336" => ("gg01_motion", true),
+        "G4" | "G63" | "G74" | "G75" | "REPOSL" | "REPOSQ" | "REPOSH" | "REPOSA" | "REPOSQA" | "REPOSHA" | "G147"
+        | "G247" | "G347" | "G148" | "G248" | "G348" | "G5" | "G7" => ("gg02_wait", false),
+        "TRANS" | "ROT" | "SCALE" | "MIRROR" | "ATRANS" | "AROT" | "ASCALE" | "AMIRROR" | "G25" | "G26" | "G110"
+        | "G111" | "G112" | "G58" | "G59" | "ROTS" | "AROTS" => ("gg03_frame_area_limit", false),
         "STARTFIFO" | "STOPFIFO" | "FIFOCTRL" => ("gg04_fifo", true),
         "G17" | "G18" | "G19" => ("gg06_plane_select", true),
         "G40" | "G41" | "G42" => ("gg07_tool_radius", true),
-        "G500" | "G54" | "G55" | "G56" | "G57" | "G505" | "G506" | "G507" | "G508" | "G509" | "G510" | "G511" | "G512" | "G513" | "G514" | "G515" | "G516" | "G517" | "G518" | "G519" | "G520" | "G521" | "G522" | "G523" | "G524" | "G525" | "G526" | "G527" | "G528" | "G529" | "G530" | "G531" | "G532" | "G533" | "G534" | "G535" | "G536" | "G537" | "G538" | "G539" | "G540" | "G541" | "G542" | "G543" | "G544" | "G545" | "G546" | "G547" | "G548" | "G549" | "G550" | "G551" | "G552" | "G553" | "G554" | "G555" | "G556" | "G557" | "G558" | "G559" | "G560" | "G561" | "G562" | "G563" | "G564" | "G565" | "G566" | "G567" | "G568" | "G569" | "G570" | "G571" | "G572" | "G573" | "G574" | "G575" | "G576" | "G577" | "G578" | "G579" | "G580" | "G581" | "G582" | "G583" | "G584" | "G585" | "G586" | "G587" | "G588" | "G589" | "G590" | "G591" | "G592" | "G593" | "G594" | "G595" | "G596" | "G597" | "G598" | "G599" => ("gg08_work_offset", true),
+        "G500" | "G54" | "G55" | "G56" | "G57" | "G505" | "G506" | "G507" | "G508" | "G509" | "G510" | "G511"
+        | "G512" | "G513" | "G514" | "G515" | "G516" | "G517" | "G518" | "G519" | "G520" | "G521" | "G522" | "G523"
+        | "G524" | "G525" | "G526" | "G527" | "G528" | "G529" | "G530" | "G531" | "G532" | "G533" | "G534" | "G535"
+        | "G536" | "G537" | "G538" | "G539" | "G540" | "G541" | "G542" | "G543" | "G544" | "G545" | "G546" | "G547"
+        | "G548" | "G549" | "G550" | "G551" | "G552" | "G553" | "G554" | "G555" | "G556" | "G557" | "G558" | "G559"
+        | "G560" | "G561" | "G562" | "G563" | "G564" | "G565" | "G566" | "G567" | "G568" | "G569" | "G570" | "G571"
+        | "G572" | "G573" | "G574" | "G575" | "G576" | "G577" | "G578" | "G579" | "G580" | "G581" | "G582" | "G583"
+        | "G584" | "G585" | "G586" | "G587" | "G588" | "G589" | "G590" | "G591" | "G592" | "G593" | "G594" | "G595"
+        | "G596" | "G597" | "G598" | "G599" => ("gg08_work_offset", true),
         "G53" | "SUPA" | "G153" | "SUPD" => ("gg09_frame_tool_suppress", false),
         "G60" | "G64" | "G641" | "G642" | "G643" | "G644" | "G645" => ("gg10_exact_stop_mode", true),
         "G9" => ("gg11_exact_stop_non_modal", false),
         "G601" | "G602" | "G603" => ("gg12_block_change_g60_g9", true),
         "G70" | "G71" | "G700" | "G710" => ("gg13_wp_measure", true),
         "G90" | "G91" => ("gg14_wp_measure_mode", true),
-        "G93" | "G94" | "G95" | "G96" | "G97" | "G931" | "G961" | "G971" | "G942" | "G952" | "G962" | "G972" | "G973" => ("gg15_feed_type", true),
+        "G93" | "G94" | "G95" | "G96" | "G97" | "G931" | "G961" | "G971" | "G942" | "G952" | "G962" | "G972"
+        | "G973" => ("gg15_feed_type", true),
         "CFC" | "CFTCP" | "CFIN" => ("gg16_feedrate_override", true),
         "NORM" | "KONT" | "KONTT" | "KONTC" => ("gg17_approach_retract_tool", true),
         "G450" | "G451" => ("gg18_corner_behavior", true),
         "BNAT" | "BTAN" | "BAUTO" => ("gg19_curve_start_spline", true),
         "ENAT" | "ETAN" | "EAUTO" => ("gg20_curve_end_spline", true),
         "BRISK" | "SOFT" | "DRIVE" => ("gg21_accel_profile", true),
-        "CUT2D" | "CUT2DF" | "CUT3DC" | "CUT3DF" | "CUT3DFS" | "CUT3DFF" | "CUT3DCC" | "CUT3DCCD" | "CUT2DD" | "CUT2DFD" | "CUT3DCD" | "CUT3DFD" => ("gg22_tool_offset_type", true),
+        "CUT2D" | "CUT2DF" | "CUT3DC" | "CUT3DF" | "CUT3DFS" | "CUT3DFF" | "CUT3DCC" | "CUT3DCCD" | "CUT2DD"
+        | "CUT2DFD" | "CUT3DCD" | "CUT3DFD" => ("gg22_tool_offset_type", true),
         "CDOF" | "CDON" | "CDOF2" => ("gg23_collision_monitor", true),
         "FFWOF" | "FFWON" => ("gg24_precontrol", true),
         "ORIWKS" | "ORIMKS" => ("gg25_tool_orient_ref", true),
@@ -54,18 +67,36 @@ pub fn classify_g_command(word: &str) -> Option<(&'static str, bool)> {
         "G460" | "G461" | "G462" => ("gg48_approach_retract_trc", true),
         "CP" | "PTP" | "PTPG0" | "PTPWOC" => ("gg49_ptp_motion", true),
         "ORIEULER" | "ORIRPY" | "ORIVIRT1" | "ORIVIRT2" | "ORIAXPOS" | "ORIRPY2" => ("gg50_orient_prog", true),
-        "ORIVECT" | "ORIAXES" | "ORIPATH" | "ORIPLANE" | "ORICONCW" | "ORICONCCW" | "ORICONIO" | "ORICONTO" | "ORICURVE" | "ORIPATHS" => ("gg51_interp_type_orient", true),
+        "ORIVECT" | "ORIAXES" | "ORIPATH" | "ORIPLANE" | "ORICONCW" | "ORICONCCW" | "ORICONIO" | "ORICONTO"
+        | "ORICURVE" | "ORIPATHS" => ("gg51_interp_type_orient", true),
         "PAROTOF" | "PAROT" => ("gg52_frame_rot_wp", true),
         "TOWSTD" | "TOWMCS" | "TOWWCS" | "TOWBCS" | "TOWTCS" | "TOWKCS" => ("gg53_tool_wear", true),
         "ORIROTA" | "ORIROTR" | "ORIROTT" | "ORIROTC" => ("gg54_vector_rot_poly", true),
         "RTLION" | "RTLIOF" => ("gg55_rapid_traverse", true),
-        "TOROTOF" | "TOROT" | "TOROTZ" | "TOROTY" | "TOROTX" | "TOFRAME" | "TOFRAMEZ" | "TOFRAMEY" | "TOFRAMEX" => ("gg56_frame_rot_tool", true),
+        "TOROTOF" | "TOROT" | "TOROTZ" | "TOROTY" | "TOROTX" | "TOFRAME" | "TOFRAMEZ" | "TOFRAMEY" | "TOFRAMEX" => {
+            ("gg56_frame_rot_tool", true)
+        }
         "FENDNORM" | "G62" | "G621" => ("gg57_corner_decel", true),
         "DYNNORM" | "DYNPOS" | "DYNROUGH" | "DYNSEMIFIN" | "DYNFINISH" | "DYNPREC" => ("gg58_dyn_resp_path", true),
-        "WALCS0" | "WALCS1" | "WALCS2" | "WALCS3" | "WALCS4" | "WALCS5" | "WALCS6" | "WALCS7" | "WALCS8" | "WALCS9" | "WALCS10" => ("gg59_area_limit", true),
+        "WALCS0" | "WALCS1" | "WALCS2" | "WALCS3" | "WALCS4" | "WALCS5" | "WALCS6" | "WALCS7" | "WALCS8" | "WALCS9"
+        | "WALCS10" => ("gg59_area_limit", true),
         "ORISOF" | "ORISON" => ("gg61_tool_orient_smooth", true),
         "RMBBL" | "RMIBL" | "RMEBL" | "RMNBL" => ("gg62_repos_non_modal", false),
-        "GFRAME[0]" | "GFRAME[1]" | "GFRAME[2]" | "GFRAME[3]" | "GFRAME[4]" | "GFRAME[5]" | "GFRAME[6]" | "GFRAME[7]" | "GFRAME[8]" | "GFRAME[9]" | "GFRAME[10]" | "GFRAME[11]" | "GFRAME[12]" | "GFRAME[13]" | "GFRAME[14]" | "GFRAME[15]" | "GFRAME[16]" | "GFRAME[17]" | "GFRAME[18]" | "GFRAME[19]" | "GFRAME[20]" | "GFRAME[21]" | "GFRAME[22]" | "GFRAME[23]" | "GFRAME[24]" | "GFRAME[25]" | "GFRAME[26]" | "GFRAME[27]" | "GFRAME[28]" | "GFRAME[29]" | "GFRAME[30]" | "GFRAME[31]" | "GFRAME[32]" | "GFRAME[33]" | "GFRAME[34]" | "GFRAME[35]" | "GFRAME[36]" | "GFRAME[37]" | "GFRAME[38]" | "GFRAME[39]" | "GFRAME[40]" | "GFRAME[41]" | "GFRAME[42]" | "GFRAME[43]" | "GFRAME[44]" | "GFRAME[45]" | "GFRAME[46]" | "GFRAME[47]" | "GFRAME[48]" | "GFRAME[49]" | "GFRAME[50]" | "GFRAME[51]" | "GFRAME[52]" | "GFRAME[53]" | "GFRAME[54]" | "GFRAME[55]" | "GFRAME[56]" | "GFRAME[57]" | "GFRAME[58]" | "GFRAME[59]" | "GFRAME[60]" | "GFRAME[61]" | "GFRAME[62]" | "GFRAME[63]" | "GFRAME[64]" | "GFRAME[65]" | "GFRAME[66]" | "GFRAME[67]" | "GFRAME[68]" | "GFRAME[69]" | "GFRAME[70]" | "GFRAME[71]" | "GFRAME[72]" | "GFRAME[73]" | "GFRAME[74]" | "GFRAME[75]" | "GFRAME[76]" | "GFRAME[77]" | "GFRAME[78]" | "GFRAME[79]" | "GFRAME[80]" | "GFRAME[81]" | "GFRAME[82]" | "GFRAME[83]" | "GFRAME[84]" | "GFRAME[85]" | "GFRAME[86]" | "GFRAME[87]" | "GFRAME[88]" | "GFRAME[89]" | "GFRAME[90]" | "GFRAME[91]" | "GFRAME[92]" | "GFRAME[93]" | "GFRAME[94]" | "GFRAME[95]" | "GFRAME[96]" | "GFRAME[97]" | "GFRAME[98]" | "GFRAME[99]" | "GFRAME[100]" => ("gg64_grinding_frames", true),
+        "GFRAME[0]" | "GFRAME[1]" | "GFRAME[2]" | "GFRAME[3]" | "GFRAME[4]" | "GFRAME[5]" | "GFRAME[6]"
+        | "GFRAME[7]" | "GFRAME[8]" | "GFRAME[9]" | "GFRAME[10]" | "GFRAME[11]" | "GFRAME[12]" | "GFRAME[13]"
+        | "GFRAME[14]" | "GFRAME[15]" | "GFRAME[16]" | "GFRAME[17]" | "GFRAME[18]" | "GFRAME[19]" | "GFRAME[20]"
+        | "GFRAME[21]" | "GFRAME[22]" | "GFRAME[23]" | "GFRAME[24]" | "GFRAME[25]" | "GFRAME[26]" | "GFRAME[27]"
+        | "GFRAME[28]" | "GFRAME[29]" | "GFRAME[30]" | "GFRAME[31]" | "GFRAME[32]" | "GFRAME[33]" | "GFRAME[34]"
+        | "GFRAME[35]" | "GFRAME[36]" | "GFRAME[37]" | "GFRAME[38]" | "GFRAME[39]" | "GFRAME[40]" | "GFRAME[41]"
+        | "GFRAME[42]" | "GFRAME[43]" | "GFRAME[44]" | "GFRAME[45]" | "GFRAME[46]" | "GFRAME[47]" | "GFRAME[48]"
+        | "GFRAME[49]" | "GFRAME[50]" | "GFRAME[51]" | "GFRAME[52]" | "GFRAME[53]" | "GFRAME[54]" | "GFRAME[55]"
+        | "GFRAME[56]" | "GFRAME[57]" | "GFRAME[58]" | "GFRAME[59]" | "GFRAME[60]" | "GFRAME[61]" | "GFRAME[62]"
+        | "GFRAME[63]" | "GFRAME[64]" | "GFRAME[65]" | "GFRAME[66]" | "GFRAME[67]" | "GFRAME[68]" | "GFRAME[69]"
+        | "GFRAME[70]" | "GFRAME[71]" | "GFRAME[72]" | "GFRAME[73]" | "GFRAME[74]" | "GFRAME[75]" | "GFRAME[76]"
+        | "GFRAME[77]" | "GFRAME[78]" | "GFRAME[79]" | "GFRAME[80]" | "GFRAME[81]" | "GFRAME[82]" | "GFRAME[83]"
+        | "GFRAME[84]" | "GFRAME[85]" | "GFRAME[86]" | "GFRAME[87]" | "GFRAME[88]" | "GFRAME[89]" | "GFRAME[90]"
+        | "GFRAME[91]" | "GFRAME[92]" | "GFRAME[93]" | "GFRAME[94]" | "GFRAME[95]" | "GFRAME[96]" | "GFRAME[97]"
+        | "GFRAME[98]" | "GFRAME[99]" | "GFRAME[100]" => ("gg64_grinding_frames", true),
         _ => return None,
     })
 }

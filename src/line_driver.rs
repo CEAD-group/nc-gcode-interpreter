@@ -22,8 +22,8 @@
 
 use crate::errors::ParsingError;
 use crate::interpret_rules::{
-    canonical_block_number, insert_m_key, interpret_block,
-    is_end_of_program_m_code, resolve_jump, scan_jump_targets, BlockFlow,
+    canonical_block_number, insert_m_key, interpret_block, is_end_of_program_m_code, resolve_jump, scan_jump_targets,
+    BlockFlow,
 };
 use crate::modal_groups::classify_g_command;
 use crate::state::{ColKind, State};
@@ -195,7 +195,12 @@ pub fn interpret_lines(
         let words: usize = chunk_arenas.iter().map(|a| a.len()).sum();
         eprintln!(
             "STAGE1_STATS non_blank={} needs_grammar={} total_lines={} pass1_decode={:.3}s words={} nchunks={}",
-            non_blank, needs_grammar, lines.len(), t_pass1.elapsed().as_secs_f64(), words, chunk_arenas.len()
+            non_blank,
+            needs_grammar,
+            lines.len(),
+            t_pass1.elapsed().as_secs_f64(),
+            words,
+            chunk_arenas.len()
         );
     }
 
@@ -261,7 +266,10 @@ pub fn interpret_lines(
     state.seen_jump_targets.extend(targets.keys().cloned());
     state.jump_scopes.push(targets.keys().cloned().collect());
     if stats {
-        eprintln!("STAGE1_STATS pass2_setup_done={:.3}s (pass1+pass2, before execution)", t_pass1.elapsed().as_secs_f64());
+        eprintln!(
+            "STAGE1_STATS pass2_setup_done={:.3}s (pass1+pass2, before execution)",
+            t_pass1.elapsed().as_secs_f64()
+        );
     }
     let result = run_lines(&execs, &chunk_arenas, &targets, output, state);
     state.jump_scopes.pop();
@@ -276,10 +284,7 @@ pub fn interpret_lines(
 /// Chunks keep source order (rayon's indexed `par_chunks`/`collect`), so the
 /// flattened result stream is byte-for-byte what the sequential decode
 /// produces. The sequential path is just the single-chunk case.
-fn decode_all_lines<'a>(
-    lines: &[&'a str],
-    input_bytes: usize,
-) -> (Vec<Vec<Word<'a>>>, Vec<Vec<DecodeResult<'a>>>) {
+fn decode_all_lines<'a>(lines: &[&'a str], input_bytes: usize) -> (Vec<Vec<Word<'a>>>, Vec<Vec<DecodeResult<'a>>>) {
     if input_bytes < PARALLEL_MIN_BYTES || rayon::current_num_threads() <= 1 {
         let mut arena: Vec<Word> = Vec::new();
         let mut results: Vec<DecodeResult> = Vec::with_capacity(lines.len());
@@ -324,9 +329,7 @@ fn run_lines(
     while index < execs.len() {
         let flow = match &execs[index] {
             LineExec::Blank => BlockFlow::Continue,
-            LineExec::Decoded(line, chunk_idx) => {
-                execute_decoded(line, &chunk_arenas[*chunk_idx], output, state)?
-            }
+            LineExec::Decoded(line, chunk_idx) => execute_decoded(line, &chunk_arenas[*chunk_idx], output, state)?,
             LineExec::Parsed(block) => interpret_block(block.clone(), output, state)?,
         };
         match flow {
@@ -356,7 +359,12 @@ fn run_lines(
 
 /// Execute a decoded trivial line: the exact effects of `interpret_block`
 /// on the same line, without the parse tree.
-fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
+fn execute_decoded(
+    line: &DecodedLine,
+    arena: &[Word],
+    output: &mut Output,
+    state: &mut State,
+) -> Result<BlockFlow, ParsingError> {
     if !line.has_content {
         return Ok(BlockFlow::Continue);
     }
@@ -389,7 +397,12 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                     }
                 }
             }
-            Word::AssignDynamic { key, ident, factor, incremental } => {
+            Word::AssignDynamic {
+                key,
+                ident,
+                factor,
+                incremental,
+            } => {
                 // Evaluate `value(ident) * factor` with the exact lookup and
                 // undefined-variable behavior of interpret_primary.
                 let value = match *ident {
@@ -406,7 +419,10 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                         let ident_value = match state.symbol_table.get(name.as_ref()).copied() {
                             Some(v) => v,
                             None if state.allow_undefined_variables => {
-                                crate::state::emit_warning(format_args!("Warning: Variable '{}' is undefined, initializing to 0.0", name));
+                                crate::state::emit_warning(format_args!(
+                                    "Warning: Variable '{}' is undefined, initializing to 0.0",
+                                    name
+                                ));
                                 state.symbol_table.insert(name.clone().into_owned(), 0.0);
                                 0.0
                             }
@@ -504,13 +520,12 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
     Ok(flow)
 }
 
-fn parse_single_line<'i>(
-    padded: &'i str,
-    line_no: usize,
-    state: &State,
-) -> Result<Pair<'i, Rule>, ParsingError> {
+fn parse_single_line<'i>(padded: &'i str, line_no: usize, state: &State) -> Result<Pair<'i, Rule>, ParsingError> {
     let parsed = NCParser::parse(Rule::line_entry, padded).map_err(|e| {
-        let preview = state.get_line(line_no).unwrap_or("(could not retrieve line)").to_string();
+        let preview = state
+            .get_line(line_no)
+            .unwrap_or("(could not retrieve line)")
+            .to_string();
         let col = match &e.line_col {
             pest::error::LineColLocation::Pos(pos) => pos.1,
             pest::error::LineColLocation::Span(start, _) => start.1,
@@ -571,8 +586,8 @@ fn parse_number(line: &str, i: &mut usize) -> Option<f64> {
 /// a call in the full grammar (the line takes a control-flow rule or fails
 /// to parse), so the fast path must reject it to the grammar.
 const RESERVED_WORDS: &[&str] = &[
-    "IF", "ELSE", "ENDIF", "GOTOB", "GOTOF", "GOTOC", "GOTOS", "GOTO", "CASE", "OF", "DEFAULT",
-    "LOOP", "FOR", "WHILE", "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP",
+    "IF", "ELSE", "ENDIF", "GOTOB", "GOTOF", "GOTOC", "GOTOS", "GOTO", "CASE", "OF", "DEFAULT", "LOOP", "FOR", "WHILE",
+    "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP",
 ];
 
 fn is_reserved_word(word: &str) -> bool {
@@ -752,11 +767,7 @@ fn fold_const_expr(line: &str, i: &mut usize) -> Option<f64> {
 /// `ident=IC(<product>)`, `ident=(<product>)`, `M<d>`, a vocabulary-known
 /// bare keyword, a bare parameterless subprogram call and a trailing comment
 /// rejects the line to the full grammar.
-fn decode_line<'a>(
-    line: &'a str,
-    line_no: usize,
-    arena: &mut Vec<Word<'a>>,
-) -> DecodeResult<'a> {
+fn decode_line<'a>(line: &'a str, line_no: usize, arena: &mut Vec<Word<'a>>) -> DecodeResult<'a> {
     // Words are appended to the shared arena as they decode. A line that turns
     // out to need the grammar (or is blank) leaves no trace: roll the arena
     // back to where this line started so only claimed trivial lines contribute.
@@ -862,12 +873,24 @@ fn decode_line_inner<'a>(
                 // variable_single_char set (normalized to the uppercase
                 // column key). Anything else needs the grammar.
                 let key = match letter {
-                    b'X' => "X", b'Y' => "Y", b'Z' => "Z",
-                    b'A' => "A", b'B' => "B", b'C' => "C",
-                    b'U' => "U", b'V' => "V", b'W' => "W",
-                    b'I' => "I", b'J' => "J", b'K' => "K",
-                    b'T' => "T", b'S' => "S", b'F' => "F",
-                    b'D' => "D", b'H' => "H", b'E' => "E",
+                    b'X' => "X",
+                    b'Y' => "Y",
+                    b'Z' => "Z",
+                    b'A' => "A",
+                    b'B' => "B",
+                    b'C' => "C",
+                    b'U' => "U",
+                    b'V' => "V",
+                    b'W' => "W",
+                    b'I' => "I",
+                    b'J' => "J",
+                    b'K' => "K",
+                    b'T' => "T",
+                    b'S' => "S",
+                    b'F' => "F",
+                    b'D' => "D",
+                    b'H' => "H",
+                    b'E' => "E",
                     _ => return DecodeResult::NeedsGrammar,
                 };
                 let Some(value) = parse_number(line, &mut i) else {
@@ -905,14 +928,24 @@ fn decode_line_inner<'a>(
                 if let Some((ident, factor, end)) = decode_ic_word(line, i) {
                     // KEY=IC(...): deferred incremental word.
                     i = end;
-                    arena.push(Word::AssignDynamic { key, ident, factor, incremental: true });
+                    arena.push(Word::AssignDynamic {
+                        key,
+                        ident,
+                        factor,
+                        incremental: true,
+                    });
                 } else if i < n_len && bytes[i] == b'(' {
                     // KEY=(IDENT*NUMBER) etc.: deferred absolute word.
                     let Some((ident, factor, end)) = decode_paren_product(line, i + 1) else {
                         return DecodeResult::NeedsGrammar;
                     };
                     i = end;
-                    arena.push(Word::AssignDynamic { key, ident, factor, incremental: false });
+                    arena.push(Word::AssignDynamic {
+                        key,
+                        ident,
+                        factor,
+                        incremental: false,
+                    });
                 } else {
                     // KEY=<constant expression>: fold literals at decode time
                     // (identical evaluation order, see fold_const_expr).
@@ -992,8 +1025,7 @@ fn decode_line_inner<'a>(
 /// Escape hatch for differential testing and debugging: NC_STAGE1=0
 /// disables the fast path so everything runs through the whole-file parse.
 pub fn stage1_enabled() -> bool {
-    !std::env::var("NC_STAGE1")
-        .is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("off"))
+    !std::env::var("NC_STAGE1").is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("off"))
 }
 
 /// Differential tests: every program must produce identical output with the
@@ -1011,11 +1043,7 @@ mod tests {
     /// NC_STAGE1 is process-global; serialize every test that flips it.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    fn run(
-        program: &str,
-        stage1: bool,
-        allow_undefined: bool,
-    ) -> Result<(Table, crate::state::State), ParsingError> {
+    fn run(program: &str, stage1: bool, allow_undefined: bool) -> Result<(Table, crate::state::State), ParsingError> {
         std::env::set_var("NC_STAGE1", if stage1 { "1" } else { "0" });
         let result = nc_to_table(
             program,
@@ -1057,9 +1085,15 @@ mod tests {
                     sorted_columns(&fast_table),
                     "table mismatch for program:\n{program}"
                 );
-                assert_eq!(full_state.symbol_table, fast_state.symbol_table, "symbols for:\n{program}");
+                assert_eq!(
+                    full_state.symbol_table, fast_state.symbol_table,
+                    "symbols for:\n{program}"
+                );
                 assert_eq!(full_state.axes, fast_state.axes, "axes for:\n{program}");
-                assert_eq!(full_state.translation, fast_state.translation, "translation for:\n{program}");
+                assert_eq!(
+                    full_state.translation, fast_state.translation,
+                    "translation for:\n{program}"
+                );
             }
             (Err(full_err), Err(fast_err)) => {
                 // Both error. Interpretation errors (undefined variable,
@@ -1069,12 +1103,12 @@ mod tests {
                 let full_msg = full_err.to_string();
                 let fast_msg = fast_err.to_string();
                 if full_msg.contains("Parse error") || fast_msg.contains("Parse error") {
-                    let line_of = |msg: &str| {
-                        msg.lines()
-                            .find(|l| l.starts_with("Line:"))
-                            .map(str::to_string)
-                    };
-                    assert_eq!(line_of(&full_msg), line_of(&fast_msg), "parse-error line for:\n{program}");
+                    let line_of = |msg: &str| msg.lines().find(|l| l.starts_with("Line:")).map(str::to_string);
+                    assert_eq!(
+                        line_of(&full_msg),
+                        line_of(&fast_msg),
+                        "parse-error line for:\n{program}"
+                    );
                 } else {
                     assert_eq!(full_msg, fast_msg, "error mismatch for program:\n{program}");
                 }
@@ -1205,23 +1239,17 @@ M30
         // must decline (transparently falling back to the whole-file parse)
         // instead of paying a per-line pest parse for most of the program.
         let lines = super::RATIO_SAMPLE_MIN + 100;
-        let program: String =
-            (0..lines).map(|_| "X=SIN(30)\n").collect();
+        let program: String = (0..lines).map(|_| "X=SIN(30)\n").collect();
         let _guard = env_lock();
         let (table, _state) = run(&program, true, false).expect("interpret");
-        let x = table
-            .columns
-            .iter()
-            .find(|(name, _)| name == "X")
-            .expect("X column");
+        let x = table.columns.iter().find(|(name, _)| name == "X").expect("X column");
         assert_eq!(x.1.len(), lines);
         // Confirm the decline: interpret_lines itself must return None.
         let mut state = crate::state::State::new(vec!["X".to_string()], 10_000, None, false);
         state.set_input(&program);
         let mut padded = Vec::new();
         let mut output = crate::output::OutputRows::collect();
-        let declined = super::interpret_lines(&program, &mut padded, &mut output, &mut state)
-            .expect("no error");
+        let declined = super::interpret_lines(&program, &mut padded, &mut output, &mut state).expect("no error");
         assert!(declined.is_none(), "expected the ratio guard to decline");
     }
 
@@ -1236,17 +1264,11 @@ M30
                 program.push_str("X1.5 Y2.5\n");
             }
         }
-        let mut state = crate::state::State::new(
-            vec!["X".to_string(), "Y".to_string()],
-            10_000,
-            None,
-            false,
-        );
+        let mut state = crate::state::State::new(vec!["X".to_string(), "Y".to_string()], 10_000, None, false);
         state.set_input(&program);
         let mut padded = Vec::new();
         let mut output = crate::output::OutputRows::collect();
-        let claimed = super::interpret_lines(&program, &mut padded, &mut output, &mut state)
-            .expect("no error");
+        let claimed = super::interpret_lines(&program, &mut padded, &mut output, &mut state).expect("no error");
         assert!(claimed.is_some(), "expected the fast path to claim the program");
     }
 }

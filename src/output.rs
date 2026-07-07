@@ -805,11 +805,7 @@ pub fn write_csv<W: std::io::Write>(table: &Table, writer: W) -> Result<(), std:
                     Column::Float(v) => v[row].map_or(String::new(), |f| format!("{:.3}", f)),
                     Column::Int(v) => v[row].map_or(String::new(), |i| i.to_string()),
                     Column::Str(v) => v[row].clone().unwrap_or_default(),
-                    Column::StrList(v) => v[row]
-                        .as_ref()
-                        .and_then(|l| l.get(copy))
-                        .cloned()
-                        .unwrap_or_default(),
+                    Column::StrList(v) => v[row].as_ref().and_then(|l| l.get(copy)).cloned().unwrap_or_default(),
                 });
             }
             w.write_record(&record)?;

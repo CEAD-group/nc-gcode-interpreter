@@ -43,7 +43,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # Pin the toolchain and explicitly pull in rustfmt so `cargo fmt --check`
+      # does not depend on whatever components the runner image ships with.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Check Rust formatting
+        run: cargo fmt --check
       - name: Run Rust unit and integration tests
         run: cargo test
 

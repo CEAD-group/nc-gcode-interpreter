@@ -48,7 +48,10 @@ fn flatten_tolerance_flag_yields_g1_only_csv() {
     let lines = run_cli(&dir, &["--flatten-tolerance", "0.1"]);
 
     let motions = motion_column(&lines);
-    assert!(motions.iter().all(|m| m == "G1"), "non-G1 motion in flattened CSV: {motions:?}");
+    assert!(
+        motions.iter().all(|m| m == "G1"),
+        "non-G1 motion in flattened CSV: {motions:?}"
+    );
     // The arc (~25 samples at 0.1 mm) and the spline expand well beyond the
     // 8 programmed blocks.
     assert!(motions.len() > 20, "arc/spline not expanded: {} rows", motions.len());

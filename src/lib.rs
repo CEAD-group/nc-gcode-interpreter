@@ -7,9 +7,9 @@ mod errors;
 pub mod flatten;
 mod interpret_rules;
 pub mod interpreter;
+mod line_driver;
 mod modal_groups;
 pub mod output;
-mod line_driver;
 mod state;
 mod structure_scan;
 
@@ -17,9 +17,9 @@ mod structure_scan;
 mod python_bindings {
     use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
+    use pyo3::types::PyCapsule;
     use pyo3::types::{PyDict, PyList};
     use pyo3::wrap_pyfunction;
-    use pyo3::types::PyCapsule;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -51,10 +51,8 @@ mod python_bindings {
             // Capsule names are fixed by the Arrow C data interface; the boxed
             // FFI struct's Drop runs the Arrow release callback when the consumer
             // has not moved it out.
-            let schema_capsule =
-                PyCapsule::new_with_value(py, schema, c"arrow_schema")?;
-            let array_capsule =
-                PyCapsule::new_with_value(py, array, c"arrow_array")?;
+            let schema_capsule = PyCapsule::new_with_value(py, schema, c"arrow_schema")?;
+            let array_capsule = PyCapsule::new_with_value(py, array, c"arrow_array")?;
             Ok((schema_capsule, array_capsule))
         }
     }
@@ -137,12 +135,9 @@ mod python_bindings {
                     Arc::new(v.into_iter().collect::<StringArray>()),
                 ),
                 Column::StrList(v) => {
-                    let values_cap: usize =
-                        v.iter().filter_map(|c| c.as_ref()).map(|l| l.len()).sum();
-                    let mut builder =
-                        ListBuilder::with_capacity(StringBuilder::new(), v.len()).with_field(Arc::new(
-                            Field::new("item", DataType::Utf8, false),
-                        ));
+                    let values_cap: usize = v.iter().filter_map(|c| c.as_ref()).map(|l| l.len()).sum();
+                    let mut builder = ListBuilder::with_capacity(StringBuilder::new(), v.len())
+                        .with_field(Arc::new(Field::new("item", DataType::Utf8, false)));
                     let _ = values_cap;
                     for cell in v {
                         match cell {
@@ -179,7 +174,9 @@ mod python_bindings {
     fn table_to_arrow_batch(table: Table) -> PyResult<ArrowBatch> {
         use arrow_array::Array;
         let struct_array = arrow_array::StructArray::from(table_to_record_batch(table)?);
-        Ok(ArrowBatch { data: struct_array.into_data() })
+        Ok(ArrowBatch {
+            data: struct_array.into_data(),
+        })
     }
 
     /// Spawn the interpreter on a worker thread, pushing finished rows into a
@@ -224,9 +221,7 @@ mod python_bindings {
                 };
                 let _ = result_sender.send(message);
             })
-            .map_err(|e| {
-                PyErr::new::<PyValueError, _>(format!("failed to spawn interpreter thread: {}", e))
-            })?;
+            .map_err(|e| PyErr::new::<PyValueError, _>(format!("failed to spawn interpreter thread: {}", e)))?;
         Ok((row_receiver, result_receiver, handle))
     }
 
@@ -283,9 +278,7 @@ mod python_bindings {
                 };
                 let _ = result_sender.send(message);
             })
-            .map_err(|e| {
-                PyErr::new::<PyValueError, _>(format!("failed to spawn interpreter thread: {}", e))
-            })?;
+            .map_err(|e| PyErr::new::<PyValueError, _>(format!("failed to spawn interpreter thread: {}", e)))?;
         Ok((batch_receiver, result_receiver, handle))
     }
 
@@ -481,9 +474,8 @@ mod python_bindings {
         // PyO3 boundary. Reading before the worker spawns surfaces a missing
         // file as an immediate, clean error.
         let input = if input_is_path {
-            std::fs::read_to_string(&input).map_err(|e| {
-                PyErr::new::<PyValueError, _>(format!("Error reading input file '{}': {}", input, e))
-            })?
+            std::fs::read_to_string(&input)
+                .map_err(|e| PyErr::new::<PyValueError, _>(format!("Error reading input file '{}': {}", input, e)))?
         } else {
             input
         };
@@ -622,9 +614,8 @@ mod python_bindings {
         }
         // Read the program here when given a path (see nc_to_rows).
         let input = if input_is_path {
-            std::fs::read_to_string(&input).map_err(|e| {
-                PyErr::new::<PyValueError, _>(format!("Error reading input file '{}': {}", input, e))
-            })?
+            std::fs::read_to_string(&input)
+                .map_err(|e| PyErr::new::<PyValueError, _>(format!("Error reading input file '{}': {}", input, e)))?
         } else {
             input
         };

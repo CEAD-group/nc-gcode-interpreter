@@ -106,9 +106,18 @@ struct Plane {
     offsets: [&'static str; 2],
 }
 
-const G17: Plane = Plane { axes: ["X", "Y"], offsets: ["I", "J"] };
-const G18: Plane = Plane { axes: ["Z", "X"], offsets: ["K", "I"] };
-const G19: Plane = Plane { axes: ["Y", "Z"], offsets: ["J", "K"] };
+const G17: Plane = Plane {
+    axes: ["X", "Y"],
+    offsets: ["I", "J"],
+};
+const G18: Plane = Plane {
+    axes: ["Z", "X"],
+    offsets: ["K", "I"],
+};
+const G19: Plane = Plane {
+    axes: ["Y", "Z"],
+    offsets: ["J", "K"],
+};
 
 /// One buffered block of an active spline: either a point-bearing row (its
 /// geometric axis cells define the next spline point / control point) or any
@@ -297,10 +306,7 @@ impl Flattener {
             return;
         }
 
-        let (Some(su), Some(sv)) = (
-            self.positions.get(u_axis).copied(),
-            self.positions.get(v_axis).copied(),
-        ) else {
+        let (Some(su), Some(sv)) = (self.positions.get(u_axis).copied(), self.positions.get(v_axis).copied()) else {
             self.pass_through_with_warning(row, "arc start position is unknown", out);
             return;
         };
@@ -439,7 +445,11 @@ impl Flattener {
                 let value = if k == segments { end } else { start + (end - start) * f };
                 cells.insert(axis, Value::Float(value));
             }
-            emitted.push(Row { line_no: row.line_no, cells, variable_changes: Vec::new() });
+            emitted.push(Row {
+                line_no: row.line_no,
+                cells,
+                variable_changes: Vec::new(),
+            });
         }
 
         let mut geometry: Vec<&'static str> = vec![u_axis, v_axis];
@@ -525,7 +535,11 @@ impl Flattener {
                 .filter(|(_, c)| METRIC_AXES.contains(&**c))
                 .map(|(i, _)| i)
                 .collect();
-            if xyz.is_empty() { (0..channels.len()).collect() } else { xyz }
+            if xyz.is_empty() {
+                (0..channels.len()).collect()
+            } else {
+                xyz
+            }
         };
 
         // Sample the curve: per source point, the run of samples that ends
@@ -537,9 +551,7 @@ impl Flattener {
                 SplineKind::Akima | SplineKind::Cubic => {
                     interpolating_spline_runs(&points, &metric, self.tolerance, kind)
                 }
-                SplineKind::BSpline => {
-                    bspline_runs(&points, &weights, self.spline_degree, &metric, self.tolerance)
-                }
+                SplineKind::BSpline => bspline_runs(&points, &weights, self.spline_degree, &metric, self.tolerance),
             }
         };
 
@@ -583,7 +595,11 @@ impl Flattener {
                                 }
                             }
                         }
-                        emitted.push(Row { line_no: row.line_no, cells, variable_changes: Vec::new() });
+                        emitted.push(Row {
+                            line_no: row.line_no,
+                            cells,
+                            variable_changes: Vec::new(),
+                        });
                     } else {
                         for (si, sample) in samples.iter().enumerate() {
                             let mut cells = CellMap::default();
@@ -611,7 +627,9 @@ impl Flattener {
                     merge_aux_cells(&row, &mut emitted[0], &channels);
                     emitted[0].variable_changes = row.variable_changes.clone();
                     if first_motion_pending {
-                        emitted[0].cells.insert(intern_column("gg01_motion"), Value::Str("G1".to_string()));
+                        emitted[0]
+                            .cells
+                            .insert(intern_column("gg01_motion"), Value::Str("G1".to_string()));
                         first_motion_pending = false;
                     } else {
                         // A restated spline command mid-run must not leak into
@@ -721,9 +739,7 @@ fn adaptive_flatten(
     let pm = eval(tm);
     let within = |p: &[f64]| deviation(p, p0, p1, metric) <= tol;
     let ok = depth >= MAX_SUBDIV_DEPTH
-        || (within(&pm)
-            && within(&eval(t0 + 0.25 * (t1 - t0)))
-            && within(&eval(t0 + 0.75 * (t1 - t0))));
+        || (within(&pm) && within(&eval(t0 + 0.25 * (t1 - t0))) && within(&eval(t0 + 0.75 * (t1 - t0))));
     if ok {
         out.push(p1.to_vec());
     } else {
@@ -802,8 +818,12 @@ fn interpolating_spline_runs(
         let h = fit_ts[seg + 1] - fit_ts[seg];
         let s = ((t - fit_ts[seg]) / h).clamp(0.0, 1.0);
         let (s2, s3) = (s * s, s * s * s);
-        let (h00, h10, h01, h11) =
-            (2.0 * s3 - 3.0 * s2 + 1.0, s3 - 2.0 * s2 + s, -2.0 * s3 + 3.0 * s2, s3 - s2);
+        let (h00, h10, h01, h11) = (
+            2.0 * s3 - 3.0 * s2 + 1.0,
+            s3 - 2.0 * s2 + s,
+            -2.0 * s3 + 3.0 * s2,
+            s3 - s2,
+        );
         (0..channels)
             .map(|c| {
                 h00 * fit_points[seg][c]
@@ -822,7 +842,17 @@ fn interpolating_spline_runs(
             runs.push(vec![points[i + 1].clone()]);
         } else {
             let mut run = Vec::new();
-            adaptive_flatten(&eval, ts[i], &points[i], ts[i + 1], &points[i + 1], tol, metric, 0, &mut run);
+            adaptive_flatten(
+                &eval,
+                ts[i],
+                &points[i],
+                ts[i + 1],
+                &points[i + 1],
+                tol,
+                metric,
+                0,
+                &mut run,
+            );
             runs.push(run);
         }
     }
@@ -955,7 +985,11 @@ fn bspline_runs(
             for j in (r..=p).rev() {
                 let i = j + k - p;
                 let denom = knots[i + p + 1 - r] - knots[i];
-                let alpha = if denom.abs() < 1e-30 { 0.0 } else { (t - knots[i]) / denom };
+                let alpha = if denom.abs() < 1e-30 {
+                    0.0
+                } else {
+                    (t - knots[i]) / denom
+                };
                 // Indexing two rows of `d` at once: a plain indexed loop is
                 // clearer than a split_at_mut dance.
                 #[allow(clippy::needless_range_loop)]
@@ -994,7 +1028,10 @@ mod tests {
     use super::*;
 
     fn axis_ids() -> Vec<String> {
-        ["X", "Y", "Z", "A", "E", "F", "S", "N"].iter().map(|s| s.to_string()).collect()
+        ["X", "Y", "Z", "A", "E", "F", "S", "N"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     fn flattener(tol: f64) -> Flattener {
@@ -1006,7 +1043,11 @@ mod tests {
         for (key, value) in cells {
             map.insert(intern_column(key), value.clone());
         }
-        Row { line_no, cells: map, variable_changes: Vec::new() }
+        Row {
+            line_no,
+            cells: map,
+            variable_changes: Vec::new(),
+        }
     }
 
     fn f(v: f64) -> Value {
@@ -1048,7 +1089,16 @@ mod tests {
         let mut fl = flattener(tol);
         let rows = vec![
             row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-            row(2, &[("gg01_motion", s("G2")), ("X", f(100.0)), ("Y", f(0.0)), ("I", f(50.0)), ("J", f(0.0))]),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("G2")),
+                    ("X", f(100.0)),
+                    ("Y", f(0.0)),
+                    ("I", f(50.0)),
+                    ("J", f(0.0)),
+                ],
+            ),
         ];
         let out = run(&mut fl, rows);
         assert!(out.len() > 10, "expected a sampled run, got {} rows", out.len());
@@ -1072,7 +1122,9 @@ mod tests {
         }
         // Motion rewritten to G1 on the first emitted row, I/J consumed.
         assert!(matches!(out[1].cells.get("gg01_motion"), Some(Value::Str(m)) if m == "G1"));
-        assert!(out.iter().all(|r| r.cells.get("I").is_none() && r.cells.get("J").is_none()));
+        assert!(out
+            .iter()
+            .all(|r| r.cells.get("I").is_none() && r.cells.get("J").is_none()));
     }
 
     #[test]
@@ -1080,7 +1132,16 @@ mod tests {
         let mut fl = flattener(0.01);
         let rows = vec![
             row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-            row(2, &[("gg01_motion", s("G3")), ("X", f(100.0)), ("Y", f(0.0)), ("I", f(50.0)), ("J", f(0.0))]),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("G3")),
+                    ("X", f(100.0)),
+                    ("Y", f(0.0)),
+                    ("I", f(50.0)),
+                    ("J", f(0.0)),
+                ],
+            ),
         ];
         let out = run(&mut fl, rows);
         assert!(out[2..].iter().all(|r| cell_float(r, "Y").unwrap() <= 1e-9));
@@ -1091,7 +1152,16 @@ mod tests {
         let mut fl = flattener(0.1);
         let rows = vec![
             row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-            row(2, &[("gg01_motion", s("G2")), ("X", f(0.0)), ("Y", f(0.0)), ("I", f(25.0)), ("J", f(0.0))]),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("G2")),
+                    ("X", f(0.0)),
+                    ("Y", f(0.0)),
+                    ("I", f(25.0)),
+                    ("J", f(0.0)),
+                ],
+            ),
         ];
         let out = run(&mut fl, rows);
         // Sweep of 2*pi at r=25 with tol=0.1: at least 20-some segments.
@@ -1106,22 +1176,42 @@ mod tests {
         let mut fl = flattener(0.01);
         let rows = vec![
             row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-            row(2, &[("gg01_motion", s("G2")), ("X", f(40.0)), ("Y", f(0.0)), ("CR", f(20.0))]),
+            row(
+                2,
+                &[("gg01_motion", s("G2")), ("X", f(40.0)), ("Y", f(0.0)), ("CR", f(20.0))],
+            ),
         ];
         let out = run(&mut fl, rows);
         // CR=20 with chord 40: semicircle, clockwise -> over the top, apex +20.
-        let max_y = out[1..].iter().map(|r| cell_float(r, "Y").unwrap()).fold(f64::MIN, f64::max);
-        assert!((max_y - 20.0).abs() < 0.05, "expected semicircle apex at +20, got {max_y}");
+        let max_y = out[1..]
+            .iter()
+            .map(|r| cell_float(r, "Y").unwrap())
+            .fold(f64::MIN, f64::max);
+        assert!(
+            (max_y - 20.0).abs() < 0.05,
+            "expected semicircle apex at +20, got {max_y}"
+        );
         assert_eq!(xy(out.last().unwrap()), (40.0, 0.0));
 
         // Negative CR selects the major arc: sweep > half turn.
         let mut fl = flattener(0.01);
         let rows = vec![
             row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-            row(2, &[("gg01_motion", s("G2")), ("X", f(20.0)), ("Y", f(0.0)), ("CR", f(-20.0))]),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("G2")),
+                    ("X", f(20.0)),
+                    ("Y", f(0.0)),
+                    ("CR", f(-20.0)),
+                ],
+            ),
         ];
         let out = run(&mut fl, rows);
-        let max_y = out[1..].iter().map(|r| cell_float(r, "Y").unwrap()).fold(f64::MIN, f64::max);
+        let max_y = out[1..]
+            .iter()
+            .map(|r| cell_float(r, "Y").unwrap())
+            .fold(f64::MIN, f64::max);
         assert!(max_y > 30.0, "major arc should swing well above the chord, got {max_y}");
     }
 
@@ -1129,8 +1219,21 @@ mod tests {
     fn helical_arc_interpolates_z_linearly() {
         let mut fl = flattener(0.01);
         let rows = vec![
-            row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(0.0))]),
-            row(2, &[("gg01_motion", s("G2")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(10.0)), ("I", f(25.0)), ("J", f(0.0))]),
+            row(
+                1,
+                &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(0.0))],
+            ),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("G2")),
+                    ("X", f(0.0)),
+                    ("Y", f(0.0)),
+                    ("Z", f(10.0)),
+                    ("I", f(25.0)),
+                    ("J", f(0.0)),
+                ],
+            ),
         ];
         let out = run(&mut fl, rows);
         let zs: Vec<f64> = out[1..].iter().map(|r| cell_float(r, "Z").unwrap()).collect();
@@ -1147,8 +1250,26 @@ mod tests {
     fn g18_arc_uses_zx_plane() {
         let mut fl = flattener(0.01);
         let rows = vec![
-            row(1, &[("gg01_motion", s("G1")), ("gg06_plane_select", s("G18")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(0.0))]),
-            row(2, &[("gg01_motion", s("G2")), ("Z", f(0.0)), ("X", f(40.0)), ("K", f(0.0)), ("I", f(20.0))]),
+            row(
+                1,
+                &[
+                    ("gg01_motion", s("G1")),
+                    ("gg06_plane_select", s("G18")),
+                    ("X", f(0.0)),
+                    ("Y", f(0.0)),
+                    ("Z", f(0.0)),
+                ],
+            ),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("G2")),
+                    ("Z", f(0.0)),
+                    ("X", f(40.0)),
+                    ("K", f(0.0)),
+                    ("I", f(20.0)),
+                ],
+            ),
         ];
         let out = run(&mut fl, rows);
         assert!(out.len() > 5);
@@ -1165,8 +1286,26 @@ mod tests {
     fn g19_arc_uses_yz_plane() {
         let mut fl = flattener(0.01);
         let rows = vec![
-            row(1, &[("gg01_motion", s("G1")), ("gg06_plane_select", s("G19")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(0.0))]),
-            row(2, &[("gg01_motion", s("G3")), ("Y", f(40.0)), ("Z", f(0.0)), ("J", f(20.0)), ("K", f(0.0))]),
+            row(
+                1,
+                &[
+                    ("gg01_motion", s("G1")),
+                    ("gg06_plane_select", s("G19")),
+                    ("X", f(0.0)),
+                    ("Y", f(0.0)),
+                    ("Z", f(0.0)),
+                ],
+            ),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("G3")),
+                    ("Y", f(40.0)),
+                    ("Z", f(0.0)),
+                    ("J", f(20.0)),
+                    ("K", f(0.0)),
+                ],
+            ),
         ];
         let out = run(&mut fl, rows);
         assert!(out.len() > 5);
@@ -1178,7 +1317,10 @@ mod tests {
             assert!(r.cells.get("X").is_none());
         }
         assert_eq!(
-            (cell_float(out.last().unwrap(), "Y").unwrap(), cell_float(out.last().unwrap(), "Z").unwrap()),
+            (
+                cell_float(out.last().unwrap(), "Y").unwrap(),
+                cell_float(out.last().unwrap(), "Z").unwrap()
+            ),
             (40.0, 0.0)
         );
     }
@@ -1189,11 +1331,20 @@ mod tests {
         let mut fl = flattener(0.01);
         let rows = vec![
             row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-            row(2, &[("gg01_motion", s("G3")), ("X", f(40.0)), ("Y", f(0.0)), ("CR", f(20.0))]),
+            row(
+                2,
+                &[("gg01_motion", s("G3")), ("X", f(40.0)), ("Y", f(0.0)), ("CR", f(20.0))],
+            ),
         ];
         let out = run(&mut fl, rows);
-        let min_y = out[1..].iter().map(|r| cell_float(r, "Y").unwrap()).fold(f64::MAX, f64::min);
-        assert!((min_y + 20.0).abs() < 0.05, "G3 semicircle should dip to -20, got {min_y}");
+        let min_y = out[1..]
+            .iter()
+            .map(|r| cell_float(r, "Y").unwrap())
+            .fold(f64::MAX, f64::min);
+        assert!(
+            (min_y + 20.0).abs() < 0.05,
+            "G3 semicircle should dip to -20, got {min_y}"
+        );
         assert_eq!(xy(out.last().unwrap()), (40.0, 0.0));
     }
 
@@ -1201,8 +1352,26 @@ mod tests {
     fn full_circle_in_g18() {
         let mut fl = flattener(0.1);
         let rows = vec![
-            row(1, &[("gg01_motion", s("G1")), ("gg06_plane_select", s("G18")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(0.0))]),
-            row(2, &[("gg01_motion", s("G2")), ("Z", f(0.0)), ("X", f(0.0)), ("K", f(25.0)), ("I", f(0.0))]),
+            row(
+                1,
+                &[
+                    ("gg01_motion", s("G1")),
+                    ("gg06_plane_select", s("G18")),
+                    ("X", f(0.0)),
+                    ("Y", f(0.0)),
+                    ("Z", f(0.0)),
+                ],
+            ),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("G2")),
+                    ("Z", f(0.0)),
+                    ("X", f(0.0)),
+                    ("K", f(25.0)),
+                    ("I", f(0.0)),
+                ],
+            ),
         ];
         let out = run(&mut fl, rows);
         assert!(out.len() > 20, "full circle in G18 under-sampled: {}", out.len());
@@ -1229,7 +1398,10 @@ mod tests {
             run(
                 &mut fl,
                 vec![
-                    row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(0.0))]),
+                    row(
+                        1,
+                        &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(0.0))],
+                    ),
                     row(2, &cells),
                 ],
             )
@@ -1238,7 +1410,11 @@ mod tests {
         let out = helix(Some(2.0));
         // Sweep of 3 full circles instead of 1: ~3x the samples, and X crosses
         // the far side of the circle 3 times.
-        assert!(out.len() > 2 * single, "TURN=2 should triple the sweep: {} vs {single}", out.len());
+        assert!(
+            out.len() > 2 * single,
+            "TURN=2 should triple the sweep: {} vs {single}",
+            out.len()
+        );
         let far_crossings = out[1..]
             .windows(2)
             .filter(|w| {
@@ -1247,7 +1423,10 @@ mod tests {
                 (a < 49.0) != (b < 49.0)
             })
             .count();
-        assert!(far_crossings >= 5, "expected 3 far-side passes, got {far_crossings} crossings");
+        assert!(
+            far_crossings >= 5,
+            "expected 3 far-side passes, got {far_crossings} crossings"
+        );
         // Z still lands exactly, monotonically.
         let zs: Vec<f64> = out[1..].iter().map(|r| cell_float(r, "Z").unwrap()).collect();
         assert!((zs.last().unwrap() - 30.0).abs() < 1e-9);
@@ -1263,7 +1442,16 @@ mod tests {
         let mut fl = flattener(0.01);
         let rows = vec![
             row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-            row(2, &[("gg01_motion", s("CIP")), ("X", f(20.0)), ("Y", f(0.0)), ("I", f(10.0)), ("J", f(5.0))]),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("CIP")),
+                    ("X", f(20.0)),
+                    ("Y", f(0.0)),
+                    ("I", f(10.0)),
+                    ("J", f(5.0)),
+                ],
+            ),
             row(3, &[("gg01_motion", s("G1")), ("X", f(30.0)), ("Y", f(0.0))]),
         ];
         let out = run(&mut fl, rows);
@@ -1280,7 +1468,16 @@ mod tests {
                 &mut fl,
                 vec![
                     row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-                    row(2, &[("gg01_motion", s("G3")), ("X", f(100.0)), ("Y", f(0.0)), ("I", f(50.0)), ("J", f(0.0))]),
+                    row(
+                        2,
+                        &[
+                            ("gg01_motion", s("G3")),
+                            ("X", f(100.0)),
+                            ("Y", f(0.0)),
+                            ("I", f(50.0)),
+                            ("J", f(0.0)),
+                        ],
+                    ),
                 ],
             )
             .len()
@@ -1323,7 +1520,9 @@ mod tests {
         assert!(out.len() > 3);
         assert!(cell_float(&out[1], "F").is_some());
         assert!(out[1].cells.get("M").is_some());
-        assert!(out[2..].iter().all(|r| r.cells.get("F").is_none() && r.cells.get("M").is_none()));
+        assert!(out[2..]
+            .iter()
+            .all(|r| r.cells.get("F").is_none() && r.cells.get("M").is_none()));
         assert!(out.iter().all(|r| r.line_no == 1 || r.line_no == 2));
     }
 
@@ -1343,7 +1542,14 @@ mod tests {
                 (a.cos(), a.sin())
             })
             .collect();
-        rows.push(row(2, &[("gg01_motion", s("CSPLINE")), ("X", f(points[0].0)), ("Y", f(points[0].1))]));
+        rows.push(row(
+            2,
+            &[
+                ("gg01_motion", s("CSPLINE")),
+                ("X", f(points[0].0)),
+                ("Y", f(points[0].1)),
+            ],
+        ));
         for (i, (x, y)) in points.iter().enumerate().skip(1) {
             rows.push(row(3 + i, &[("X", f(*x)), ("Y", f(*y))]));
         }
@@ -1368,9 +1574,9 @@ mod tests {
             assert!((radius - 1.0).abs() < 0.02, "sample far off circle: r={radius}");
         }
         // Spline command must not survive flattening.
-        assert!(out.iter().all(
-            |r| !matches!(r.cells.get("gg01_motion"), Some(Value::Str(m)) if m.contains("SPLINE"))
-        ));
+        assert!(out
+            .iter()
+            .all(|r| !matches!(r.cells.get("gg01_motion"), Some(Value::Str(m)) if m.contains("SPLINE"))));
         // Deselecting G1 row passes through as-is.
         assert_eq!(xy(out.last().unwrap()), (0.0, 2.0));
     }
@@ -1381,7 +1587,10 @@ mod tests {
         let pts = [(10.0, 20.0), (20.0, 40.0), (30.0, 30.0), (40.0, 45.0), (50.0, 0.0)];
         let mut rows = vec![
             row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-            row(2, &[("gg01_motion", s("ASPLINE")), ("X", f(pts[0].0)), ("Y", f(pts[0].1))]),
+            row(
+                2,
+                &[("gg01_motion", s("ASPLINE")), ("X", f(pts[0].0)), ("Y", f(pts[0].1))],
+            ),
         ];
         for (i, (x, y)) in pts.iter().enumerate().skip(1) {
             rows.push(row(3 + i, &[("X", f(*x)), ("Y", f(*y))]));
@@ -1484,7 +1693,15 @@ mod tests {
         let mut fl = flattener(0.001);
         let rows = vec![
             row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-            row(2, &[("gg01_motion", s("BSPLINE")), ("X", f(10.0)), ("Y", f(10.0)), ("SD", f(2.0))]),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("BSPLINE")),
+                    ("X", f(10.0)),
+                    ("Y", f(10.0)),
+                    ("SD", f(2.0)),
+                ],
+            ),
             row(3, &[("X", f(20.0)), ("Y", f(0.0))]),
         ];
         let out = run(&mut fl, rows);
@@ -1503,8 +1720,19 @@ mod tests {
     fn spline_extra_channel_is_sampled() {
         let mut fl = flattener(0.01);
         let rows = vec![
-            row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0)), ("E", f(0.0))]),
-            row(2, &[("gg01_motion", s("ASPLINE")), ("X", f(10.0)), ("Y", f(10.0)), ("E", f(1.0))]),
+            row(
+                1,
+                &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0)), ("E", f(0.0))],
+            ),
+            row(
+                2,
+                &[
+                    ("gg01_motion", s("ASPLINE")),
+                    ("X", f(10.0)),
+                    ("Y", f(10.0)),
+                    ("E", f(1.0)),
+                ],
+            ),
             row(3, &[("X", f(20.0)), ("Y", f(0.0)), ("E", f(2.0))]),
             row(4, &[("X", f(30.0)), ("Y", f(10.0)), ("E", f(3.0))]),
         ];
@@ -1549,30 +1777,45 @@ mod tests {
             &mut fl,
             vec![
                 row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-                row(2, &[("gg01_motion", s("G2")), ("X", f(100.0)), ("Y", f(0.0)), ("I", f(50.0)), ("J", f(0.0))]),
+                row(
+                    2,
+                    &[
+                        ("gg01_motion", s("G2")),
+                        ("X", f(100.0)),
+                        ("Y", f(0.0)),
+                        ("I", f(50.0)),
+                        ("J", f(0.0)),
+                    ],
+                ),
             ],
         );
         assert!(!marked(&out[0]), "passthrough row must not be marked");
         assert!(out[1..out.len() - 1].iter().all(marked));
-        assert!(!marked(out.last().unwrap()), "programmed arc endpoint must not be marked");
+        assert!(
+            !marked(out.last().unwrap()),
+            "programmed arc endpoint must not be marked"
+        );
 
         // Interpolating spline: the programmed points are the unmarked rows.
         let pts = [(10.0, 20.0), (20.0, 40.0), (30.0, 30.0)];
         let mut fl = flattener(0.01);
         let mut rows = vec![
             row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
-            row(2, &[("gg01_motion", s("ASPLINE")), ("X", f(pts[0].0)), ("Y", f(pts[0].1))]),
+            row(
+                2,
+                &[("gg01_motion", s("ASPLINE")), ("X", f(pts[0].0)), ("Y", f(pts[0].1))],
+            ),
         ];
         for (i, (x, y)) in pts.iter().enumerate().skip(1) {
             rows.push(row(3 + i, &[("X", f(*x)), ("Y", f(*y))]));
         }
         let out = run(&mut fl, rows);
-        let unmarked: Vec<(f64, f64)> = out[1..]
-            .iter()
-            .filter(|r| !marked(r))
-            .map(|r| xy(r))
-            .collect();
-        assert_eq!(unmarked, pts.to_vec(), "unmarked rows must be exactly the programmed points");
+        let unmarked: Vec<(f64, f64)> = out[1..].iter().filter(|r| !marked(r)).map(|r| xy(r)).collect();
+        assert_eq!(
+            unmarked,
+            pts.to_vec(),
+            "unmarked rows must be exactly the programmed points"
+        );
 
         // B-spline: only the curve end (== last control point) is unmarked.
         let mut fl = flattener(0.01);
@@ -1613,8 +1856,14 @@ mod tests {
             .collect();
         let build = |tol: f64| {
             let mut fl = flattener(tol);
-            let mut rows = vec![row(1, &[("gg01_motion", s("G1")), ("X", f(pts[0].0)), ("Y", f(pts[0].1))])];
-            rows.push(row(2, &[("gg01_motion", s("CSPLINE")), ("X", f(pts[1].0)), ("Y", f(pts[1].1))]));
+            let mut rows = vec![row(
+                1,
+                &[("gg01_motion", s("G1")), ("X", f(pts[0].0)), ("Y", f(pts[0].1))],
+            )];
+            rows.push(row(
+                2,
+                &[("gg01_motion", s("CSPLINE")), ("X", f(pts[1].0)), ("Y", f(pts[1].1))],
+            ));
             for (i, (x, y)) in pts.iter().enumerate().skip(2) {
                 rows.push(row(i + 2, &[("X", f(*x)), ("Y", f(*y))]));
             }
