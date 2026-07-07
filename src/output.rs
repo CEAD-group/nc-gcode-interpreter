@@ -81,6 +81,18 @@ impl CellMap {
         self.entries.iter_mut().find(|(k, _)| *k == key).map(|(_, v)| v)
     }
 
+    #[inline]
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.entries.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+    }
+
+    /// Remove `key`, returning its value if present.
+    #[inline]
+    pub fn remove(&mut self, key: &str) -> Option<Value> {
+        let position = self.entries.iter().position(|(k, _)| *k == key)?;
+        Some(self.entries.remove(position).1)
+    }
+
     /// Iterate `(&key, &value)` pairs, mirroring `HashMap::iter` so call sites
     /// that destructure `(&key, value)` keep working unchanged.
     #[inline]
@@ -183,6 +195,12 @@ pub struct OutputRows {
     /// streaming sink (the row iterator consumes them); off for the batch/table
     /// collect path, which prunes variable-only rows.
     record_variables: bool,
+    /// Optional curve flattener sitting between the interpreter and the
+    /// sink: arc and spline rows are replaced by sampled runs of G1 rows
+    /// before they reach the sink (see [`crate::flatten`]).
+    flattener: Option<crate::flatten::Flattener>,
+    /// Whether the once-per-run G91 warning has fired (see `flush`).
+    warned_g91: bool,
 }
 
 impl OutputRows {
@@ -191,6 +209,8 @@ impl OutputRows {
             current: Row::default(),
             sink: RowSink::Collect(Vec::new()),
             record_variables: false,
+            flattener: None,
+            warned_g91: false,
         }
     }
 
@@ -200,6 +220,8 @@ impl OutputRows {
             current: Row::default(),
             sink: RowSink::Stream(sender),
             record_variables: true,
+            flattener: None,
+            warned_g91: false,
         }
     }
 
@@ -223,12 +245,35 @@ impl OutputRows {
                 batch_size,
             }),
             record_variables: false,
+            flattener: None,
+            warned_g91: false,
         }
     }
 
-    /// Route a finished row to the sink: collected, streamed row-at-a-time, or
-    /// fed to the worker-side batch producer. Shared by `flush`.
+    /// Install a curve flattener: every subsequent row passes through it on
+    /// its way to the sink (arcs and splines come out as sampled G1 runs).
+    pub fn set_flattener(&mut self, flattener: crate::flatten::Flattener) {
+        self.flattener = Some(flattener);
+    }
+
+    /// Route a finished row to the sink, passing it through the flattener
+    /// first when one is installed. Shared by `flush`.
     fn deliver(&mut self, row: Row) -> Result<(), ParsingError> {
+        if let Some(mut flattener) = self.flattener.take() {
+            let mut flattened = Vec::new();
+            flattener.push(row, &mut flattened);
+            self.flattener = Some(flattener);
+            for row in flattened {
+                self.deliver_to_sink(row)?;
+            }
+            return Ok(());
+        }
+        self.deliver_to_sink(row)
+    }
+
+    /// Route a finished row to the sink: collected, streamed row-at-a-time, or
+    /// fed to the worker-side batch producer.
+    fn deliver_to_sink(&mut self, row: Row) -> Result<(), ParsingError> {
         match &mut self.sink {
             RowSink::Collect(rows) => {
                 rows.push(row);
@@ -245,7 +290,20 @@ impl OutputRows {
         if self.current.cells.is_empty() && self.current.variable_changes.is_empty() {
             return Ok(());
         }
-        let row = std::mem::take(&mut self.current);
+        let mut row = std::mem::take(&mut self.current);
+        rekey_g4_dwell(&mut row);
+        // G91 is parsed but incremental dimensioning is NOT applied: every
+        // axis value is emitted as if absolute, so positions are wrong from
+        // this block on. Loud once-per-run warning - never butcher silently.
+        if !self.warned_g91 {
+            if matches!(row.cells.get("gg14_wp_measure_mode"), Some(Value::Str(code)) if code == "G91") {
+                crate::state::emit_warning(format_args!(
+                    "Warning [line {}]: G91 incremental dimensioning is not interpreted - axis values are emitted as absolute positions and will be wrong from this block on",
+                    row.line_no
+                ));
+                self.warned_g91 = true;
+            }
+        }
         self.deliver(row)
     }
 
@@ -276,6 +334,14 @@ impl OutputRows {
     /// streaming).
     pub fn finish(mut self) -> Result<Vec<Row>, ParsingError> {
         self.flush()?;
+        // A program ending inside a spline still owes its buffered curve.
+        if let Some(mut flattener) = self.flattener.take() {
+            let mut flattened = Vec::new();
+            flattener.finish(&mut flattened);
+            for row in flattened {
+                self.deliver_to_sink(row)?;
+            }
+        }
         match self.sink {
             RowSink::Collect(rows) => Ok(rows),
             RowSink::Stream(_) => Ok(Vec::new()),
@@ -410,9 +476,44 @@ pub fn is_string_column(name: &str) -> bool {
 /// the modal G-group columns. Shared by the batch table and the streaming
 /// iterator so both fill identically.
 pub fn is_forward_filled_column(name: &str) -> bool {
-    let is_value = name != "M" && !is_string_column(name) && !BLOCK_ADDRESSES.contains(&name);
+    let is_value = name != "M"
+        && name != FLATTENED_COLUMN
+        && name != DWELL_COLUMN
+        && !is_string_column(name)
+        && !BLOCK_ADDRESSES.contains(&name);
     is_value || MODAL_G_GROUPS.contains(&name)
 }
+
+/// Per-block dwell-time column: on a `G4` block the `F` word is the dwell
+/// time in seconds (`S` the dwell in spindle revolutions) - a block-local
+/// parameter, NOT a feed/speed change. Like the block addresses it is never
+/// forward-filled.
+pub const DWELL_COLUMN: &str = "dwell";
+
+/// On a G4 block, move the F (or, failing that, S) value out of the modal
+/// feed/speed columns into the per-block [`DWELL_COLUMN`]. Without this the
+/// dwell time forward-fills as the feed rate (`G4 F0.01` leaves F = 0.01
+/// mm/min for every following block until the next real F word), corrupting
+/// any downstream time computation.
+fn rekey_g4_dwell(row: &mut Row) {
+    let is_g4 = matches!(row.cells.get("gg02_wait"), Some(Value::Str(code)) if code == "G4");
+    if !is_g4 {
+        return;
+    }
+    // Consume BOTH F and S: whichever is not the dwell value must still not
+    // forward-fill into the modal feed/spindle columns.
+    let f = row.cells.remove("F");
+    let s = row.cells.remove("S");
+    if let Some(value) = f.or(s) {
+        row.cells.insert(intern_column(DWELL_COLUMN), value);
+    }
+}
+
+/// Marker column emitted by the curve flattener: `1.0` on rows it generated
+/// (intermediate polyline samples), absent on programmed positions - so
+/// filtering on null recovers the original toolpath points. Per-row like the
+/// block addresses: never forward-filled.
+pub const FLATTENED_COLUMN: &str = "flattened";
 
 /// Canonical output-column order over the set of columns present so far:
 /// N, modal then non-modal G-group columns, the fixed axis columns, any
@@ -443,6 +544,8 @@ fn canonical_order(present: &HashSet<&'static str>) -> Vec<&'static str> {
         .filter(|name| {
             !ordered.contains(name)
                 && !BLOCK_ADDRESSES.contains(name)
+                && *name != FLATTENED_COLUMN
+                && *name != DWELL_COLUMN
                 && !matches!(*name, "T" | "M" | "non_returning_function_call" | "comment")
         })
         .collect();
@@ -452,6 +555,8 @@ fn canonical_order(present: &HashSet<&'static str>) -> Vec<&'static str> {
     for &name in BLOCK_ADDRESSES {
         push_if_present(name, &mut ordered);
     }
+    push_if_present(intern_column(DWELL_COLUMN), &mut ordered);
+    push_if_present(intern_column(FLATTENED_COLUMN), &mut ordered);
     for name in ["T", "M", "non_returning_function_call", "comment"] {
         push_if_present(name, &mut ordered);
     }

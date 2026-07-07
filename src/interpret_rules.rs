@@ -535,8 +535,11 @@ fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> R
 /// alarm 12470 "undefined G function" on a real control.
 fn interpret_g_command(g_command: Pair<Rule>, state: &State) -> Result<(&'static str, String), ParsingError> {
     let command_str = g_command.as_str().trim().to_string();
+    // Store uppercase: the language is case-insensitive (g2 IS G2), and
+    // source case leaking into the output breaks downstream comparisons -
+    // worst case the flattener seeing 'g18' would arc in the wrong plane.
     match crate::modal_groups::classify_g_command(&command_str.to_uppercase()) {
-        Some((group, _modal)) => Ok((group, command_str)),
+        Some((group, _modal)) => Ok((group, command_str.to_uppercase())),
         None => {
             let (line_no, preview) = get_error_context(&g_command, state);
             Err(ParsingError::UnknownGCommand {
@@ -553,7 +556,8 @@ fn interpret_m_command(m_command: Pair<Rule>) -> (String, String) {
 
     // Initially, set the command string to the entire M command (e.g., "M3")
     // the parser should ommit trailing spaces, however, if there are any, remove them
-    let command_str = m_command.as_str().trim_end().to_string();
+    // (uppercased: the language is case-insensitive, m30 IS M30)
+    let command_str = m_command.as_str().trim_end().to_uppercase();
 
     // Return the tuple with the rule name as the column header and the specific M command as the value
     ("M".to_string(), command_str)
@@ -632,7 +636,8 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
     // Translation is applied at output time, not storage time.
     let (key, local_value) = match (variable_pair.as_rule(), expression_pair.as_rule()) {
         (Rule::variable_single_char, Rule::value) => {
-            let key = variable_pair.as_str().to_string();
+            // Uppercase: the rule matches case-insensitively (x100 == X100).
+            let key = variable_pair.as_str().to_uppercase();
             let value = expression_pair.as_str().parse::<f64>().map_err(|_| {
                 annotate_error(
                     &expression_pair,
@@ -1378,6 +1383,9 @@ fn interpret_control(
 }
 pub(crate) fn insert_m_key(last: &mut crate::output::CellMap, value: &str, line_no: usize, preview: String) -> Result<(), ParsingError> {
     let m_key = "M";
+    // Uppercase: the language is case-insensitive (m30 IS M30); source case
+    // must not leak into the output values.
+    let value = value.to_uppercase();
     for _i in 1..=5 {
         if let Some(existing_value) = last.get_mut(m_key) {
             // If the key already exists and is a list, append the new value
@@ -1471,8 +1479,8 @@ fn interpret_statement(
                     if let Some((group, _modal)) = crate::modal_groups::classify_g_command(&name.to_uppercase()) {
                         // `value` may carry trailing whitespace from the
                         // backtracked optional argument list; store the
-                        // trimmed word like the g_command path does.
-                        last.insert(group, Value::Str(name.to_string()));
+                        // trimmed word uppercased like the g_command path.
+                        last.insert(group, Value::Str(name.to_uppercase()));
                         continue;
                     }
                     // A parenless word like Y2O or X10Y20 is far more likely
@@ -1510,6 +1518,7 @@ fn interpret_statement(
             // axis_word is the hoisted fast-path form of assignment's first
             // alternative; both carry (variable_single_char, value) inners.
             Rule::assignment | Rule::axis_word => {
+                let line_no = statement.line_col().0;
                 let (key, local_value) = interpret_assignment(statement, state)?;
                 match state.resolve_output_key(&key) {
                     Some((ColKind::Axis, skey)) => {
@@ -1522,6 +1531,7 @@ fn interpret_statement(
                         last.insert(skey, Value::Float(local_value));
                     }
                     None => {
+                        state.warn_unsupported_address(&key, line_no);
                         output.record_variable_change(&key, local_value);
                     }
                 }

@@ -13,17 +13,32 @@ pub fn emit_warning(args: std::fmt::Arguments) {
 /// non-modal: each value belongs to the block that programs it and is never
 /// forward-filled onto later blocks.
 ///
-/// Two families share these semantics:
+/// Three families share these semantics:
 /// * the circular/helical interpolation parameters `I`, `J`, `K` (arc-centre
-///   offsets relative to the start point) and `CR` (the arc-radius form),
-///   programmed on G2/G3 (and CIP/CT) blocks;
+///   offsets relative to the start point), `CR` (the arc-radius form) and
+///   `TURN` (additional full helix turns), programmed on G2/G3 (and CIP/CT)
+///   blocks;
 /// * the spline programming addresses `PW` (point weight), `SD` (spline
 ///   degree) and `PL` (parameter interval length).
 ///
 /// Before these were listed here the arc-centre offsets were silently dropped
 /// from the output (they fell through to the user-variable branch), so arcs
 /// came out as bare straight-line endpoints.
-pub const BLOCK_ADDRESSES: &[&str] = &["I", "J", "K", "CR", "PW", "SD", "PL"];
+pub const BLOCK_ADDRESSES: &[&str] = &["I", "J", "K", "CR", "TURN", "PW", "SD", "PL"];
+
+/// NC addresses the interpreter recognizes but does not implement: an
+/// assignment to one of these parses as a plain user variable, so the
+/// construct it belongs to is NOT interpreted and the resulting motion is
+/// wrong. Each gets a loud once-per-run warning - an out-of-scope construct
+/// must never be butchered silently.
+const UNSUPPORTED_ADDRESSES: &[(&str, &str)] = &[
+    ("AR", "arc opening angle (G2/G3 ... AR=)"),
+    ("AP", "polar angle (G0..G3 AP= RP=)"),
+    ("RP", "polar radius (G0..G3 AP= RP=)"),
+    ("I1", "CIP intermediate point (I1= J1= K1=)"),
+    ("J1", "CIP intermediate point (I1= J1= K1=)"),
+    ("K1", "CIP intermediate point (I1= J1= K1=)"),
+];
 
 /// Which kind of output column an assignment key resolves to. Variables (which
 /// never appear as output cells) are represented by the absence of a resolution
@@ -50,6 +65,8 @@ pub struct State {
     /// Every jump target seen anywhere during the run (never popped), used
     /// for "did you mean" suggestions when a jump destination is not found.
     pub seen_jump_targets: HashSet<String>,
+    /// Unsupported NC addresses already warned about (once per run).
+    warned_addresses: HashSet<String>,
     /// Store line offsets for efficient error reporting. Shared (`Arc`) to
     /// avoid re-copying the offset table when the state is cloned.
     line_offsets: Arc<[usize]>,
@@ -119,6 +136,7 @@ impl State {
             allow_undefined_variables,
             jump_scopes: Vec::new(),
             seen_jump_targets: HashSet::new(),
+            warned_addresses: HashSet::new(),
             line_offsets: Arc::from(Vec::new()),
             input: Arc::from(""),
             output_keys,
@@ -135,6 +153,26 @@ impl State {
             return Some(*entry);
         }
         self.output_keys.get(&key.to_uppercase()).copied()
+    }
+
+    /// Warn (once per run per address) when an assignment targets a known
+    /// but unsupported NC address: the value lands in the symbol table as a
+    /// user variable and the construct it programs is not interpreted.
+    /// Cheap on the hot variable path: unsupported addresses are all two
+    /// characters, so longer keys return before any lookup.
+    pub fn warn_unsupported_address(&mut self, key: &str, line_no: usize) {
+        if key.len() != 2 {
+            return;
+        }
+        let upper = key.to_uppercase();
+        if let Some((name, what)) = UNSUPPORTED_ADDRESSES.iter().find(|(n, _)| *n == upper) {
+            if self.warned_addresses.insert(upper) {
+                emit_warning(format_args!(
+                    "Warning [line {}]: address '{}' - {} - is not interpreted and is treated as a user variable; the motion it programs will be wrong",
+                    line_no, name, what
+                ));
+            }
+        }
     }
 
     /// True if a jump target (canonical key) is defined in any scope on the

@@ -33,6 +33,9 @@ python/**/*.pyc
 # local scratch
 tmp/
 
+# real-world NC files used for manual/local testing, not for CI
+test-data/
+
 # local exploration scripts
 python/example/plot_trace.py
 python/example/smooth_e.py
