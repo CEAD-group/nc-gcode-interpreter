@@ -414,7 +414,7 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
 fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f64, ParsingError> {
     let pairs: Vec<Pair<Rule>> = expression.into_inner().collect();
     let mut pos = 0;
-    let value = evaluate_additive(&pairs, &mut pos, state)?;
+    let value = evaluate_comparison(&pairs, &mut pos, state)?;
     if let Some(pair) = pairs.get(pos) {
         let (line_no, preview) = get_error_context(pair, state);
         return Err(ParsingError::UnexpectedRule {
@@ -426,6 +426,109 @@ fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f64,
         });
     }
     Ok(value)
+}
+
+/// Operator tiers below additive, from the manual's priority table
+/// (4.1.3.3, highest to lowest): ... 4. B_AND, 5. B_XOR, 6. B_OR, 7. AND,
+/// 8. XOR, 9. OR, 11. comparisons. Same-priority operators evaluate left to
+/// right; truth semantics are 0 = FALSE, anything else = TRUE (4.1.3.2).
+/// All tiers produce f64 (BOOL results as 1.0/0.0, like the control's
+/// implicit type conversion).
+fn evaluate_comparison(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
+    let mut lhs = evaluate_or(pairs, pos, state)?;
+    while let Some(pair) = pairs.get(*pos) {
+        if pair.as_rule() != Rule::relational_operator {
+            break;
+        }
+        let operator = pair.clone();
+        *pos += 1;
+        let rhs = evaluate_or(pairs, pos, state)?;
+        lhs = evaluate_relational_operator(operator, lhs, rhs)? as u8 as f64;
+    }
+    Ok(lhs)
+}
+
+/// Validate a bit-by-bit operand: the manual restricts B_AND/B_XOR/B_OR to
+/// CHAR/INT (with automatic conversion); a fractional, non-finite or
+/// out-of-range REAL has no defined bit pattern, and `as i64` would silently
+/// truncate/saturate it - loud error instead.
+fn bit_operand(value: f64, operator: &Pair<Rule>, state: &State) -> Result<i64, ParsingError> {
+    if !value.is_finite() || value.fract() != 0.0 || value.abs() >= 9_007_199_254_740_992.0 {
+        let (line_no, preview) = get_error_context(operator, state);
+        return Err(ParsingError::with_context(
+            line_no,
+            preview,
+            "bit-by-bit operator".to_string(),
+            format!(
+                "{} requires integer operands (manual 4.1.3.2: types CHAR/INT), got {value}",
+                operator.as_str()
+            ),
+        ));
+    }
+    Ok(value as i64)
+}
+
+fn evaluate_or(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
+    let mut lhs = evaluate_xor(pairs, pos, state)?;
+    while matches!(pairs.get(*pos).map(|p| p.as_rule()), Some(Rule::op_or)) {
+        *pos += 1;
+        let rhs = evaluate_xor(pairs, pos, state)?;
+        lhs = ((lhs != 0.0) || (rhs != 0.0)) as u8 as f64;
+    }
+    Ok(lhs)
+}
+
+fn evaluate_xor(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
+    let mut lhs = evaluate_and(pairs, pos, state)?;
+    while matches!(pairs.get(*pos).map(|p| p.as_rule()), Some(Rule::op_xor)) {
+        *pos += 1;
+        let rhs = evaluate_and(pairs, pos, state)?;
+        lhs = ((lhs != 0.0) != (rhs != 0.0)) as u8 as f64;
+    }
+    Ok(lhs)
+}
+
+fn evaluate_and(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
+    let mut lhs = evaluate_b_or(pairs, pos, state)?;
+    while matches!(pairs.get(*pos).map(|p| p.as_rule()), Some(Rule::op_and)) {
+        *pos += 1;
+        let rhs = evaluate_b_or(pairs, pos, state)?;
+        lhs = ((lhs != 0.0) && (rhs != 0.0)) as u8 as f64;
+    }
+    Ok(lhs)
+}
+
+fn evaluate_b_or(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
+    let mut lhs = evaluate_b_xor(pairs, pos, state)?;
+    while matches!(pairs.get(*pos).map(|p| p.as_rule()), Some(Rule::op_b_or)) {
+        let operator = pairs[*pos].clone();
+        *pos += 1;
+        let rhs = evaluate_b_xor(pairs, pos, state)?;
+        lhs = (bit_operand(lhs, &operator, state)? | bit_operand(rhs, &operator, state)?) as f64;
+    }
+    Ok(lhs)
+}
+
+fn evaluate_b_xor(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
+    let mut lhs = evaluate_b_and(pairs, pos, state)?;
+    while matches!(pairs.get(*pos).map(|p| p.as_rule()), Some(Rule::op_b_xor)) {
+        let operator = pairs[*pos].clone();
+        *pos += 1;
+        let rhs = evaluate_b_and(pairs, pos, state)?;
+        lhs = (bit_operand(lhs, &operator, state)? ^ bit_operand(rhs, &operator, state)?) as f64;
+    }
+    Ok(lhs)
+}
+
+fn evaluate_b_and(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
+    let mut lhs = evaluate_additive(pairs, pos, state)?;
+    while matches!(pairs.get(*pos).map(|p| p.as_rule()), Some(Rule::op_b_and)) {
+        let operator = pairs[*pos].clone();
+        *pos += 1;
+        let rhs = evaluate_additive(pairs, pos, state)?;
+        lhs = (bit_operand(lhs, &operator, state)? & bit_operand(rhs, &operator, state)?) as f64;
+    }
+    Ok(lhs)
 }
 
 fn evaluate_additive(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
@@ -1023,16 +1126,13 @@ fn evaluate_condition(condition: Pair<Rule>, state: &mut State) -> Result<bool, 
         "Expected condition pair to be of type Rule::condition"
     );
 
+    // condition = { expression }: comparisons and logic operators are
+    // ordinary expression operators; TRUE is any non-zero value (4.1.3.2).
     let inner_elements: Vec<Pair<Rule>> = condition.into_inner().collect();
     match inner_elements.as_slice() {
         [expression] => {
             let result = evaluate_expression(expression.clone(), state)?;
             Ok(result != 0.0)
-        }
-        [left_expression, operator, right_expression] => {
-            let left_value = evaluate_expression(left_expression.clone(), state)?;
-            let right_value = evaluate_expression(right_expression.clone(), state)?;
-            evaluate_relational_operator(operator.clone(), left_value, right_value)
         }
         _ => Err(ParsingError::InvalidCondition),
     }

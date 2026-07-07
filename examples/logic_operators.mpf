@@ -1,0 +1,29 @@
+; Logic and comparison operators (manual 4.1.3.2 / 4.1.3.3).
+; Conditions combine comparisons with AND / OR / XOR / NOT:
+DEF INT TRACK_X = 1, TRACK_Y = 0
+DEF REAL R_SPEED = 150
+
+G1 X0 Y0 Z0 F1000
+
+IF (TRACK_X == 1 AND TRACK_Y == 1)
+    X1 Y1 ; not reached: only one track is on
+ENDIF
+IF ((TRACK_X == 1) OR (TRACK_Y == 1))
+    X10 Y0
+ENDIF
+IF NOT TRACK_Y
+    X20 Y0
+ENDIF
+IF ((TRACK_X == 1) XOR (TRACK_Y == 1))
+    Z5
+ENDIF
+
+; Comparison results are BOOL values (1.0/0.0) and assignable (manual
+; example R11=R10>=100), usable in arithmetic:
+R11 = R_SPEED >= 100
+Y = 30*R11
+
+; Bit-by-bit operators:
+R12 = 6 B_AND 3
+X = 20 + R12
+M30

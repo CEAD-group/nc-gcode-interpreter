@@ -280,7 +280,8 @@ fn describe_rule(rule: Rule) -> &'static str {
         Rule::frame_op | Rule::frame_kw => "a frame instruction (TRANS/ROT/...)",
         Rule::m_command => "an M code",
         Rule::g_command | Rule::g_command_numbered => "a G code",
-        Rule::op_add | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_int_div | Rule::op_mod | Rule::neg => {
+        Rule::op_add | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_int_div | Rule::op_mod | Rule::neg
+        | Rule::op_and | Rule::op_or | Rule::op_xor | Rule::op_b_and | Rule::op_b_or | Rule::op_b_xor => {
             "an operator"
         }
         Rule::value_array | Rule::value_repeating | Rule::value_none => "SET/REP values",
@@ -523,6 +524,65 @@ mod tests {
 
     fn column_names(table: &Table) -> Vec<&str> {
         table.columns.iter().map(|(n, _)| n.as_str()).collect()
+    }
+
+    /// Logic operators in conditions (manual 4.1.3.2/4.1.3.3): AND/OR/XOR/
+    /// NOT link truth values with comparisons at the manual's priorities;
+    /// `IF (A == 1 AND B == 1)` is the ubiquitous real-world form.
+    #[test]
+    fn logic_operators_in_conditions() {
+        let run = |src: &str| {
+            nc_to_table(src, None, None, None, 10000, false, None, false, None)
+                .expect("program should interpret")
+                .0
+        };
+        // The guarded G1 X10 ran iff an X column exists in the output.
+        let branch_ran = |src: &str| run(src).columns.iter().any(|(n, _)| n == "X");
+        // Parenthesized comparisons joined by AND - both true and one false.
+        assert!(branch_ran("R1=1 R2=1\nIF ((R1 == 1) AND (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"));
+        assert!(!branch_ran("R1=1 R2=0\nIF ((R1 == 1) AND (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"));
+        // OR and NOT.
+        assert!(branch_ran("R1=0 R2=1\nIF ((R1 == 1) OR (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"));
+        assert!(branch_ran("R1=0\nIF NOT R1\nG1 X10 F100\nENDIF\nM30\n"));
+        // XOR.
+        assert!(!branch_ran("R1=1 R2=1\nIF ((R1==1) XOR (R2==1))\nG1 X10 F100\nENDIF\nM30\n"));
+        assert!(branch_ran("R1=0 R2=1\nIF ((R1==1) XOR (R2==1))\nG1 X10 F100\nENDIF\nM30\n"));
+    }
+
+    /// The manual's exact priority table (4.1.3.3): AND (7) binds TIGHTER
+    /// than comparisons (11), so `A == 1 AND B == 1` groups as
+    /// `(A == (1 AND B)) == 1` - the control's actual (surprising) grouping,
+    /// reproduced faithfully rather than the intuitive one.
+    #[test]
+    fn operator_priorities_match_the_manual() {
+        let value_of_r9 = |src: &str| {
+            let (_, state) = nc_to_table(src, None, None, None, 10000, false, None, false, None)
+                .expect("program should interpret");
+            state.symbol_table["R9"]
+        };
+        // A=0, B=0: 1 AND 0 = 0; 0 == 0 = TRUE(1); 1 == 1 = TRUE.
+        assert_eq!(value_of_r9("R1=0 R2=0\nR9 = R1 == 1 AND R2 == 1\n"), 1.0);
+        // Comparison results are assignable BOOL->REAL (manual example
+        // R11=R10>=100).
+        assert_eq!(value_of_r9("R10=150\nR9 = R10 >= 100\n"), 1.0);
+        assert_eq!(value_of_r9("R10=50\nR9 = R10 >= 100\n"), 0.0);
+        // Bit-by-bit operators, tier 4-6: B_AND above B_XOR above B_OR.
+        assert_eq!(value_of_r9("R9 = 6 B_AND 3\n"), 2.0);
+        assert_eq!(value_of_r9("R9 = 6 B_XOR 3\n"), 5.0);
+        assert_eq!(value_of_r9("R9 = 6 B_OR 3\n"), 7.0);
+        // AND has higher priority than OR: 1 OR (0 AND 0) = 1.
+        assert_eq!(value_of_r9("R9 = 1 OR 0 AND 0\n"), 1.0);
+        // Word boundaries: ANDGATE / ORIGIN / DIVISOR / MODAL are variables,
+        // not operators followed by trailing names.
+        assert_eq!(value_of_r9("ANDGATE=3 ORIGIN=4\nR9 = ANDGATE + ORIGIN\n"), 7.0);
+        assert_eq!(value_of_r9("DIVISOR=2 MODAL=3\nR9 = DIVISOR * MODAL\n"), 6.0);
+        // DIV/MOD still work word-bounded (and now case-insensitively).
+        assert_eq!(value_of_r9("R9 = 7 DIV 2\n"), 3.0);
+        assert_eq!(value_of_r9("R9 = 7 mod 2\n"), 1.0);
+        // Bit-by-bit operators reject non-integer operands loudly instead of
+        // silently truncating (manual 4.1.3.2: CHAR/INT only).
+        let err = nc_to_table("R9 = 6.5 B_AND 3\n", None, None, None, 10000, false, None, false, None).unwrap_err();
+        assert!(format!("{err}").contains("integer operands"), "got: {err}");
     }
 
     /// DEF STRING[n] declares string variables (manual 1.3: STRING is a
