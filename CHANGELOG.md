@@ -6,6 +6,20 @@ released to PyPI.
 
 ## [v0.2.0] - 2026-07-07
 
+### Changed
+
+- Rust-side polars is gone. The Table -> Python DataFrame handoff no longer
+  builds a polars DataFrame in Rust (via `pyo3-polars`); it builds an Arrow
+  record batch with the minimal `arrow-array`/`arrow-schema`/`arrow-data`
+  crates and hands it to Python zero-copy through the Arrow PyCapsule
+  interface (`__arrow_c_array__`), where `pl.DataFrame(...)` wraps it. The
+  Python API is unchanged (still returns `polars.DataFrame`), needs no
+  `pyarrow`, and performance is unchanged. This drops ~60 crates from the
+  `python`-feature build (127 -> 64), cutting a clean release build ~4x
+  (83s -> 21s), and bumps PyO3 0.28 -> 0.29 (resolving the RUSTSEC pyo3
+  advisories). Release artifacts are now stripped: the shipped wheel
+  extension drops from ~17 MB to ~1.5 MB.
+
 ### Added
 
 - `dwell` output column: F/S on a `G4` block is the dwell time (seconds /

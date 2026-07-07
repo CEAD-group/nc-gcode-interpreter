@@ -20,22 +20,43 @@ clap = { version = "4.6", features = ["derive"] }
 rayon = "1.10"
 
 [dependencies.pyo3]
-version = "0.28"
+version = "0.29"
 optional = true
 
-# polars + pyo3-polars are pulled in ONLY under the `python` feature so the
-# pure-Rust lib/CLI (default features, used by mill-sim + the CLI) stay
-# polars-free. `default-features = false` keeps the polars footprint to just the
-# dtypes the Table -> DataFrame conversion needs (Int64/Float64/String/List).
-[dependencies.polars]
-version = "0.54"
+# The Table -> Python handoff is a zero-copy Arrow C array: we build a
+# RecordBatch with the minimal arrow-rs crates (arrow-array with just the `ffi`
+# feature - NOT the `arrow` facade, its compute/IPC kernels, or chrono/pyarrow),
+# convert it to FFI structs with `arrow_array::ffi::to_ffi`, and expose them
+# through the Arrow PyCapsule interface (`__arrow_c_array__`) ourselves - no
+# pyo3-arrow, so none of numpy/chrono-tz/comfy_table come along. The Python side
+# turns the capsule into a polars DataFrame with `pl.DataFrame(...)` (no pyarrow).
+# Pulled in ONLY under the `python` feature, so the pure-Rust lib/CLI (used by
+# mill-sim + the CLI) stay Arrow-free.
+[dependencies.arrow-array]
+version = "59"
+optional = true
+default-features = false
+features = ["ffi"]
+
+[dependencies.arrow-schema]
+version = "59"
 optional = true
 default-features = false
 
-[dependencies.pyo3-polars]
-version = "0.27"
+# Already pulled transitively by arrow-array/ffi; named directly only so the
+# `ArrayData` handed to Python has a public type path.
+[dependencies.arrow-data]
+version = "59"
 optional = true
+default-features = false
 
 [features]
 default = []
-python = ["pyo3", "polars", "pyo3-polars"]
+python = ["pyo3", "arrow-array", "arrow-schema", "arrow-data"]
+
+# Strip symbols from release artifacts: the wheel/CLI shipped ~16.5 MB of
+# unstripped debug/symbol tables; stripping brings the extension to ~12.8 MB
+# with no runtime effect. (Removing rust-polars cut compile time ~4x but not
+# binary size - the linker already dead-strips the unused polars code.)
+[profile.release]
+strip = true

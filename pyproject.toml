@@ -19,7 +19,9 @@ classifiers = [
 ]
 dependencies = [
     "maturin>=1.7.4",
-    "polars[pyarrow]>=1.9.0"
+    # >= 1.9 covers the Arrow PyCapsule interface (>= 1.3) the interpreter uses
+    # to receive record batches from Rust; no pyarrow extra needed.
+    "polars>=1.9.0"
 ]
 
 [project.optional-dependencies]

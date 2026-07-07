@@ -124,11 +124,12 @@ def nc_to_dataframe(
         initial_state = initial_state.read()
 
     # The whole table is the concatenation of the batch stream: the interpreter
-    # runs on a worker thread, building columnar batches (each a real
-    # pl.DataFrame via pyo3-polars, no Python-list materialization) that this
-    # thread concatenates. Streaming the batches keeps only one batch of
-    # intermediate rows alive at a time - far less peak memory than collecting
-    # all rows up front - and overlaps interpretation with DataFrame assembly.
+    # runs on a worker thread, building columnar Arrow batches (each handed over
+    # zero-copy through the Arrow PyCapsule interface, no Python-list
+    # materialization) that this thread wraps with pl.DataFrame and concatenates.
+    # Streaming the batches keeps only one batch of intermediate rows alive at a
+    # time - far less peak memory than collecting all rows up front - and
+    # overlaps interpretation with DataFrame assembly.
     it = _nc_to_batches(
         program,
         _COLLECT_BATCH_SIZE,
@@ -142,7 +143,9 @@ def nc_to_dataframe(
         input_is_path,
         flatten_tolerance,
     )
-    frames: list[pl.DataFrame] = list(it)
+    # pl.DataFrame wraps each Arrow record batch via __arrow_c_array__ (polars
+    # >= 1.3), no pyarrow needed. Exhaust the iterator before reading .state.
+    frames: list[pl.DataFrame] = [pl.DataFrame(batch) for batch in it]
     state = it.state
     if not frames:
         # A program with no output rows (e.g. only variable assignments) yields
@@ -448,12 +451,13 @@ def nc_to_rows(
 class _BatchIterator:
     """Iterator of polars DataFrames returned by :func:`nc_to_batches`.
 
-    Wraps the Rust batch iterator, which yields each batch as a real
-    :class:`polars.DataFrame` built in Rust and transferred via pyo3-polars
-    (the Arrow C data interface) - no Python list of primitives is materialized.
-    After exhaustion its ``state`` attribute holds the final interpreter state
-    (axes, symbol_table, translation), like the iterator returned by
-    :func:`nc_to_rows`.
+    Wraps the Rust batch iterator, which yields each batch as an Arrow record
+    batch built column-wise in Rust and handed over the Arrow PyCapsule
+    interface (``__arrow_c_array__``, via pyo3-arrow) - a zero-copy transfer
+    with no Python list of primitives materialized. ``pl.DataFrame`` wraps that
+    capsule directly (polars >= 1.3), so no ``pyarrow`` is involved. After
+    exhaustion its ``state`` attribute holds the final interpreter state (axes,
+    symbol_table, translation), like the iterator returned by :func:`nc_to_rows`.
     """
 
     def __init__(self, inner: Any) -> None:
@@ -463,7 +467,7 @@ class _BatchIterator:
         return self
 
     def __next__(self) -> pl.DataFrame:
-        return next(self._inner)
+        return pl.DataFrame(next(self._inner))
 
     @property
     def state(self) -> dict | None:
