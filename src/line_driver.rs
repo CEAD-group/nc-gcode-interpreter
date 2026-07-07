@@ -439,7 +439,7 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                         Some(local) => local + value,
                         None => {
                             crate::state::emit_warning(format_args!(
-                                "Warning: The axis '{}' is incremented before a fixed value is set, the G-code behavior may be indeterminate.",
+                                "Warning: axis '{}' is incremented with IC() before any absolute position was set; assuming it starts at 0 (a real control would start from the actual axis position).",
                                 name
                             ));
                             value
