@@ -75,6 +75,22 @@ released to PyPI.
 - Parsing: leading-underscore identifiers (`_WITH_M0`), assignment to
   `$AC_*` system variables (`$AC_TIMER[1] = 0`), and the `NOT` logical
   operator (#37)
+- `DEF STRING[n]` string-variable declarations and quoted-string
+  assignments; strings stay out of the numeric pipeline (a string in an
+  expression, or a type mismatch, is a hard error, never a silent 0.0).
+  String *processing* (`SPRINT`/`INDEX`/`<<`) remains out of scope and
+  fails loudly (#40)
+- Logic, comparison and bit operators in expressions (`AND`/`OR`/`XOR`,
+  `B_AND`/`B_OR`/`B_XOR`, `==`/`<>`/`<`/`>`/`<=`/`>=`) at the manual's
+  priorities, so conditions like `IF (A == 1 AND B == 1)` work and
+  comparison results are assignable (`R11 = R10 >= 100`) (#41)
+- `$AA_IW[<axis>]` / `$AA_IM[<axis>]` read the interpreted actual work /
+  machine position of an axis, so layer loops
+  (`REPEAT ... UNTIL $AA_IW[Z] > H`) terminate; reading before the axis is
+  positioned errors loudly and the variables are read-only (#42)
+- `nc-view` prints a corrected retry command on the classic new-machine
+  failures (missing `--axis-index-map`, undefined machine-parameter
+  variables) instead of a bare traceback
 - `docs/sinumerik-execution-model.md`: how a real control executes NC code
   versus this interpreter, and why (#30)
 
@@ -114,6 +130,14 @@ released to PyPI.
 
 ### Fixed
 
+- The NC language is case-insensitive (manual 3.3.2): lowercase axis
+  words (`g1 x0 y0`) are axis moves rather than silently-dropped subprogram
+  calls, G/M values are normalized to uppercase, and user-variable
+  identifiers fold case (a program that declares `lAYER_HEIGHT` but assigns
+  `LAYER_HEIGHT` is one variable, not two) (#43)
+- The IC-before-position warning now states what actually happens ("axis
+  incremented with `IC()` before any absolute position was set; assuming it
+  starts at 0") instead of the vague "behavior may be indeterminate"
 - Expression evaluation: correct operator precedence (`2+3*4` is now 14,
   not 20), degree-based trig per the manual, corrected `ATAN2` argument
   order, and `DIV` by zero errors instead of panicking (#19)
