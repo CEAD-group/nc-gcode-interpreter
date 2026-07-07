@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::io::{self};
 
 mod errors;
+mod flatten;
 mod interpret_rules;
 mod interpreter;
 mod modal_groups;
@@ -83,6 +84,14 @@ fn main() -> io::Result<()> {
                 .value_parser(clap::value_parser!(String)),
         )
         .arg(
+            Arg::new("flatten_tolerance")
+                .long("flatten-tolerance")
+                .value_name("TOLERANCE")
+                .help("Flatten arcs (G2/G3) and splines (ASPLINE/BSPLINE/CSPLINE) into G1 moves, keeping the polyline within TOLERANCE (max deviation, in path units) of the true curve")
+                .num_args(1)
+                .value_parser(clap::value_parser!(f64)),
+        )
+        .arg(
             Arg::new("allow_undefined_variables")
                 .long("allow-undefined-variables")
                 .help("Allow undefined variables in the input file (this will initialize these variables as 0.0), default is false")
@@ -136,7 +145,8 @@ fn main() -> io::Result<()> {
         })?;
         
     let allow_undefined_variables = matches.get_flag("allow_undefined_variables");
-    
+    let flatten_tolerance = matches.get_one::<f64>("flatten_tolerance").copied();
+
     match nc_to_table(
         &input,
         initial_state.as_deref(),
@@ -146,6 +156,7 @@ fn main() -> io::Result<()> {
         disable_forward_fill,
         axis_index_map, 
         allow_undefined_variables,
+        flatten_tolerance,
     ) {
         Ok((table, _state)) => {
             let mut output_path = PathBuf::from(input_path.clone());

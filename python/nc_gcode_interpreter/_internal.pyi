@@ -16,6 +16,7 @@ def nc_to_rows(
     axis_index_map: Optional[Dict[str, int]] = None,
     allow_undefined_variables: bool = False,
     input_is_path: bool = False,
+    flatten_tolerance: Optional[float] = None,
 ) -> Iterator[Tuple[Any, ...]]:
     """Interpret an NC program lazily into ``(line_no, row[, variables])`` tuples."""
     ...
@@ -31,6 +32,7 @@ def nc_to_batches(
     axis_index_map: Optional[Dict[str, int]] = None,
     allow_undefined_variables: bool = False,
     input_is_path: bool = False,
+    flatten_tolerance: Optional[float] = None,
 ) -> Any:
     """Interpret an NC program into an iterator of columnar polars DataFrames."""
     ...

@@ -215,6 +215,13 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
             interpret_variable(inner_pair, state).and_then(|key| {
                 if let Some(value) = state.symbol_table.get(&key).cloned() {
                     Ok(value)
+                } else if state.string_table.contains_key(&key) {
+                    Err(ParsingError::with_context(
+                        line_no,
+                        preview.clone(),
+                        "expression evaluation".to_string(),
+                        format!("'{key}' is a STRING variable; string values cannot be used in numeric expressions (string expressions are not supported)"),
+                    ))
                 } else if state.allow_undefined_variables {
                     crate::state::emit_warning(format_args!("Warning: Variable '{}' is undefined, initializing to 0.0", key));
                     state.symbol_table.insert(key, 0.0);
@@ -638,8 +645,11 @@ fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> R
 /// alarm 12470 "undefined G function" on a real control.
 fn interpret_g_command(g_command: Pair<Rule>, state: &State) -> Result<(&'static str, String), ParsingError> {
     let command_str = g_command.as_str().trim().to_string();
+    // Store uppercase: the language is case-insensitive (g2 IS G2), and
+    // source case leaking into the output breaks downstream comparisons -
+    // worst case the flattener seeing 'g18' would arc in the wrong plane.
     match crate::modal_groups::classify_g_command(&command_str.to_uppercase()) {
-        Some((group, _modal)) => Ok((group, command_str)),
+        Some((group, _modal)) => Ok((group, command_str.to_uppercase())),
         None => {
             let (line_no, preview) = get_error_context(&g_command, state);
             Err(ParsingError::UnknownGCommand {
@@ -656,7 +666,8 @@ fn interpret_m_command(m_command: Pair<Rule>) -> (String, String) {
 
     // Initially, set the command string to the entire M command (e.g., "M3")
     // the parser should ommit trailing spaces, however, if there are any, remove them
-    let command_str = m_command.as_str().trim_end().to_string();
+    // (uppercased: the language is case-insensitive, m30 IS M30)
+    let command_str = m_command.as_str().trim_end().to_uppercase();
 
     // Return the tuple with the rule name as the column header and the specific M command as the value
     ("M".to_string(), command_str)
@@ -720,7 +731,11 @@ fn normalize_reserved_case(key: String, state: &State) -> String {
     }
 }
 
-fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(String, f64), ParsingError> {
+/// Interpret one assignment. Returns the target key and `Some(value)` for a
+/// numeric assignment, or `None` when the RHS was a quoted string (stored in
+/// `state.string_table`; strings never reach the numeric pipeline).
+fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(String, Option<f64>), ParsingError> {
+    let (element_line_no, element_preview) = get_error_context(&element, state);
     let mut inner_pairs = element.into_inner();
 
     let variable_pair = inner_pairs
@@ -731,11 +746,35 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
         .next()
         .ok_or_else(|| ParsingError::InvalidElementCount { expected: 2, actual: 1 })?;
 
+    if expression_pair.as_rule() == Rule::string_value {
+        let key = normalize_reserved_case(interpret_variable(variable_pair.clone(), state)?, state);
+        if state.is_axis(&key) || state.is_block_address(&key) {
+            return Err(annotate_error(
+                &expression_pair,
+                "a numeric value",
+                format!("cannot assign a string to '{key}'"),
+                state,
+            ));
+        }
+        if state.symbol_table.contains_key(&key) {
+            return Err(annotate_error(
+                &expression_pair,
+                "a numeric value",
+                format!("'{key}' is a numeric variable; it cannot be assigned a string"),
+                state,
+            ));
+        }
+        let text = expression_pair.into_inner().next().map(|s| s.as_str().to_string()).unwrap_or_default();
+        state.string_table.insert(key.clone(), text);
+        return Ok((key, None));
+    }
+
     // All axis values are now stored as LOCAL coordinates.
     // Translation is applied at output time, not storage time.
     let (key, local_value) = match (variable_pair.as_rule(), expression_pair.as_rule()) {
         (Rule::variable_single_char, Rule::value) => {
-            let key = variable_pair.as_str().to_string();
+            // Uppercase: the rule matches case-insensitively (x100 == X100).
+            let key = variable_pair.as_str().to_uppercase();
             let value = expression_pair.as_str().parse::<f64>().map_err(|_| {
                 annotate_error(
                     &expression_pair,
@@ -777,11 +816,20 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
     } else if state.is_block_address(&key) {
         // Block addresses (e.g. spline PW/SD/PL) only appear in the output row;
         // they are neither axes nor user variables, so nothing is stored.
+    } else if state.string_table.contains_key(&key) {
+        // Keep every name in exactly one type: a STRING variable must not
+        // silently become numeric (a real control raises a type error).
+        return Err(ParsingError::with_context(
+            element_line_no,
+            element_preview,
+            "assignment".to_string(),
+            format!("'{key}' is a STRING variable; it cannot be assigned a number"),
+        ));
     } else {
         state.symbol_table.insert(key.clone(), local_value);
     }
 
-    Ok((key, local_value))
+    Ok((key, Some(local_value)))
 }
 fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) -> Result<f64, ParsingError> {
     // axis_increment = { "IC" ~ "(" ~ expression ~ ")" }
@@ -990,16 +1038,42 @@ fn interpret_identifier(pair: Pair<Rule>) -> Result<String, ParsingError> {
 }
 fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
     let pairs = element.into_inner();
+    // Whether this DEF declares STRING[n] variables (the data_type pair
+    // precedes the declared names in the grammar).
+    let mut is_string = false;
     for pair in pairs {
         match pair.as_rule() {
             Rule::assignment => {
+                let (line_no, preview) = get_error_context(&pair, state);
                 let res = interpret_assignment(pair, state)?;
                 if state.is_axis(res.0.as_str()) {
                     return Err(ParsingError::AxisUsedAsVariable { name: res.0 });
                 } else if state.is_block_address(res.0.as_str()) {
                     return Err(ParsingError::ReservedNameUsedAsVariable { name: res.0 });
                 }
-                output.record_variable_change(&res.0, res.1);
+                match res.1 {
+                    Some(value) => {
+                        if is_string {
+                            return Err(ParsingError::with_context(
+                                line_no,
+                                preview,
+                                "interpret_definition".to_string(),
+                                format!("DEF STRING variable '{}' initialized with a number", res.0),
+                            ));
+                        }
+                        output.record_variable_change(&res.0, value);
+                    }
+                    None => {
+                        if !is_string {
+                            return Err(ParsingError::with_context(
+                                line_no,
+                                preview,
+                                "interpret_definition".to_string(),
+                                format!("numeric variable '{}' initialized with a string (declare it DEF STRING[n])", res.0),
+                            ));
+                        }
+                    }
+                }
             }
             Rule::assignment_multi => {
                 for (key, value) in interpret_assignment_multi(pair, state)? {
@@ -1015,8 +1089,12 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
                 } else if state.is_block_address(&key) {
                     return Err(ParsingError::ReservedNameUsedAsVariable { name: key });
                 }
-                state.symbol_table.insert(key.clone(), 0.0);
-                output.record_variable_change(&key, 0.0);
+                if is_string {
+                    state.string_table.insert(key.clone(), String::new());
+                } else {
+                    state.symbol_table.insert(key.clone(), 0.0);
+                    output.record_variable_change(&key, 0.0);
+                }
             }
             Rule::variable_array => {
                 let keys = interpret_variable_array(pair, state)?;
@@ -1026,7 +1104,9 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
                 }
             }
             Rule::data_type => {
-                // Ignore the type definition, as we are treating all variables as f64
+                // Numeric types (INT/REAL/BOOL) are all treated as f64;
+                // STRING[n] routes the declared names to the string table.
+                is_string = pair.as_str().to_uppercase().starts_with("STRING");
             }
             _ => Err(ParsingError::UnexpectedRule {
                 rule: pair.as_rule(),
@@ -1224,7 +1304,16 @@ fn interpret_statement_for(
 
     // Parse and execute the assignment statement
     let assignment = pairs.next().expect("Expected an assignment, got none");
+    let (assign_line_no, assign_preview) = get_error_context(&assignment, state);
     let (variable_name, initial_value) = interpret_assignment(assignment, state)?;
+    let Some(initial_value) = initial_value else {
+        return Err(ParsingError::with_context(
+            assign_line_no,
+            assign_preview,
+            "FOR statement".to_string(),
+            format!("FOR counter '{variable_name}' cannot be initialized with a string"),
+        ));
+    };
     output.record_variable_change(&variable_name, initial_value);
 
     // Evaluate the TO expression to determine the loop's end value
@@ -1478,6 +1567,9 @@ fn interpret_control(
 }
 pub(crate) fn insert_m_key(last: &mut crate::output::CellMap, value: &str, line_no: usize, preview: String) -> Result<(), ParsingError> {
     let m_key = "M";
+    // Uppercase: the language is case-insensitive (m30 IS M30); source case
+    // must not leak into the output values.
+    let value = value.to_uppercase();
     for _i in 1..=5 {
         if let Some(existing_value) = last.get_mut(m_key) {
             // If the key already exists and is a list, append the new value
@@ -1571,8 +1663,8 @@ fn interpret_statement(
                     if let Some((group, _modal)) = crate::modal_groups::classify_g_command(&name.to_uppercase()) {
                         // `value` may carry trailing whitespace from the
                         // backtracked optional argument list; store the
-                        // trimmed word like the g_command path does.
-                        last.insert(group, Value::Str(name.to_string()));
+                        // trimmed word uppercased like the g_command path.
+                        last.insert(group, Value::Str(name.to_uppercase()));
                         continue;
                     }
                     // A parenless word like Y2O or X10Y20 is far more likely
@@ -1610,7 +1702,11 @@ fn interpret_statement(
             // axis_word is the hoisted fast-path form of assignment's first
             // alternative; both carry (variable_single_char, value) inners.
             Rule::assignment | Rule::axis_word => {
+                let line_no = statement.line_col().0;
                 let (key, local_value) = interpret_assignment(statement, state)?;
+                // A string assignment is fully handled in the state (string
+                // table); nothing lands in the output row.
+                let Some(local_value) = local_value else { continue };
                 match state.resolve_output_key(&key) {
                     Some((ColKind::Axis, skey)) => {
                         // State keeps local coordinates; the output row gets the machine
@@ -1622,6 +1718,7 @@ fn interpret_statement(
                         last.insert(skey, Value::Float(local_value));
                     }
                     None => {
+                        state.warn_unsupported_address(&key, line_no);
                         output.record_variable_change(&key, local_value);
                     }
                 }
@@ -1650,7 +1747,17 @@ fn frame_assignments(
     // mutates it as a side effect and frame instructions must not move axes.
     let saved_axes = state.axes.clone();
     for pair in pairs {
+        let (pair_line_no, pair_preview) = get_error_context(&pair, state);
         let (key, value) = interpret_assignment(pair, state)?;
+        let Some(value) = value else {
+            state.axes = saved_axes;
+            return Err(ParsingError::with_context(
+                pair_line_no,
+                pair_preview,
+                "frame instruction".to_string(),
+                format!("frame instruction cannot assign a string to '{key}'"),
+            ));
+        };
         if !state.is_axis(&key) {
             state.axes = saved_axes;
             return Err(ParsingError::UnexpectedAxis {
