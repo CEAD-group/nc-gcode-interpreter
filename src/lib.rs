@@ -19,9 +19,40 @@ mod python_bindings {
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyList};
     use pyo3::wrap_pyfunction;
-    use pyo3_arrow::PyRecordBatch;
+    use pyo3::types::PyCapsule;
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    /// One output batch as an Arrow struct array, exported to Python through the
+    /// Arrow PyCapsule interface. `pl.DataFrame(obj)` (polars >= 1.3) reads the
+    /// `__arrow_c_array__` capsules zero-copy - no `pyarrow`, and no `pyo3-arrow`
+    /// (which would drag in numpy/chrono-tz/comfy_table). The struct array's
+    /// fields are the table columns; `arrow_array::ffi::to_ffi` produces the two
+    /// C structs and the capsule destructors free them if the consumer did not.
+    #[pyclass]
+    struct ArrowBatch {
+        data: arrow_data::ArrayData,
+    }
+
+    #[pymethods]
+    impl ArrowBatch {
+        fn __arrow_c_array__<'py>(
+            &self,
+            py: Python<'py>,
+            _requested_schema: Option<Bound<'py, PyAny>>,
+        ) -> PyResult<(Bound<'py, PyCapsule>, Bound<'py, PyCapsule>)> {
+            let (array, schema) = arrow_array::ffi::to_ffi(&self.data)
+                .map_err(|e| PyErr::new::<PyValueError, _>(format!("Arrow FFI export failed: {}", e)))?;
+            // Capsule names are fixed by the Arrow C data interface; the boxed
+            // FFI struct's Drop runs the Arrow release callback when the consumer
+            // has not moved it out.
+            let schema_capsule =
+                PyCapsule::new_with_value(py, schema, c"arrow_schema")?;
+            let array_capsule =
+                PyCapsule::new_with_value(py, array, c"arrow_array")?;
+            Ok((schema_capsule, array_capsule))
+        }
+    }
     use std::sync::{mpsc, Mutex};
 
     use crate::interpreter::{nc_to_batch_stream, nc_to_row_stream};
@@ -34,7 +65,7 @@ mod python_bindings {
     /// `Vec<Option<i64>>` -> Int64, `Vec<Option<String>>` -> Utf8, list-of-strings
     /// -> `List(Utf8)`) - a bulk copy into an Arrow buffer with a validity bitmap,
     /// never a per-element Python object. The batch is handed to Python by
-    /// [`table_to_pyrecordbatch`] as a zero-copy Arrow C-stream (PyCapsule); the
+    /// [`table_to_arrow_batch`] as a zero-copy Arrow C-stream (PyCapsule); the
     /// Python side wraps it with `pl.DataFrame(...)`. Every field is nullable so
     /// batches with different null patterns keep one schema.
     fn table_to_record_batch(table: Table) -> PyResult<arrow_array::RecordBatch> {
@@ -87,14 +118,17 @@ mod python_bindings {
             .map_err(|e| PyErr::new::<PyValueError, _>(format!("failed to build RecordBatch: {}", e)))
     }
 
-    /// [`table_to_record_batch`] wrapped as a [`PyRecordBatch`], which Python
-    /// receives through the Arrow PyCapsule interface (`__arrow_c_array__`) - a
-    /// zero-copy handoff the Python side turns into a `polars.DataFrame` with
-    /// `pl.DataFrame(...)`, needing neither `pyarrow` nor a matching polars
-    /// version. Shared by `nc_to_dataframe` (via the batch concat) and
+    /// [`table_to_record_batch`] as an [`ArrowBatch`] the Python side receives
+    /// through the Arrow PyCapsule interface (`__arrow_c_array__`) - a zero-copy
+    /// handoff turned into a `polars.DataFrame` with `pl.DataFrame(...)`, needing
+    /// neither `pyarrow` nor a matching polars version. A `RecordBatch` is a
+    /// struct array; converting once here means each export is a cheap
+    /// `to_ffi`. Shared by `nc_to_dataframe` (via the batch concat) and
     /// `NcBatchIterator` (one batch).
-    fn table_to_pyrecordbatch(table: Table) -> PyResult<PyRecordBatch> {
-        Ok(PyRecordBatch::new(table_to_record_batch(table)?))
+    fn table_to_arrow_batch(table: Table) -> PyResult<ArrowBatch> {
+        use arrow_array::Array;
+        let struct_array = arrow_array::StructArray::from(table_to_record_batch(table)?);
+        Ok(ArrowBatch { data: struct_array.into_data() })
     }
 
     /// Spawn the interpreter on a worker thread, pushing finished rows into a
@@ -487,8 +521,8 @@ mod python_bindings {
             match received {
                 Ok(table) => {
                     self.batches = Some(Mutex::new(receiver));
-                    let batch = table_to_pyrecordbatch(table)?;
-                    Ok(Some(batch.into_pyobject(py)?.into_any().unbind()))
+                    let batch = table_to_arrow_batch(table)?;
+                    Ok(Some(Py::new(py, batch)?.into_any()))
                 }
                 // Channel closed: interpretation is done (or failed). Capture
                 // the final state / raise the error.
