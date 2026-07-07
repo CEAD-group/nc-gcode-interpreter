@@ -17,8 +17,7 @@ released to PyPI.
   `pyarrow`, and performance is unchanged. This drops ~60 crates from the
   `python`-feature build (127 -> 64), cutting a clean release build ~4x
   (83s -> 21s), and bumps PyO3 0.28 -> 0.29 (resolving the RUSTSEC pyo3
-  advisories). Release artifacts are now stripped: the shipped wheel
-  extension drops from ~17 MB to ~1.5 MB.
+  advisories).
 
 ### Added
 
