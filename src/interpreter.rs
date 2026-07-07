@@ -61,7 +61,12 @@ fn build_state(
     if let Some(extra_axes) = extra_axes {
         axis_identifiers.extend(extra_axes);
     }
-    state::State::new(axis_identifiers, iteration_limit, axis_index_map, allow_undefined_variables)
+    state::State::new(
+        axis_identifiers,
+        iteration_limit,
+        axis_index_map,
+        allow_undefined_variables,
+    )
 }
 
 /// Install the curve flattener on the output when a tolerance was given
@@ -198,8 +203,7 @@ pub fn nc_to_batch_stream_with_line_numbers(
         let mut discard = OutputRows::collect();
         interpret_file(initial_state, &mut state, &mut discard)?;
     }
-    let mut output =
-        OutputRows::batch_stream_with_line_numbers(sender, batch_size, disable_forward_fill, emit_line_no);
+    let mut output = OutputRows::batch_stream_with_line_numbers(sender, batch_size, disable_forward_fill, emit_line_no);
     install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_file(input, &mut state, &mut output)?;
     output.finish()?;
@@ -249,12 +253,9 @@ fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Re
             message: "No blocks found".to_string(),
         })?;
 
-    let blocks = file
-        .into_inner()
-        .next()
-        .ok_or_else(|| ParsingError::ParseError {
-            message: "No inner blocks found".to_string(),
-        })?;
+    let blocks = file.into_inner().next().ok_or_else(|| ParsingError::ParseError {
+        message: "No inner blocks found".to_string(),
+    })?;
 
     match interpret_blocks(blocks, output, state)? {
         BlockFlow::Continue | BlockFlow::EndProgram => Ok(()),
@@ -330,10 +331,19 @@ fn describe_rule(rule: Rule) -> &'static str {
         Rule::frame_op | Rule::frame_kw => "a frame instruction (TRANS/ROT/...)",
         Rule::m_command => "an M code",
         Rule::g_command | Rule::g_command_numbered => "a G code",
-        Rule::op_add | Rule::op_sub | Rule::op_mul | Rule::op_div | Rule::op_int_div | Rule::op_mod | Rule::neg
-        | Rule::op_and | Rule::op_or | Rule::op_xor | Rule::op_b_and | Rule::op_b_or | Rule::op_b_xor => {
-            "an operator"
-        }
+        Rule::op_add
+        | Rule::op_sub
+        | Rule::op_mul
+        | Rule::op_div
+        | Rule::op_int_div
+        | Rule::op_mod
+        | Rule::neg
+        | Rule::op_and
+        | Rule::op_or
+        | Rule::op_xor
+        | Rule::op_b_and
+        | Rule::op_b_or
+        | Rule::op_b_xor => "an operator",
         Rule::value_array | Rule::value_repeating | Rule::value_none => "SET/REP values",
         Rule::WHITESPACE => "whitespace",
         // Everything not listed is one of the generated G-group rules.
@@ -355,7 +365,10 @@ mod parse_speed {
     struct Lcg(u64);
     impl Lcg {
         fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             self.0 >> 33
         }
         fn coord(&mut self) -> f64 {
@@ -436,7 +449,12 @@ mod parse_speed {
         if let Ok(path) = std::env::var("BENCH_FILE") {
             let input = std::fs::read_to_string(&path).expect("BENCH_FILE must be readable");
             let lines = input.lines().count();
-            println!("input: {} ({} lines, {:.1} MB)", path, lines, input.len() as f64 / 1_048_576.0);
+            println!(
+                "input: {} ({} lines, {:.1} MB)",
+                path,
+                lines,
+                input.len() as f64 / 1_048_576.0
+            );
             let start = Instant::now();
             let pairs = NCParser::parse(Rule::file, &input).expect("BENCH_FILE must parse");
             let parse_time = start.elapsed();
@@ -480,11 +498,7 @@ mod parse_speed {
             Ok("bspline") => "BSPLINE\n".repeat(lines),
             _ => generate_flood(lines),
         };
-        println!(
-            "input: {} lines, {:.1} MB",
-            lines,
-            input.len() as f64 / 1_048_576.0
-        );
+        println!("input: {} lines, {:.1} MB", lines, input.len() as f64 / 1_048_576.0);
 
         let start = Instant::now();
         let pairs = NCParser::parse(Rule::file, &input).expect("benchmark input must parse");
@@ -498,11 +512,7 @@ mod parse_speed {
 
         let start = Instant::now();
         let token_count = pairs.flatten().count();
-        println!(
-            "tree iteration:  {:>8.2?}  ({} pairs)",
-            start.elapsed(),
-            token_count
-        );
+        println!("tree iteration:  {:>8.2?}  ({} pairs)", start.elapsed(), token_count);
 
         let start = Instant::now();
         let (table, _state) =
@@ -530,7 +540,12 @@ mod interpret_speed {
         let path = std::env::var("BENCH_FILE").expect("set BENCH_FILE");
         let input = std::fs::read_to_string(&path).expect("readable");
         let lines = input.lines().count();
-        println!("input: {} ({} lines, {:.1} MB)", path, lines, input.len() as f64 / 1_048_576.0);
+        println!(
+            "input: {} ({} lines, {:.1} MB)",
+            path,
+            lines,
+            input.len() as f64 / 1_048_576.0
+        );
         let extra = Some(vec!["ELX".to_string()]);
         let aim = Some(HashMap::from([("E".to_string(), 4usize), ("ELX".to_string(), 5usize)]));
 
@@ -541,7 +556,11 @@ mod interpret_speed {
         interpret_file(&input, &mut state, &mut output).expect("interpret");
         let rows = output.finish().expect("finish");
         let materialize = start.elapsed();
-        println!("interpret+materialize (collect): {:>8.2?}  ({} rows)", materialize, rows.len());
+        println!(
+            "interpret+materialize (collect): {:>8.2?}  ({} rows)",
+            materialize,
+            rows.len()
+        );
 
         let start = Instant::now();
         let _table = Table::from_rows(&rows, false);
@@ -555,8 +574,8 @@ mod tests {
     use crate::output::Column;
 
     fn interpret(input: &str) -> Table {
-        let (table, _state) = nc_to_table(input, None, None, None, 10000, false, None, false, None)
-            .expect("program should interpret");
+        let (table, _state) =
+            nc_to_table(input, None, None, None, 10000, false, None, false, None).expect("program should interpret");
         table
     }
 
@@ -600,8 +619,7 @@ mod tests {
 
         // WHILE loop: the body (line 3) repeats; line 4 assigns a plain
         // variable and emits no output row; line 6 follows the loop.
-        let table =
-            interpret_with_line_numbers("R1=0\nWHILE R1<2\nX=R1\nR1=R1+1\nENDWHILE\nX9\n");
+        let table = interpret_with_line_numbers("R1=0\nWHILE R1<2\nX=R1\nR1=R1+1\nENDWHILE\nX9\n");
         assert_eq!(ints(&table, "line_no"), &[Some(3), Some(3), Some(6)]);
 
         // GOTO reorders execution: only the source lines that ran appear, in
@@ -633,17 +651,22 @@ mod tests {
     #[test]
     fn actual_position_sysvars_read_axis_state() {
         let run = |src: &str| {
-            nc_to_table(src, None, None, None, 10000, false, None, false, None)
-                .expect("program should interpret")
+            nc_to_table(src, None, None, None, 10000, false, None, false, None).expect("program should interpret")
         };
         // Layer loop: Z climbs 1 mm per pass until above 4.5.
-        let (table, state) = run(
-            "G1 X0 Y0 Z0 F100\nREPEAT\nZ=IC(1)\nUNTIL $AA_IW[Z] > 4.5\nM30\n",
-        );
+        let (table, state) = run("G1 X0 Y0 Z0 F100\nREPEAT\nZ=IC(1)\nUNTIL $AA_IW[Z] > 4.5\nM30\n");
         assert_eq!(state.axes["Z"], 5.0);
         assert_eq!(
             floats(&table, "Z"),
-            &[Some(0.0), Some(1.0), Some(2.0), Some(3.0), Some(4.0), Some(5.0), Some(5.0)]
+            &[
+                Some(0.0),
+                Some(1.0),
+                Some(2.0),
+                Some(3.0),
+                Some(4.0),
+                Some(5.0),
+                Some(5.0)
+            ]
         );
         // IW is the work coordinate, IM includes the active translation.
         let (_, state) = run("TRANS Z10\nG1 Z5 F100\nR1 = $AA_IW[Z]\nR2 = $AA_IM[Z]\nM30\n");
@@ -662,13 +685,33 @@ mod tests {
         let (_, state) = nc_to_table("R1 = $AA_IW[Z]\n", None, None, None, 10000, false, None, true, None)
             .expect("allow_undefined_variables tolerates the early read");
         assert_eq!(state.symbol_table["R1"], 0.0);
-        let err = nc_to_table("G1 Z0 F100\n$AA_IW[Z] = 5\n", None, None, None, 10000, false, None, false, None)
-            .unwrap_err();
+        let err = nc_to_table(
+            "G1 Z0 F100\n$AA_IW[Z] = 5\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            None,
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("read-only"), "got: {err}");
         // The guard is structural, not textual: whitespace inside the
         // subscript must not sneak the assignment past it.
-        let err = nc_to_table("G1 Z0 F100\n$AA_IW[ Z ] = 5\n", None, None, None, 10000, false, None, false, None)
-            .unwrap_err();
+        let err = nc_to_table(
+            "G1 Z0 F100\n$AA_IW[ Z ] = 5\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            None,
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("read-only"), "got: {err}");
     }
 
@@ -685,14 +728,24 @@ mod tests {
         // The guarded G1 X10 ran iff an X column exists in the output.
         let branch_ran = |src: &str| run(src).columns.iter().any(|(n, _)| n == "X");
         // Parenthesized comparisons joined by AND - both true and one false.
-        assert!(branch_ran("R1=1 R2=1\nIF ((R1 == 1) AND (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"));
-        assert!(!branch_ran("R1=1 R2=0\nIF ((R1 == 1) AND (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"));
+        assert!(branch_ran(
+            "R1=1 R2=1\nIF ((R1 == 1) AND (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"
+        ));
+        assert!(!branch_ran(
+            "R1=1 R2=0\nIF ((R1 == 1) AND (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"
+        ));
         // OR and NOT.
-        assert!(branch_ran("R1=0 R2=1\nIF ((R1 == 1) OR (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"));
+        assert!(branch_ran(
+            "R1=0 R2=1\nIF ((R1 == 1) OR (R2 == 1))\nG1 X10 F100\nENDIF\nM30\n"
+        ));
         assert!(branch_ran("R1=0\nIF NOT R1\nG1 X10 F100\nENDIF\nM30\n"));
         // XOR.
-        assert!(!branch_ran("R1=1 R2=1\nIF ((R1==1) XOR (R2==1))\nG1 X10 F100\nENDIF\nM30\n"));
-        assert!(branch_ran("R1=0 R2=1\nIF ((R1==1) XOR (R2==1))\nG1 X10 F100\nENDIF\nM30\n"));
+        assert!(!branch_ran(
+            "R1=1 R2=1\nIF ((R1==1) XOR (R2==1))\nG1 X10 F100\nENDIF\nM30\n"
+        ));
+        assert!(branch_ran(
+            "R1=0 R2=1\nIF ((R1==1) XOR (R2==1))\nG1 X10 F100\nENDIF\nM30\n"
+        ));
     }
 
     /// The manual's exact priority table (4.1.3.3): AND (7) binds TIGHTER
@@ -702,8 +755,8 @@ mod tests {
     #[test]
     fn operator_priorities_match_the_manual() {
         let value_of_r9 = |src: &str| {
-            let (_, state) = nc_to_table(src, None, None, None, 10000, false, None, false, None)
-                .expect("program should interpret");
+            let (_, state) =
+                nc_to_table(src, None, None, None, 10000, false, None, false, None).expect("program should interpret");
             state.symbol_table["R9"]
         };
         // A=0, B=0: 1 AND 0 = 0; 0 == 0 = TRUE(1); 1 == 1 = TRUE.
@@ -850,10 +903,7 @@ mod tests {
             floats(&table, "J"),
             &[None, Some(0.0), None, Some(0.0), Some(-25.0), None]
         );
-        assert_eq!(
-            floats(&table, "K"),
-            &[None, None, None, None, Some(5.0), None]
-        );
+        assert_eq!(floats(&table, "K"), &[None, None, None, None, Some(5.0), None]);
 
         // Axes are still forward-filled; the arc offsets are not.
         assert_eq!(floats(&table, "X").last().unwrap(), &Some(60.0));
@@ -893,10 +943,7 @@ mod tests {
                 other => panic!("column {name} is not a str column: {other:?}"),
             }
         };
-        assert_eq!(
-            strs("gg01_motion"),
-            &[Some("G1".to_string()), Some("G2".to_string())]
-        );
+        assert_eq!(strs("gg01_motion"), &[Some("G1".to_string()), Some("G2".to_string())]);
         assert_eq!(
             strs("gg06_plane_select"),
             &[Some("G17".to_string()), Some("G17".to_string())]

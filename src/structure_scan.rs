@@ -125,9 +125,7 @@ pub fn check_structures(input: &str) -> Result<ProgramShape, ParsingError> {
                             open.closer()
                         ))
                     }
-                    None => {
-                        return error(format!("{} without a preceding {}", word, expected.opener()))
-                    }
+                    None => return error(format!("{} without a preceding {}", word, expected.opener())),
                 }
             }
             _ => {}
@@ -223,16 +221,13 @@ fn contains_goto_word(line: &str) -> bool {
     let mut search_start = 0;
     while let Some(found) = upper[search_start..].find("GOTO") {
         let start = search_start + found;
-        let preceded_ok = start == 0
-            || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_');
+        let preceded_ok = start == 0 || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_');
         let mut end = start + 4;
         // allow the F/B/C/S suffix
         if matches!(bytes.get(end), Some(b'F') | Some(b'B') | Some(b'C') | Some(b'S')) {
             end += 1;
         }
-        let followed_ok = !bytes
-            .get(end)
-            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
+        let followed_ok = !bytes.get(end).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
         if preceded_ok && followed_ok {
             return true;
         }

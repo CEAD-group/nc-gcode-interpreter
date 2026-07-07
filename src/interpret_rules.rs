@@ -140,7 +140,11 @@ pub(crate) fn canonical_jump_target(raw: &str) -> String {
 
 pub(crate) fn canonical_block_number(digits: &str) -> &str {
     let stripped = digits.trim_start_matches('0');
-    if stripped.is_empty() { "0" } else { stripped }
+    if stripped.is_empty() {
+        "0"
+    } else {
+        stripped
+    }
 }
 
 /// Collect the jump targets (labels and block numbers) defined by each block
@@ -227,14 +231,14 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
                     state.symbol_table.insert(key, 0.0);
                     Ok(0.0)
                 } else {
-                    Err(ParsingError::UndefinedVariable { 
+                    Err(ParsingError::UndefinedVariable {
                         line_no,
                         preview,
-                        name: key 
+                        name: key,
                     })
                 }
             })
-        },
+        }
         Rule::variable_array => {
             let (line_no, preview) = get_error_context(&inner_pair, state);
             if let Some(value) = read_actual_position_sysvar(&inner_pair, state)? {
@@ -245,7 +249,10 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
                 if let Some(value) = state.symbol_table.get(key).cloned() {
                     Ok(value)
                 } else if state.allow_undefined_variables {
-                    crate::state::emit_warning(format_args!("Warning: Variable array element '{}' is undefined, initializing to 0.0", key));
+                    crate::state::emit_warning(format_args!(
+                        "Warning: Variable array element '{}' is undefined, initializing to 0.0",
+                        key
+                    ));
                     state.symbol_table.insert(key.clone(), 0.0);
                     Ok(0.0)
                 } else {
@@ -256,7 +263,7 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
                     })
                 }
             })
-        },
+        }
         Rule::expression => evaluate_expression(inner_pair, state),
         Rule::arith_fun => evaluate_arithmetic_function(inner_pair, state),
         _ => {
@@ -274,27 +281,25 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
 fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f64, ParsingError> {
     let (line_no, preview) = get_error_context(&pair, state);
     let mut pairs = pair.into_inner();
-    
+
     // Get function name
-    let func_name = pairs.next()
-        .ok_or_else(|| ParsingError::ParsingContext {
-            line_no,
-            column: None,
-            preview: preview.clone(),
-            context: "function evaluation".to_string(),
-            message: "Missing function name".to_string(),
-        })?;
-    
+    let func_name = pairs.next().ok_or_else(|| ParsingError::ParsingContext {
+        line_no,
+        column: None,
+        preview: preview.clone(),
+        context: "function evaluation".to_string(),
+        message: "Missing function name".to_string(),
+    })?;
+
     // Get arguments pair
-    let args_pair = pairs.next()
-        .ok_or_else(|| ParsingError::ParsingContext {
-            line_no,
-            column: None,
-            preview: preview.clone(),
-            context: "function evaluation".to_string(),
-            message: "Missing function arguments".to_string(),
-        })?;
-    
+    let args_pair = pairs.next().ok_or_else(|| ParsingError::ParsingContext {
+        line_no,
+        column: None,
+        preview: preview.clone(),
+        context: "function evaluation".to_string(),
+        message: "Missing function arguments".to_string(),
+    })?;
+
     // Parse arguments
     let mut args = Vec::new();
     for arg in args_pair.into_inner() {
@@ -325,63 +330,63 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
         "SIN" => {
             check_args(1)?;
             Ok(args[0].to_radians().sin())
-        },
+        }
         "COS" => {
             check_args(1)?;
             Ok(args[0].to_radians().cos())
-        },
+        }
         "TAN" => {
             check_args(1)?;
             Ok(args[0].to_radians().tan())
-        },
+        }
         "ASIN" => {
             check_args(1)?;
             Ok(args[0].asin().to_degrees())
-        },
+        }
         "ACOS" => {
             check_args(1)?;
             Ok(args[0].acos().to_degrees())
-        },
+        }
         "ATAN2" => {
             check_args(2)?;
             // ATAN2(a, b): angle of the vector sum of two perpendicular vectors,
             // in degrees (-180..180]. The angular reference is the SECOND value,
             // so e.g. ATAN2(30.5, 80.1) = 20.8455 (manual 4.1.3.1).
             Ok(args[0].atan2(args[1]).to_degrees())
-        },
+        }
         "SQRT" => {
             check_args(1)?;
             Ok(args[0].sqrt())
-        },
+        }
         "ABS" => {
             check_args(1)?;
             Ok(args[0].abs())
-        },
+        }
         "POT" => {
             check_args(1)?;
             Ok(args[0].powi(2))
-        },
+        }
         "TRUNC" => {
             check_args(1)?;
             Ok(args[0].trunc())
-        },
+        }
         "ROUND" => {
             check_args(1)?;
             Ok(args[0].round())
-        },
+        }
         "ROUNDUP" => {
             // Round up to the next higher integer (manual 4.1.3.5).
             check_args(1)?;
             Ok(args[0].ceil())
-        },
+        }
         "MINVAL" => {
             check_args(2)?;
             Ok(args[0].min(args[1]))
-        },
+        }
         "MAXVAL" => {
             check_args(2)?;
             Ok(args[0].max(args[1]))
-        },
+        }
         "BOUND" => {
             // BOUND(<minimum>, <maximum>, <check value>): the check value
             // bounded to [minimum, maximum] (manual 4.1.1.13).
@@ -397,15 +402,15 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
                 });
             }
             Ok(value.clamp(min, max))
-        },
+        }
         "LN" => {
             check_args(1)?;
             Ok(args[0].ln())
-        },
+        }
         "EXP" => {
             check_args(1)?;
             Ok(args[0].exp())
-        },
+        }
         other => Err(ParsingError::ParsingContext {
             line_no,
             column: None,
@@ -773,7 +778,11 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
                 state,
             ));
         }
-        let text = expression_pair.into_inner().next().map(|s| s.as_str().to_string()).unwrap_or_default();
+        let text = expression_pair
+            .into_inner()
+            .next()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_default();
         state.string_table.insert(key.clone(), text);
         return Ok((key, None));
     }
@@ -824,7 +833,10 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
                 context: "interpret_assignment".to_string(),
                 line_no: expression_pair.line_col().0,
                 preview: state.get_line(expression_pair.line_col().0).unwrap_or("").to_string(),
-                message: format!("Unexpected rule in interpret_assignment: {:?}", expression_pair.as_rule()),
+                message: format!(
+                    "Unexpected rule in interpret_assignment: {:?}",
+                    expression_pair.as_rule()
+                ),
             })
         }
     };
@@ -859,14 +871,20 @@ fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) ->
     // offsets are traversed after a frame change"); machines configured with
     // FALSE traverse the pure increment instead, which is not modeled here.
     let pair_clone = pair.clone();
-    let inner_pair = pair.into_inner().next().expect("Expected an expression inside axis_increment, found none");
+    let inner_pair = pair
+        .into_inner()
+        .next()
+        .expect("Expected an expression inside axis_increment, found none");
     if inner_pair.as_rule() != Rule::expression {
         return Err(ParsingError::UnexpectedRule {
             rule: inner_pair.as_rule(),
             context: "interpret_axis_increment::axis_increment".to_string(),
             line_no: pair_clone.line_col().0,
             preview: state.get_line(pair_clone.line_col().0).unwrap_or("").to_string(),
-            message: format!("Unexpected rule in interpret_axis_increment: {:?}", inner_pair.as_rule()),
+            message: format!(
+                "Unexpected rule in interpret_axis_increment: {:?}",
+                inner_pair.as_rule()
+            ),
         });
     }
     let increment = evaluate_expression(inner_pair, state)?;
@@ -874,7 +892,7 @@ fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) ->
         Some(local_coord) => {
             // Add increment to current local coordinate
             Ok(local_coord + increment)
-        },
+        }
         None => {
             crate::state::emit_warning(format_args!(
                 "Warning: axis '{}' is incremented with IC() before any absolute position was set; assuming it starts at 0 (a real control would start from the actual axis position).",
@@ -886,7 +904,10 @@ fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) ->
 }
 /// Returns each target key with the value assigned to it, or `None` for
 /// keys a gap in the value array left untouched.
-fn interpret_assignment_multi(element: Pair<Rule>, state: &mut State) -> Result<Vec<(String, Option<f64>)>, ParsingError> {
+fn interpret_assignment_multi(
+    element: Pair<Rule>,
+    state: &mut State,
+) -> Result<Vec<(String, Option<f64>)>, ParsingError> {
     // assignment_multi =  { variable_array ~ "=" ~ (value_array | value_repeating) }
     let mut inner_pairs = element.into_inner();
     let variable_pair = inner_pairs
@@ -942,9 +963,14 @@ fn interpret_value_array(pair: Pair<Rule>, state: &mut State) -> Result<Vec<Opti
     Ok(values)
 }
 fn interpret_variable(pair: Pair<Rule>, state: &State) -> Result<String, ParsingError> {
-    let inner = pair.clone().into_inner().next()
-        .ok_or_else(|| annotate_error(&pair, "variable parsing", 
-            "Expected inner pair, found none".to_string(), state))?;
+    let inner = pair.clone().into_inner().next().ok_or_else(|| {
+        annotate_error(
+            &pair,
+            "variable parsing",
+            "Expected inner pair, found none".to_string(),
+            state,
+        )
+    })?;
     match inner.as_rule() {
         // A plain user variable, or a `$`-prefixed system variable such as
         // `$AC_TIMER`. There is no system-variable model, so system variables
@@ -952,8 +978,12 @@ fn interpret_variable(pair: Pair<Rule>, state: &State) -> Result<String, Parsing
         // Uppercased: the language is case-insensitive (manual 3.3.2), so
         // `lAYER_HEIGHT` and `LAYER_HEIGHT` are the same variable.
         Rule::identifier | Rule::nc_variable => Ok(inner.as_str().to_uppercase()),
-        _ => Err(annotate_error(&pair, "variable parsing",
-            format!("Expected identifier, found '{:?}'", inner.as_rule()), state)),
+        _ => Err(annotate_error(
+            &pair,
+            "variable parsing",
+            format!("Expected identifier, found '{:?}'", inner.as_rule()),
+            state,
+        )),
     }
 }
 fn interpret_variable_array(inner: Pair<Rule>, state: &mut State) -> Result<Vec<String>, ParsingError> {
@@ -1068,13 +1098,13 @@ fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f64>, Pa
     let mut indices = Vec::new();
     // Get error context before consuming pair
     let (pair_line_no, pair_preview) = get_error_context(&pair, state);
-    
+
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::expression => {
                 // Try to resolve axis identifier to index if possible
                 let expr_str = inner.as_str().trim().to_string();
-                
+
                 if state.is_axis(&expr_str) {
                     let (line_no, preview) = get_error_context(&inner, state);
                     let index = state.get_axis_index(&expr_str, line_no, &preview)?;
@@ -1110,7 +1140,7 @@ fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f64>, Pa
 fn interpret_identifier(pair: Pair<Rule>) -> Result<String, ParsingError> {
     let line_no = pair.line_col().0;
     let preview = pair.as_str().to_string();
-    
+
     // Accept both plain identifiers and `$`-prefixed system variables (e.g.
     // `$AC_TIMER[1]`); the latter are stored by their full name like ordinary
     // variables, since there is no dedicated system-variable model.
@@ -1160,7 +1190,10 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
                                 line_no,
                                 preview,
                                 "interpret_definition".to_string(),
-                                format!("numeric variable '{}' initialized with a string (declare it DEF STRING[n])", res.0),
+                                format!(
+                                    "numeric variable '{}' initialized with a string (declare it DEF STRING[n])",
+                                    res.0
+                                ),
                             ));
                         }
                     }
@@ -1260,10 +1293,9 @@ fn interpret_statement_if(
     let mut pairs = element.into_inner();
 
     // Match the condition
-    let condition = pairs.next().ok_or_else(|| ParsingError::InvalidElementCount {
-        expected: 1,
-        actual: 0,
-    })?;
+    let condition = pairs
+        .next()
+        .ok_or_else(|| ParsingError::InvalidElementCount { expected: 1, actual: 0 })?;
     if condition.as_rule() != Rule::condition {
         return Err(ParsingError::UnexpectedRule {
             rule: condition.as_rule(),
@@ -1283,10 +1315,9 @@ fn interpret_statement_if(
     }
 
     // Match the true block
-    let true_block = pairs.next().ok_or_else(|| ParsingError::InvalidElementCount {
-        expected: 1,
-        actual: 0,
-    })?;
+    let true_block = pairs
+        .next()
+        .ok_or_else(|| ParsingError::InvalidElementCount { expected: 1, actual: 0 })?;
     if true_block.as_rule() != Rule::blocks {
         return Err(ParsingError::UnexpectedRule {
             rule: true_block.as_rule(),
@@ -1316,10 +1347,7 @@ fn interpret_statement_if(
 
     // Ensure no extra rules are present
     if pairs.next().is_some() {
-        return Err(ParsingError::InvalidElementCount {
-            expected: 3,
-            actual: 4,
-        });
+        return Err(ParsingError::InvalidElementCount { expected: 3, actual: 4 });
     }
 
     // Handle the comment
@@ -1469,7 +1497,10 @@ fn interpret_statement_repeat_until(
                         context: "interpret_statement_repeat_until".to_string(),
                         line_no: first_pair.line_col().0,
                         preview: state.get_line(first_pair.line_col().0).unwrap_or("").to_string(),
-                        message: format!("Unexpected rule in interpret_statement_repeat_until: {:?}", first_pair.as_rule()),
+                        message: format!(
+                            "Unexpected rule in interpret_statement_repeat_until: {:?}",
+                            first_pair.as_rule()
+                        ),
                     });
                 }
             }
@@ -1483,7 +1514,10 @@ fn interpret_statement_repeat_until(
                 context: "interpret_statement_repeat_until".to_string(),
                 line_no: first_pair.line_col().0,
                 preview: state.get_line(first_pair.line_col().0).unwrap_or("").to_string(),
-                message: format!("Unexpected rule in interpret_statement_repeat_until: {:?}", first_pair.as_rule()),
+                message: format!(
+                    "Unexpected rule in interpret_statement_repeat_until: {:?}",
+                    first_pair.as_rule()
+                ),
             });
         }
     }
@@ -1610,11 +1644,7 @@ fn interpret_case(pair: Pair<Rule>, state: &mut State) -> Result<BlockFlow, Pars
     Ok(BlockFlow::Continue)
 }
 
-fn interpret_control(
-    element: Pair<Rule>,
-    output: &mut Output,
-    state: &mut State,
-) -> Result<BlockFlow, ParsingError> {
+fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
     // A control element is a single statement, except for conditional jumps
     // where several may share one block; the first satisfied jump wins.
     for pair in element.into_inner() {
@@ -1657,7 +1687,12 @@ fn interpret_control(
     }
     Ok(BlockFlow::Continue)
 }
-pub(crate) fn insert_m_key(last: &mut crate::output::CellMap, value: &str, line_no: usize, preview: String) -> Result<(), ParsingError> {
+pub(crate) fn insert_m_key(
+    last: &mut crate::output::CellMap,
+    value: &str,
+    line_no: usize,
+    preview: String,
+) -> Result<(), ParsingError> {
     let m_key = "M";
     // Uppercase: the language is case-insensitive (m30 IS M30); source case
     // must not leak into the output values.
@@ -1707,11 +1742,7 @@ pub(crate) fn looks_like_axis_word_typo(name: &str) -> bool {
         && chars[2..].iter().any(|c| c.is_ascii_alphabetic())
 }
 
-fn interpret_statement(
-    element: Pair<Rule>,
-    output: &mut Output,
-    state: &mut State,
-) -> Result<BlockFlow, ParsingError> {
+fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
     // Grammar:
     // statement           =  {
     //     g_command_numbered
@@ -1830,10 +1861,7 @@ fn interpret_statement(
 /// Evaluate the assignments of a frame instruction without moving any axis:
 /// the axis state is saved and restored around parsing, and each assignment
 /// must target a valid axis.
-fn frame_assignments(
-    pairs: Vec<Pair<Rule>>,
-    state: &mut State,
-) -> Result<Vec<(String, f64)>, ParsingError> {
+fn frame_assignments(pairs: Vec<Pair<Rule>>, state: &mut State) -> Result<Vec<(String, f64)>, ParsingError> {
     let mut result = Vec::with_capacity(pairs.len());
     // Save the axis state once for the whole instruction; interpret_assignment
     // mutates it as a side effect and frame instructions must not move axes.
@@ -1935,18 +1963,16 @@ fn interpret_block_number(element: Pair<Rule>, output: &mut Output) {
 }
 fn get_error_context(pair: &Pair<Rule>, state: &State) -> (usize, String) {
     let (line_no, _) = pair.line_col();
-    let preview = state.get_line(line_no).unwrap_or("(could not retrieve line)").to_string();
+    let preview = state
+        .get_line(line_no)
+        .unwrap_or("(could not retrieve line)")
+        .to_string();
     (line_no, preview)
 }
 
 fn annotate_error(pair: &Pair<Rule>, context: &str, message: String, state: &State) -> ParsingError {
     let (line_no, preview) = get_error_context(pair, state);
-    ParsingError::with_context(
-        line_no,
-        preview,
-        context.to_string(),
-        message,
-    )
+    ParsingError::with_context(line_no, preview, context.to_string(), message)
 }
 
 pub(crate) fn interpret_block(
@@ -1977,28 +2003,38 @@ pub(crate) fn interpret_block(
                     Rule::comment => {
                         let last = output.last_mut().expect("Output vector should not be empty");
                         last.insert("comment", Value::Str(item.as_str().to_string()));
-                    },
-                    _ => return Err(annotate_error(&item, "block interpretation",
-                        format!("Unexpected rule: {:?}", item.as_rule()), state)),
+                    }
+                    _ => {
+                        return Err(annotate_error(
+                            &item,
+                            "block interpretation",
+                            format!("Unexpected rule: {:?}", item.as_rule()),
+                            state,
+                        ))
+                    }
                 }
             }
             Ok(flow)
         }
         _ => {
-            return Err(annotate_error(&element, "blocks interpretation",
-                format!("Expected blocks, found {:?}", element.as_rule()), state));
+            return Err(annotate_error(
+                &element,
+                "blocks interpretation",
+                format!("Expected blocks, found {:?}", element.as_rule()),
+                state,
+            ));
         }
     }
 }
 
-pub fn interpret_blocks(
-    blocks: Pair<Rule>,
-    output: &mut Output,
-    state: &mut State,
-) -> Result<BlockFlow, ParsingError> {
+pub fn interpret_blocks(blocks: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
     if blocks.as_rule() != Rule::blocks {
-        return Err(annotate_error(&blocks, "blocks interpretation",
-            format!("Expected blocks, found {:?}", blocks.as_rule()), state));
+        return Err(annotate_error(
+            &blocks,
+            "blocks interpretation",
+            format!("Expected blocks, found {:?}", blocks.as_rule()),
+            state,
+        ));
     }
     let block_pairs: Vec<Pair<Rule>> = blocks.into_inner().collect();
     let targets = scan_jump_targets(&block_pairs);
@@ -2066,7 +2102,10 @@ mod arity_tests {
         // SIN expects 1 argument; feeding it 2 must not index out of bounds.
         let err = run("X=SIN(30, 45)\nM30\n").expect_err("wrong arity must error");
         assert!(err.contains("SIN"), "error should name the offending function: {err}");
-        assert!(err.contains("expects 1 argument"), "error should state the expected arity: {err}");
+        assert!(
+            err.contains("expects 1 argument"),
+            "error should state the expected arity: {err}"
+        );
     }
 
     #[test]
@@ -2081,7 +2120,10 @@ mod arity_tests {
         // ATAN2 expects 2 arguments; feeding it 1 must not index out of bounds.
         let err = run("X=ATAN2(30)\nM30\n").expect_err("wrong arity must error");
         assert!(err.contains("ATAN2"), "error should name the offending function: {err}");
-        assert!(err.contains("expects 2 argument"), "error should state the expected arity: {err}");
+        assert!(
+            err.contains("expects 2 argument"),
+            "error should state the expected arity: {err}"
+        );
     }
 
     #[test]
@@ -2089,7 +2131,10 @@ mod arity_tests {
         // BOUND expects 3 arguments; feeding it 2 must not index out of bounds.
         let err = run("X=BOUND(0, 10)\nM30\n").expect_err("wrong arity must error");
         assert!(err.contains("BOUND"), "error should name the offending function: {err}");
-        assert!(err.contains("expects 3 argument"), "error should state the expected arity: {err}");
+        assert!(
+            err.contains("expects 3 argument"),
+            "error should state the expected arity: {err}"
+        );
     }
 
     #[test]
@@ -2099,4 +2144,3 @@ mod arity_tests {
         run("X=BOUND(0, 10, 5)\nM30\n").expect("correct arity must not error");
     }
 }
-

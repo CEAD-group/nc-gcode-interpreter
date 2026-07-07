@@ -10,11 +10,11 @@ mod errors;
 mod flatten;
 mod interpret_rules;
 mod interpreter;
-mod modal_groups;
 mod line_driver;
+mod modal_groups;
+mod output;
 mod state;
 mod structure_scan;
-mod output;
 mod types;
 
 use interpreter::nc_to_table;
@@ -113,18 +113,16 @@ fn main() -> io::Result<()> {
         .map(|s| s.split(',').map(|axis| axis.trim().to_string()).collect());
 
     // Parse axis_index_map argument if provided
-    let axis_index_map: Option<HashMap<String, usize>> = matches
-        .get_one::<String>("axis_index_map")
-        .map(|s| {
-            s.split(',')
-                .filter_map(|pair| {
-                    let mut parts = pair.split(':');
-                    let key = parts.next()?.trim().to_string();
-                    let value = parts.next()?.trim().parse::<usize>().ok()?;
-                    Some((key, value))
-                })
-                .collect::<HashMap<_, _>>()
-        });
+    let axis_index_map: Option<HashMap<String, usize>> = matches.get_one::<String>("axis_index_map").map(|s| {
+        s.split(',')
+            .filter_map(|pair| {
+                let mut parts = pair.split(':');
+                let key = parts.next()?.trim().to_string();
+                let value = parts.next()?.trim().parse::<usize>().ok()?;
+                Some((key, value))
+            })
+            .collect::<HashMap<_, _>>()
+    });
 
     let iteration_limit = matches.get_one::<usize>("iteration_limit").unwrap();
 
@@ -132,18 +130,13 @@ fn main() -> io::Result<()> {
 
     let input = std::fs::read_to_string(matches.get_one::<String>("input").unwrap())
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error reading input file: {}", e)))?;
-        
+
     let initial_state = matches
         .get_one::<String>("initial_state")
         .map(std::fs::read_to_string)
         .transpose()
-        .map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("Error reading initial state file: {}", e),
-            )
-        })?;
-        
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error reading initial state file: {}", e)))?;
+
     let allow_undefined_variables = matches.get_flag("allow_undefined_variables");
     let flatten_tolerance = matches.get_one::<f64>("flatten_tolerance").copied();
 
@@ -154,7 +147,7 @@ fn main() -> io::Result<()> {
         extra_axes,
         *iteration_limit,
         disable_forward_fill,
-        axis_index_map, 
+        axis_index_map,
         allow_undefined_variables,
         flatten_tolerance,
     ) {

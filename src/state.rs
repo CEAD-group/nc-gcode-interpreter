@@ -87,13 +87,18 @@ pub struct State {
 
 impl State {
     /// Creates a new State with the given axis identifiers and configuration.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `axis_identifiers` - List of valid axis names (e.g., ["X", "Y", "Z", "E"])
     /// * `iteration_limit` - Maximum number of iterations for loops
     /// * `axis_index_map` - Optional mapping of axis names to array indices (e.g., {"E": 4})
-    pub fn new(axis_identifiers: Vec<String>, iteration_limit: usize, axis_index_map: Option<HashMap<String, usize>>, allow_undefined_variables: bool) -> Self {
+    pub fn new(
+        axis_identifiers: Vec<String>,
+        iteration_limit: usize,
+        axis_index_map: Option<HashMap<String, usize>>,
+        allow_undefined_variables: bool,
+    ) -> Self {
         let mut symbols = HashMap::new();
         symbols.insert("TRUE".to_string(), 1.0);
         symbols.insert("FALSE".to_string(), 0.0);
@@ -192,11 +197,7 @@ impl State {
     /// call first materialized a throwaway `String` - a second full copy of the
     /// whole program, a wasted gigabyte on the largest inputs.
     pub fn set_input(&mut self, input: &str) {
-        self.line_offsets = input
-            .match_indices('\n')
-            .map(|(i, _)| i)
-            .collect::<Vec<_>>()
-            .into();
+        self.line_offsets = input.match_indices('\n').map(|(i, _)| i).collect::<Vec<_>>().into();
         self.input = Arc::from(input);
     }
 
@@ -210,10 +211,7 @@ impl State {
         } else {
             self.line_offsets.get(line_no - 2).map(|&i| i + 1)?
         };
-        let end = self.line_offsets
-            .get(line_no - 1)
-            .copied()
-            .unwrap_or(self.input.len());
+        let end = self.line_offsets.get(line_no - 1).copied().unwrap_or(self.input.len());
         Some(&self.input[start..end])
     }
 
@@ -276,13 +274,11 @@ impl State {
     /// Gets the array index for an axis, if a mapping exists
     pub fn get_axis_index(&self, axis: &str, line_no: usize, preview: &str) -> Result<usize, ParsingError> {
         if let Some(map) = &self.axis_index_map {
-            map.get(axis)
-                .copied()
-                .ok_or_else(|| ParsingError::MissingAxisMapping {
-                    line_no,
-                    preview: preview.to_string(),
-                    axis: axis.to_string(),
-                })
+            map.get(axis).copied().ok_or_else(|| ParsingError::MissingAxisMapping {
+                line_no,
+                preview: preview.to_string(),
+                axis: axis.to_string(),
+            })
         } else {
             Err(ParsingError::MissingAxisMapping {
                 line_no,
