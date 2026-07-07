@@ -1,10 +1,11 @@
 //! Plain-Rust columnar output.
 //!
 //! The interpreter used to assemble a polars DataFrame in Rust, which coupled
-//! the crate to a specific polars / pyo3-polars / Python-polars version trio.
-//! Instead, the core now produces this simple `Table`; the Python wrapper
-//! turns it into a polars DataFrame on the Python side, and the CLI writes
-//! CSV directly with the `csv` crate.
+//! the crate to the whole polars query engine. Instead, the core now produces
+//! this simple `Table`; the `python` feature converts it to an Arrow record
+//! batch (arrow-rs) handed to Python zero-copy via `pyo3-arrow`, where the
+//! wrapper turns it into a polars DataFrame, and the CLI writes CSV directly
+//! with the `csv` crate.
 
 use crate::errors::ParsingError;
 use crate::modal_groups::{MODAL_G_GROUPS, NON_MODAL_G_GROUPS};

@@ -20,22 +20,31 @@ clap = { version = "4.6", features = ["derive"] }
 rayon = "1.10"
 
 [dependencies.pyo3]
-version = "0.28"
+version = "0.29"
 optional = true
 
-# polars + pyo3-polars are pulled in ONLY under the `python` feature so the
-# pure-Rust lib/CLI (default features, used by mill-sim + the CLI) stay
-# polars-free. `default-features = false` keeps the polars footprint to just the
-# dtypes the Table -> DataFrame conversion needs (Int64/Float64/String/List).
-[dependencies.polars]
-version = "0.54"
+# The Table -> Python handoff is a zero-copy Arrow C-stream: we build a
+# RecordBatch with the minimal arrow-rs crates (arrow-array + arrow-schema, NOT
+# the `arrow` facade which drags in the compute/IPC/CSV/JSON kernels) and let
+# pyo3-arrow export it as a PyCapsule - replacing the whole polars query engine.
+# The Python side still receives a polars DataFrame via `pl.DataFrame(<capsule>)`
+# with no pyarrow dependency. All three are pulled in ONLY under the `python`
+# feature, so the pure-Rust lib/CLI (used by mill-sim + the CLI) stay Arrow-free.
+[dependencies.arrow-array]
+version = "59"
 optional = true
 default-features = false
 
-[dependencies.pyo3-polars]
-version = "0.27"
+[dependencies.arrow-schema]
+version = "59"
 optional = true
+default-features = false
+
+[dependencies.pyo3-arrow]
+version = "0.19"
+optional = true
+default-features = false
 
 [features]
 default = []
-python = ["pyo3", "polars", "pyo3-polars"]
+python = ["pyo3", "arrow-array", "arrow-schema", "pyo3-arrow"]

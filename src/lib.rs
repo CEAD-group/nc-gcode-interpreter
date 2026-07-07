@@ -19,59 +19,82 @@ mod python_bindings {
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyList};
     use pyo3::wrap_pyfunction;
-    use pyo3_polars::PyDataFrame;
+    use pyo3_arrow::PyRecordBatch;
     use std::collections::HashMap;
+    use std::sync::Arc;
     use std::sync::{mpsc, Mutex};
 
     use crate::interpreter::{nc_to_batch_stream, nc_to_row_stream};
     use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table};
     use crate::types::Value;
 
-    /// Build a polars [`DataFrame`](polars::prelude::DataFrame) directly from one
-    /// output [`Table`], in column order, and hand it across the PyO3 boundary as
-    /// a [`PyDataFrame`]. Each [`Column`] becomes a polars `Series` straight from
-    /// its `Vec` (a `Vec<Option<f64>>` -> Float64, `Vec<Option<i64>>` -> Int64,
-    /// `Vec<Option<String>>` -> String, list-of-strings -> `List(String)`), so no
-    /// Python list of primitives is ever materialized. `pyo3-polars` transfers
-    /// each series over the Arrow C data interface, so the Rust-side polars
-    /// (0.54) and the Python-side polars need not share a version. Shared by
-    /// `nc_to_columns` (whole table) and `NcBatchIterator` (one batch).
-    fn table_to_pydataframe(table: Table) -> PyResult<PyDataFrame> {
-        use polars::prelude::{
-            DataFrame, IntoColumn, IntoSeries, ListBuilderTrait, ListStringChunkedBuilder,
-            NamedFrom, PlSmallStr, Series,
-        };
+    /// Build one Arrow [`RecordBatch`](arrow::record_batch::RecordBatch) directly
+    /// from an output [`Table`], in column order. Each [`Column`] becomes an Arrow
+    /// array straight from its `Vec` (a `Vec<Option<f64>>` -> Float64,
+    /// `Vec<Option<i64>>` -> Int64, `Vec<Option<String>>` -> Utf8, list-of-strings
+    /// -> `List(Utf8)`) - a bulk copy into an Arrow buffer with a validity bitmap,
+    /// never a per-element Python object. The batch is handed to Python by
+    /// [`table_to_pyrecordbatch`] as a zero-copy Arrow C-stream (PyCapsule); the
+    /// Python side wraps it with `pl.DataFrame(...)`. Every field is nullable so
+    /// batches with different null patterns keep one schema.
+    fn table_to_record_batch(table: Table) -> PyResult<arrow_array::RecordBatch> {
+        use arrow_array::builder::{ListBuilder, StringBuilder};
+        use arrow_array::{Array, ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema};
 
-        let mut columns: Vec<polars::prelude::Column> = Vec::with_capacity(table.columns.len());
+        let mut fields: Vec<Field> = Vec::with_capacity(table.columns.len());
+        let mut arrays: Vec<ArrayRef> = Vec::with_capacity(table.columns.len());
         for (name, column) in table.columns {
-            let pname = PlSmallStr::from_str(&name);
-            let series = match column {
-                // `from_slice_options` copies the Vec into an Arrow buffer with a
-                // validity bitmap - a bulk memcpy, not the per-element Python
-                // boxing the old dict-of-lists path paid.
-                Column::Float(v) => Series::new(pname, &v),
-                Column::Int(v) => Series::new(pname, &v),
-                Column::Str(v) => Series::new(pname, &v),
+            let (data_type, array): (DataType, ArrayRef) = match column {
+                Column::Float(v) => (DataType::Float64, Arc::new(Float64Array::from(v))),
+                Column::Int(v) => (DataType::Int64, Arc::new(Int64Array::from(v))),
+                Column::Str(v) => (
+                    DataType::Utf8,
+                    // FromIterator<Option<S: AsRef<str>>>: None -> null, one bulk
+                    // build of the offset + value buffers.
+                    Arc::new(v.into_iter().collect::<StringArray>()),
+                ),
                 Column::StrList(v) => {
                     let values_cap: usize =
                         v.iter().filter_map(|c| c.as_ref()).map(|l| l.len()).sum();
-                    // Typed builder pins the dtype to List(String) even for an
-                    // all-null batch, so batches concatenate without dtype skew.
-                    let mut builder = ListStringChunkedBuilder::new(pname, v.len(), values_cap);
-                    for cell in &v {
+                    let mut builder =
+                        ListBuilder::with_capacity(StringBuilder::new(), v.len()).with_field(Arc::new(
+                            Field::new("item", DataType::Utf8, false),
+                        ));
+                    let _ = values_cap;
+                    for cell in v {
                         match cell {
-                            Some(list) => builder.append_values_iter(list.iter().map(String::as_str)),
-                            None => builder.append_null(),
+                            Some(list) => {
+                                for s in list {
+                                    builder.values().append_value(s);
+                                }
+                                builder.append(true);
+                            }
+                            // Typed builder pins the dtype to List(Utf8) even for an
+                            // all-null batch, so batches keep one schema.
+                            None => builder.append(false),
                         }
                     }
-                    builder.finish().into_series()
+                    let array = builder.finish();
+                    (array.data_type().clone(), Arc::new(array))
                 }
             };
-            columns.push(series.into_column());
+            fields.push(Field::new(name.as_str(), data_type, true));
+            arrays.push(array);
         }
-        let df = DataFrame::new_infer_height(columns)
-            .map_err(|e| PyErr::new::<PyValueError, _>(format!("failed to build DataFrame: {}", e)))?;
-        Ok(PyDataFrame(df))
+        let schema = Arc::new(Schema::new(fields));
+        RecordBatch::try_new(schema, arrays)
+            .map_err(|e| PyErr::new::<PyValueError, _>(format!("failed to build RecordBatch: {}", e)))
+    }
+
+    /// [`table_to_record_batch`] wrapped as a [`PyRecordBatch`], which Python
+    /// receives through the Arrow PyCapsule interface (`__arrow_c_array__`) - a
+    /// zero-copy handoff the Python side turns into a `polars.DataFrame` with
+    /// `pl.DataFrame(...)`, needing neither `pyarrow` nor a matching polars
+    /// version. Shared by `nc_to_dataframe` (via the batch concat) and
+    /// `NcBatchIterator` (one batch).
+    fn table_to_pyrecordbatch(table: Table) -> PyResult<PyRecordBatch> {
+        Ok(PyRecordBatch::new(table_to_record_batch(table)?))
     }
 
     /// Spawn the interpreter on a worker thread, pushing finished rows into a
@@ -399,11 +422,10 @@ mod python_bindings {
         })
     }
 
-    /// Iterator over columnar batches: `next()` returns a polars DataFrame (via
-    /// `pyo3-polars`) for up to `batch_size` output rows, built column-wise in
-    /// Rust (the same machinery `nc_to_columns` uses), while the interpreter runs
-    /// on a worker thread behind a bounded channel. Memory stays bounded by the
-    /// batch size.
+    /// Iterator over columnar batches: `next()` returns an Arrow record batch
+    /// (via `pyo3-arrow`'s PyCapsule export) for up to `batch_size` output rows,
+    /// built column-wise in Rust, while the interpreter runs on a worker thread
+    /// behind a bounded channel. Memory stays bounded by the batch size.
     /// A `BatchBuilder` carries forward-fill state and the growing canonical
     /// column set across batches, so concatenating the batches reconstructs the
     /// whole-file `nc_to_dataframe` table.
@@ -465,8 +487,8 @@ mod python_bindings {
             match received {
                 Ok(table) => {
                     self.batches = Some(Mutex::new(receiver));
-                    let dataframe = table_to_pydataframe(table)?;
-                    Ok(Some(dataframe.into_pyobject(py)?.into_any().unbind()))
+                    let batch = table_to_pyrecordbatch(table)?;
+                    Ok(Some(batch.into_pyobject(py)?.into_any().unbind()))
                 }
                 // Channel closed: interpretation is done (or failed). Capture
                 // the final state / raise the error.
@@ -487,9 +509,10 @@ mod python_bindings {
     }
 
     /// Interpret an NC program lazily into columnar batches: returns an iterator
-    /// of polars DataFrames (transferred via `pyo3-polars`), each covering up to
-    /// `batch_size` output rows and built column-wise on a worker thread.
-    /// Concatenating them reconstructs `nc_to_dataframe`.
+    /// of Arrow record batches (transferred zero-copy via `pyo3-arrow`), each
+    /// covering up to `batch_size` output rows and built column-wise on a worker
+    /// thread. Wrapping each with `pl.DataFrame` and concatenating reconstructs
+    /// `nc_to_dataframe`.
     #[pyfunction]
     #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None))]
     #[allow(clippy::too_many_arguments)]
