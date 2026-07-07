@@ -279,6 +279,7 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
     let func_name = pairs.next()
         .ok_or_else(|| ParsingError::ParsingContext {
             line_no,
+            column: None,
             preview: preview.clone(),
             context: "function evaluation".to_string(),
             message: "Missing function name".to_string(),
@@ -288,6 +289,7 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
     let args_pair = pairs.next()
         .ok_or_else(|| ParsingError::ParsingContext {
             line_no,
+            column: None,
             preview: preview.clone(),
             context: "function evaluation".to_string(),
             message: "Missing function arguments".to_string(),
@@ -388,6 +390,7 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
             if min > max {
                 return Err(ParsingError::ParsingContext {
                     line_no,
+                    column: None,
                     preview,
                     context: "BOUND".to_string(),
                     message: format!("BOUND minimum ({}) is greater than maximum ({})", min, max),
@@ -405,6 +408,7 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
         },
         other => Err(ParsingError::ParsingContext {
             line_no,
+            column: None,
             preview,
             context: "expression".to_string(),
             message: format!("'{}' is not a known arithmetic function", other),
@@ -571,6 +575,7 @@ fn evaluate_multiplicative(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut St
                 if rhs == 0.0 {
                     return Err(ParsingError::ParsingContext {
                         line_no,
+                        column: None,
                         preview,
                         context: "integer division".to_string(),
                         message: "Integer division (DIV) by zero".to_string(),
@@ -608,6 +613,7 @@ fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> R
             .unwrap_or((0, "(could not retrieve line)".to_string()));
         ParsingError::ParsingContext {
             line_no,
+            column: None,
             preview,
             context: "evaluate_unary".to_string(),
             message: "Expected an operand at end of expression".to_string(),
@@ -1114,6 +1120,7 @@ fn interpret_identifier(pair: Pair<Rule>) -> Result<String, ParsingError> {
     } else {
         Err(ParsingError::ParsingContext {
             line_no,
+            column: None,
             preview,
             context: "identifier parsing".to_string(),
             message: format!("Found '{:?}' but expected an identifier", pair.as_rule()),
@@ -1521,6 +1528,7 @@ fn interpret_goto(pair: Pair<Rule>, state: &State) -> Result<BlockFlow, ParsingE
         other => {
             return Err(ParsingError::ParsingContext {
                 line_no,
+                column: None,
                 preview,
                 context: "jump statement".to_string(),
                 message: format!("Unexpected jump keyword '{}'", other),

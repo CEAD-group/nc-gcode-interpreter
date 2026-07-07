@@ -5,6 +5,15 @@ from typing import Any, Iterator, Optional, List, Dict, Tuple
 # wrapper imports are declared here. Signatures mirror the `#[pyo3(signature)]`
 # defaults in src/lib.rs.
 
+class NcError(ValueError):
+    """NC parse/interpret error carrying structured location data. Subclasses
+    ValueError so `except ValueError` keeps working."""
+
+    line: Optional[int]
+    column: Optional[int]
+    context: Optional[str]
+    line_text: Optional[str]
+
 def nc_to_rows(
     input: str,
     initial_state: Optional[str] = None,

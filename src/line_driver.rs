@@ -511,12 +511,17 @@ fn parse_single_line<'i>(
 ) -> Result<Pair<'i, Rule>, ParsingError> {
     let parsed = NCParser::parse(Rule::line_entry, padded).map_err(|e| {
         let preview = state.get_line(line_no).unwrap_or("(could not retrieve line)").to_string();
-        ParsingError::with_context(
+        let col = match &e.line_col {
+            pest::error::LineColLocation::Pos(pos) => pos.1,
+            pest::error::LineColLocation::Span(start, _) => start.1,
+        };
+        ParsingError::ParsingContext {
             line_no,
+            column: Some(col),
             preview,
-            "line parsing".to_string(),
-            crate::interpreter::describe_parse_error(&e),
-        )
+            context: "line parsing".to_string(),
+            message: crate::interpreter::describe_parse_error(&e),
+        }
     })?;
     parsed
         .flatten()

@@ -11,6 +11,10 @@ Details: {message}
 "#)]
     ParsingContext {
         line_no: usize,
+        /// 1-based column of the offending token when known (syntax errors
+        /// carry it from the pest span); `None` for errors located only to a
+        /// line. Not shown in the formatted message, only exposed as data.
+        column: Option<usize>,
         preview: String,
         context: String,
         message: String,
@@ -189,6 +193,22 @@ Details: Function {name} expects {expected} argument(s), but received {actual}.
     },
 }
 
+/// Structured location of an error, for callers that want the position as data
+/// rather than parsing it out of the formatted message (e.g. an editor
+/// highlighting the offending token). Exposed to Python as attributes on the
+/// `NcError` exception.
+#[derive(Debug, Clone, Default)]
+pub struct ErrorLocation {
+    /// 1-based source line the error is anchored to.
+    pub line: usize,
+    /// 1-based column when known (syntax errors), else `None`.
+    pub column: Option<usize>,
+    /// Which stage/construct was being parsed, when the variant records it.
+    pub context: Option<String>,
+    /// The source line's text, when captured.
+    pub line_text: Option<String>,
+}
+
 impl ParsingError {
     pub fn with_context<T: AsRef<str>>(
         line_no: usize,
@@ -198,9 +218,57 @@ impl ParsingError {
     ) -> Self {
         Self::ParsingContext {
             line_no,
+            column: None,
             preview: preview.as_ref().to_string(),
             context: context.as_ref().to_string(),
             message: message.as_ref().to_string(),
+        }
+    }
+
+    /// The error's source location as structured data, or `None` for errors
+    /// not tied to a specific line (stream closed, element-count mismatches,
+    /// etc.). `line_text`/`context`/`column` are populated when the variant
+    /// carries them.
+    pub fn location(&self) -> Option<ErrorLocation> {
+        let some = |line: usize,
+                    column: Option<usize>,
+                    context: Option<&str>,
+                    preview: Option<&str>| {
+            Some(ErrorLocation {
+                line,
+                column,
+                context: context.map(str::to_string),
+                line_text: preview.map(str::to_string),
+            })
+        };
+        match self {
+            Self::ParsingContext { line_no, column, preview, context, .. } => {
+                some(*line_no, *column, Some(context), Some(preview))
+            }
+            Self::UnexpectedRule { line_no, preview, context, .. } => {
+                some(*line_no, None, Some(context), Some(preview))
+            }
+            Self::UnknownVariable { line_no, preview, .. }
+            | Self::UndefinedVariable { line_no, preview, .. }
+            | Self::TooManyMCommands { line_no, preview, .. }
+            | Self::MissingAxisMapping { line_no, preview, .. }
+            | Self::InvalidAxisIndex { line_no, preview, .. }
+            | Self::UnsupportedStatement { line_no, preview, .. }
+            | Self::JumpTargetNotFound { line_no, preview, .. }
+            | Self::UnmatchedStructure { line_no, preview, .. }
+            | Self::UnknownGCommand { line_no, preview, .. }
+            | Self::InvalidFunctionArity { line_no, preview, .. } => {
+                some(*line_no, None, None, Some(preview))
+            }
+            Self::ParseError { .. }
+            | Self::InvalidElementCount { .. }
+            | Self::InvalidCondition
+            | Self::UnexpectedOperator { .. }
+            | Self::LoopLimit { .. }
+            | Self::StreamClosed
+            | Self::UnexpectedAxis { .. }
+            | Self::AxisUsedAsVariable { .. }
+            | Self::ReservedNameUsedAsVariable { .. } => None,
         }
     }
 }
@@ -208,5 +276,40 @@ impl ParsingError {
 impl From<ParsingError> for std::io::Error {
     fn from(err: ParsingError) -> std::io::Error {
         std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn location_extracts_line_column_context_and_text() {
+        // A syntax error carries a column; the others locate to a line only.
+        let syntax = ParsingError::ParsingContext {
+            line_no: 2,
+            column: Some(8),
+            preview: "X20 Y((".to_string(),
+            context: "line parsing".to_string(),
+            message: "unexpected".to_string(),
+        };
+        let loc = syntax.location().expect("has location");
+        assert_eq!(loc.line, 2);
+        assert_eq!(loc.column, Some(8));
+        assert_eq!(loc.context.as_deref(), Some("line parsing"));
+        assert_eq!(loc.line_text.as_deref(), Some("X20 Y(("));
+
+        let semantic = ParsingError::UndefinedVariable {
+            line_no: 1,
+            preview: "X=R99".to_string(),
+            name: "R99".to_string(),
+        };
+        let loc = semantic.location().expect("has location");
+        assert_eq!((loc.line, loc.column), (1, None));
+        assert_eq!(loc.line_text.as_deref(), Some("X=R99"));
+
+        // Errors with no source anchor return None.
+        assert!(ParsingError::StreamClosed.location().is_none());
+        assert!(ParsingError::InvalidCondition.location().is_none());
     }
 }
