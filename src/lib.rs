@@ -200,6 +200,7 @@ mod python_bindings {
         axis_index_map: Option<HashMap<String, usize>>,
         allow_undefined_variables: bool,
         flatten_tolerance: Option<f64>,
+        emit_line_no: bool,
     ) -> PyResult<(
         mpsc::Receiver<Table>,
         mpsc::Receiver<Result<FinalState, String>>,
@@ -225,6 +226,7 @@ mod python_bindings {
                     allow_undefined_variables,
                     flatten_tolerance,
                     batch_size,
+                    emit_line_no,
                     batch_sender,
                 );
                 let message = match outcome {
@@ -553,7 +555,7 @@ mod python_bindings {
     /// thread. Wrapping each with `pl.DataFrame` and concatenating reconstructs
     /// `nc_to_dataframe`.
     #[pyfunction]
-    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None))]
+    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_batches(
         input: String,
@@ -567,6 +569,7 @@ mod python_bindings {
         allow_undefined_variables: bool,
         input_is_path: bool,
         flatten_tolerance: Option<f64>,
+        include_line_numbers: bool,
     ) -> PyResult<NcBatchIterator> {
         if batch_size == 0 {
             return Err(PyErr::new::<PyValueError, _>("batch_size must be greater than 0"));
@@ -590,6 +593,7 @@ mod python_bindings {
             axis_index_map,
             allow_undefined_variables,
             flatten_tolerance,
+            include_line_numbers,
         )?;
 
         Ok(NcBatchIterator {

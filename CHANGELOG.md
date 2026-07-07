@@ -4,7 +4,20 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
-## [Unreleased]
+## [v0.2.1] - unreleased
+
+### Added
+
+- Optional `line_no` output column on the batch/dataframe path, gated by
+  `include_line_numbers=False` on `nc_to_dataframe` / `nc_to_batches`
+  (default off, so the output schema is unchanged unless requested). When
+  enabled it prepends a leading `Int64` column giving the 1-based source line
+  each output row came from - previously only the streaming `nc_to_rows`
+  exposed it. Loops repeat the value and jumps make it non-monotonic, matching
+  `nc_to_rows` row-for-row; flatten-generated samples keep the originating
+  block's line number; `dataframe_to_nc` ignores it (source provenance, not an
+  emittable word). Concatenating batches reconstructs the same per-row
+  `line_no` as the whole-file dataframe (#45)
 
 ### Fixed
 

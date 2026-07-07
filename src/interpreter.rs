@@ -149,6 +149,7 @@ pub fn nc_to_batch_stream(
     allow_undefined_variables: bool,
     flatten_tolerance: Option<f64>,
     batch_size: usize,
+    emit_line_no: bool,
     sender: std::sync::mpsc::SyncSender<Table>,
 ) -> Result<state::State, ParsingError> {
     let mut state = build_state(
@@ -162,7 +163,7 @@ pub fn nc_to_batch_stream(
         let mut discard = OutputRows::collect();
         interpret_file(initial_state, &mut state, &mut discard)?;
     }
-    let mut output = OutputRows::batch_stream(sender, batch_size, disable_forward_fill);
+    let mut output = OutputRows::batch_stream(sender, batch_size, disable_forward_fill, emit_line_no);
     install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_file(input, &mut state, &mut output)?;
     output.finish()?;
@@ -515,6 +516,56 @@ mod tests {
         let (table, _state) = nc_to_table(input, None, None, None, 10000, false, None, false, None)
             .expect("program should interpret");
         table
+    }
+
+    /// Interpret through the batch path with `include_line_numbers` on. A
+    /// large batch size keeps small programs to a single batch, so the one
+    /// emitted [`Table`] carries the whole program's `line_no` column.
+    fn interpret_with_line_numbers(input: &str) -> Table {
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        nc_to_batch_stream(
+            input, None, None, None, 10000, false, None, false, None, 1_000_000, true, tx,
+        )
+        .expect("program should interpret");
+        rx.into_iter().next().expect("one batch for a small program")
+    }
+
+    fn ints<'a>(table: &'a Table, name: &str) -> &'a [Option<i64>] {
+        table
+            .columns
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, c)| match c {
+                Column::Int(v) => v.as_slice(),
+                other => panic!("column {name} is not an int column: {other:?}"),
+            })
+            .unwrap_or_else(|| panic!("column {name} missing; have {:?}", column_names(table)))
+    }
+
+    /// `include_line_numbers` (default off) prepends a `line_no` column: one
+    /// 1-based source line per output row, repeated under a loop and
+    /// non-monotonic across a jump - matching what `nc_to_rows` yields.
+    #[test]
+    fn line_no_column_is_opt_in_and_tracks_source_lines() {
+        // Default off: the ordinary path never emits a line_no column.
+        let table = interpret("G1 X0 Y0 F100\nX10\n");
+        assert!(!column_names(&table).contains(&"line_no"));
+
+        // Opt-in: line_no leads the columns and is 1-based.
+        let table = interpret_with_line_numbers("G1 X0 Y0 F100\nX10\nX20\n");
+        assert_eq!(column_names(&table).first(), Some(&"line_no"));
+        assert_eq!(ints(&table, "line_no"), &[Some(1), Some(2), Some(3)]);
+
+        // WHILE loop: the body (line 3) repeats; line 4 assigns a plain
+        // variable and emits no output row; line 6 follows the loop.
+        let table =
+            interpret_with_line_numbers("R1=0\nWHILE R1<2\nX=R1\nR1=R1+1\nENDWHILE\nX9\n");
+        assert_eq!(ints(&table, "line_no"), &[Some(3), Some(3), Some(6)]);
+
+        // GOTO reorders execution: only the source lines that ran appear, in
+        // execution order (line 1, then the jump target line 4).
+        let table = interpret_with_line_numbers("N10 X1\nGOTOF 40\nN30 X999\nN40 X4\n");
+        assert_eq!(ints(&table, "line_no"), &[Some(1), Some(4)]);
     }
 
     fn floats<'a>(table: &'a Table, name: &str) -> &'a [Option<f64>] {

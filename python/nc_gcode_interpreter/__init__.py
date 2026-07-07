@@ -60,6 +60,7 @@ def nc_to_dataframe(
     axis_index_map: dict[str, int] | None = None,
     allow_undefined_variables: bool = False,
     flatten_tolerance: float | None = None,
+    include_line_numbers: bool = False,
 ) -> tuple[pl.DataFrame, dict]:
     """
     Parses Sinumerik-flavored NC G-code and converts it into a Polars DataFrame along with the final state.
@@ -93,6 +94,12 @@ def nc_to_dataframe(
         deviation (in path units, i.e. mm) of the true curve. The interpolation
         parameters (I/J/K/CR, PW/SD/PL) are consumed and do not appear in the
         output. Default None (curves pass through untouched).
+    include_line_numbers: bool, optional
+        If True, prepend a `line_no` (Int64) column giving the 1-based source
+        line each output row came from - repeated under a loop, non-monotonic
+        across a jump, matching the streaming `nc_to_rows`. Never
+        forward-filled; `dataframe_to_nc` ignores it. Default False (column
+        absent, output schema unchanged).
 
     Returns:
     --------
@@ -142,6 +149,7 @@ def nc_to_dataframe(
         allow_undefined_variables,
         input_is_path,
         flatten_tolerance,
+        include_line_numbers,
     )
     # pl.DataFrame wraps each Arrow record batch via __arrow_c_array__ (polars
     # >= 1.3), no pyarrow needed. Exhaust the iterator before reading .state.
@@ -245,6 +253,13 @@ def sanitize_dataframe(
     pl.DataFrame
         The sanitized DataFrame ready for analysis or conversion back to G-code.
     """
+    # `line_no` (present only when interpreted with include_line_numbers=True)
+    # is source-provenance metadata, not an emittable G-code word; drop it up
+    # front so it is never cast/forward-filled or written back out by
+    # dataframe_to_nc.
+    if "line_no" in df.columns:
+        df = df.drop("line_no")
+
     modal = [g["short_name"] for g in GGroups.g_groups if g["effectiveness"] == "modal"]
     non_modal = [g["short_name"] for g in GGroups.g_groups if g["effectiveness"] != "modal"]
     known_axes = [
@@ -493,6 +508,7 @@ def nc_to_batches(
     axis_index_map: dict[str, int] | None = None,
     allow_undefined_variables: bool = False,
     flatten_tolerance: float | None = None,
+    include_line_numbers: bool = False,
 ) -> _BatchIterator:
     """Interpret an NC program into a stream of columnar polars DataFrames.
 
@@ -518,6 +534,11 @@ def nc_to_batches(
     internally via ``ParsingError::StreamClosed``, unwinding the thread
     promptly instead of finishing the rest of the program.
 
+    With ``include_line_numbers=True`` every batch gains a leading ``line_no``
+    (Int64) column: the 1-based source line each row came from (repeated under
+    a loop, non-monotonic across a jump), never forward-filled. Default False
+    leaves the schema unchanged.
+
     Example:
     --------
     >>> batches = nc_to_batches("G1 X10\\nX20 Y5", batch_size=1)
@@ -540,5 +561,6 @@ def nc_to_batches(
         allow_undefined_variables,
         input_is_path,
         flatten_tolerance,
+        include_line_numbers,
     )
     return _BatchIterator(inner)
