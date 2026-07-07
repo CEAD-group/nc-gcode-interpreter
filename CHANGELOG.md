@@ -4,7 +4,7 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
-## [v0.2.1] - unreleased
+## [v0.2.1] - 2026-07-07
 
 ### Added
 
