@@ -85,7 +85,7 @@ axis_word              =  { variable_single_char ~ value ~ !"[" }
 
 // local variable definitions
 definition = { ^"DEF" ~ data_type ~ (assignment_multi | assignment | variable_array | variable) ~ ("," ~ (assignment_multi | assignment | variable_array | variable))* }
-data_type  = { ^"INT" | ^"REAL" | ^"BOOL" | (^"STRING" ~ "[" ~ integer ~ "]") }
+data_type  = { ^"INT" | ^"REAL" | ^"BOOL" | (^"STRING" ~ "[" ~ ASCII_DIGIT+ ~ "]") }
 
 // basic math expression interpreter
 expression =  { prefix* ~ primary ~ (op ~ prefix* ~ primary)* }

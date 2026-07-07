@@ -628,6 +628,7 @@ fn normalize_reserved_case(key: String, state: &State) -> String {
 /// numeric assignment, or `None` when the RHS was a quoted string (stored in
 /// `state.string_table`; strings never reach the numeric pipeline).
 fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(String, Option<f64>), ParsingError> {
+    let (element_line_no, element_preview) = get_error_context(&element, state);
     let mut inner_pairs = element.into_inner();
 
     let variable_pair = inner_pairs
@@ -645,6 +646,14 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
                 &expression_pair,
                 "a numeric value",
                 format!("cannot assign a string to '{key}'"),
+                state,
+            ));
+        }
+        if state.symbol_table.contains_key(&key) {
+            return Err(annotate_error(
+                &expression_pair,
+                "a numeric value",
+                format!("'{key}' is a numeric variable; it cannot be assigned a string"),
                 state,
             ));
         }
@@ -699,6 +708,15 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
     } else if state.is_block_address(&key) {
         // Block addresses (e.g. spline PW/SD/PL) only appear in the output row;
         // they are neither axes nor user variables, so nothing is stored.
+    } else if state.string_table.contains_key(&key) {
+        // Keep every name in exactly one type: a STRING variable must not
+        // silently become numeric (a real control raises a type error).
+        return Err(ParsingError::with_context(
+            element_line_no,
+            element_preview,
+            "assignment".to_string(),
+            format!("'{key}' is a STRING variable; it cannot be assigned a number"),
+        ));
     } else {
         state.symbol_table.insert(key.clone(), local_value);
     }
@@ -1181,11 +1199,15 @@ fn interpret_statement_for(
 
     // Parse and execute the assignment statement
     let assignment = pairs.next().expect("Expected an assignment, got none");
+    let (assign_line_no, assign_preview) = get_error_context(&assignment, state);
     let (variable_name, initial_value) = interpret_assignment(assignment, state)?;
     let Some(initial_value) = initial_value else {
-        return Err(ParsingError::ParseError {
-            message: format!("FOR counter '{variable_name}' cannot be initialized with a string"),
-        });
+        return Err(ParsingError::with_context(
+            assign_line_no,
+            assign_preview,
+            "FOR statement".to_string(),
+            format!("FOR counter '{variable_name}' cannot be initialized with a string"),
+        ));
     };
     output.record_variable_change(&variable_name, initial_value);
 
@@ -1615,12 +1637,16 @@ fn frame_assignments(
     // mutates it as a side effect and frame instructions must not move axes.
     let saved_axes = state.axes.clone();
     for pair in pairs {
+        let (pair_line_no, pair_preview) = get_error_context(&pair, state);
         let (key, value) = interpret_assignment(pair, state)?;
         let Some(value) = value else {
             state.axes = saved_axes;
-            return Err(ParsingError::ParseError {
-                message: format!("frame instruction cannot assign a string to '{key}'"),
-            });
+            return Err(ParsingError::with_context(
+                pair_line_no,
+                pair_preview,
+                "frame instruction".to_string(),
+                format!("frame instruction cannot assign a string to '{key}'"),
+            ));
         };
         if !state.is_axis(&key) {
             state.axes = saved_axes;

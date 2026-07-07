@@ -539,6 +539,14 @@ mod tests {
         assert!(format!("{err}").contains("initialized with a string"), "got: {err}");
         let err = run("DEF STRING[8] NAME\nG1 X=\"abc\"\n").unwrap_err();
         assert!(format!("{err}").contains("cannot assign a string"), "got: {err}");
+        // Every name has exactly one type: no numeric->string or
+        // string->numeric flips after definition.
+        let err = run("DEF REAL R_VAL = 1\nR_VAL = \"abc\"\n").unwrap_err();
+        assert!(format!("{err}").contains("numeric variable"), "got: {err}");
+        let err = run("DEF STRING[8] NAME = \"abc\"\nNAME = 5\n").unwrap_err();
+        assert!(format!("{err}").contains("STRING variable"), "got: {err}");
+        // A negative declared length must not parse.
+        assert!(run("DEF STRING[-1] NAME\n").is_err());
     }
 
     /// The interpolation parameters I/J/K (arc-centre offsets) and the CR
