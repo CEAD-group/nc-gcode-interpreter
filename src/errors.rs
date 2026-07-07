@@ -405,27 +405,164 @@ mod tests {
 
     #[test]
     fn kind_is_a_stable_per_variant_discriminator() {
-        // A representative spread; the strings are public API and must stay put.
-        assert_eq!(
-            ParsingError::UnexpectedAxis {
-                axis: "QQ".to_string(),
-                axes: String::new(),
-                line_no: 1,
-                preview: String::new(),
-            }
-            .kind(),
-            "unexpected_axis"
-        );
-        assert_eq!(
-            ParsingError::UndefinedVariable {
-                line_no: 1,
-                preview: String::new(),
-                name: "R1".to_string(),
-            }
-            .kind(),
-            "undefined_variable"
-        );
-        assert_eq!(ParsingError::StreamClosed.kind(), "stream_closed");
-        assert_eq!(ParsingError::InvalidCondition.kind(), "invalid_condition");
+        // Exhaustive: `kind()` strings are public API, so pin every variant's
+        // value. The wildcard-free match in `kind()` forces a new variant to be
+        // handled there; this list forces its string to be chosen deliberately.
+        use crate::types::Rule;
+        let s = String::new;
+        let cases: Vec<(ParsingError, &str)> = vec![
+            (
+                ParsingError::ParsingContext {
+                    line_no: 1,
+                    column: None,
+                    preview: s(),
+                    context: s(),
+                    message: s(),
+                },
+                "parse_context",
+            ),
+            (
+                ParsingError::UnknownVariable {
+                    line_no: 1,
+                    preview: s(),
+                    variable: s(),
+                },
+                "unknown_variable",
+            ),
+            (
+                ParsingError::UndefinedVariable {
+                    line_no: 1,
+                    preview: s(),
+                    name: s(),
+                },
+                "undefined_variable",
+            ),
+            (
+                ParsingError::UnexpectedRule {
+                    rule: Rule::EOI,
+                    context: s(),
+                    line_no: 1,
+                    preview: s(),
+                    message: s(),
+                },
+                "unexpected_rule",
+            ),
+            (ParsingError::ParseError { message: s() }, "parse_error"),
+            (
+                ParsingError::InvalidElementCount { expected: 1, actual: 2 },
+                "invalid_element_count",
+            ),
+            (ParsingError::InvalidCondition, "invalid_condition"),
+            (
+                ParsingError::UnexpectedOperator { operator: s() },
+                "unexpected_operator",
+            ),
+            (ParsingError::LoopLimit { limit: s() }, "loop_limit"),
+            (ParsingError::StreamClosed, "stream_closed"),
+            (
+                ParsingError::TooManyMCommands {
+                    line_no: 1,
+                    preview: s(),
+                    message: s(),
+                },
+                "too_many_m_commands",
+            ),
+            (
+                ParsingError::UnexpectedAxis {
+                    axis: s(),
+                    axes: s(),
+                    line_no: 1,
+                    preview: s(),
+                },
+                "unexpected_axis",
+            ),
+            (
+                ParsingError::AxisUsedAsVariable {
+                    name: s(),
+                    line_no: 1,
+                    preview: s(),
+                },
+                "axis_used_as_variable",
+            ),
+            (
+                ParsingError::ReservedNameUsedAsVariable {
+                    name: s(),
+                    line_no: 1,
+                    preview: s(),
+                },
+                "reserved_name_used_as_variable",
+            ),
+            (
+                ParsingError::MissingAxisMapping {
+                    line_no: 1,
+                    preview: s(),
+                    axis: s(),
+                },
+                "missing_axis_mapping",
+            ),
+            (
+                ParsingError::InvalidAxisIndex {
+                    line_no: 1,
+                    preview: s(),
+                    axis: s(),
+                    index: 0,
+                },
+                "invalid_axis_index",
+            ),
+            (
+                ParsingError::UnsupportedStatement {
+                    line_no: 1,
+                    preview: s(),
+                    statement: s(),
+                    hint: s(),
+                },
+                "unsupported_statement",
+            ),
+            (
+                ParsingError::JumpTargetNotFound {
+                    line_no: 1,
+                    preview: s(),
+                    target: s(),
+                    search_direction: s(),
+                    hint: s(),
+                },
+                "jump_target_not_found",
+            ),
+            (
+                ParsingError::UnmatchedStructure {
+                    line_no: 1,
+                    preview: s(),
+                    message: s(),
+                },
+                "unmatched_structure",
+            ),
+            (
+                ParsingError::UnknownGCommand {
+                    line_no: 1,
+                    preview: s(),
+                    code: s(),
+                },
+                "unknown_g_command",
+            ),
+            (
+                ParsingError::InvalidFunctionArity {
+                    line_no: 1,
+                    preview: s(),
+                    name: s(),
+                    expected: 1,
+                    actual: 2,
+                },
+                "invalid_function_arity",
+            ),
+        ];
+        for (err, expected) in &cases {
+            assert_eq!(err.kind(), *expected, "kind mismatch for {err:?}");
+        }
+        // Every kind string is distinct (no two variants share a discriminator).
+        let mut kinds: Vec<&str> = cases.iter().map(|(_, k)| *k).collect();
+        kinds.sort_unstable();
+        let unique = kinds.len();
+        kinds.dedup();
+        assert_eq!(kinds.len(), unique, "duplicate kind discriminator");
     }
 }
