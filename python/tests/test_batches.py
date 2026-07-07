@@ -155,3 +155,56 @@ def test_path_input_batches(tmp_path):
     df, _ = nc_to_dataframe(program)
     frames = list(nc_to_batches(mpf, batch_size=2))
     assert_frame_equal(pl.concat(frames, how="diagonal").select(df.columns), df)
+
+
+def test_include_line_numbers_is_opt_in():
+    """`line_no` is off by default and, when enabled, is a leading Int64 column
+    that repeats under a loop and is non-monotonic across a jump - matching the
+    streaming `nc_to_rows` row-for-row and reconstructible across batches."""
+    prog = "R1=0\nWHILE R1<2\nX=R1 F100\nR1=R1+1\nENDWHILE\nX9\n"
+
+    # Default off: schema unchanged, no line_no column anywhere.
+    df_off, _ = nc_to_dataframe(prog)
+    assert "line_no" not in df_off.columns
+    off_batches = list(nc_to_batches(prog, batch_size=1))
+    assert all("line_no" not in f.columns for f in off_batches)
+
+    # Opt-in: leading Int64 line_no with the loop's repeated source lines.
+    df_on, _ = nc_to_dataframe(prog, include_line_numbers=True)
+    assert df_on.columns[0] == "line_no"
+    assert df_on["line_no"].dtype == pl.Int64
+    assert df_on["line_no"].to_list() == [3, 3, 6]
+    # Dropping line_no reproduces the default-off frame exactly.
+    assert_frame_equal(df_on.drop("line_no"), df_off)
+
+    # Batches carry it too and concatenate back to the whole-file column.
+    on_batches = list(nc_to_batches(prog, batch_size=1, include_line_numbers=True))
+    assert pl.concat(on_batches, how="diagonal")["line_no"].to_list() == [3, 3, 6]
+
+
+def test_include_line_numbers_matches_streaming_under_jumps():
+    """A GOTO reorders execution; the batch `line_no` column must match what
+    the streaming `nc_to_rows` yields, line for line."""
+    from nc_gcode_interpreter import nc_to_rows
+
+    prog = "N10 X1\nGOTOF 40\nN30 X999\nN40 X4\n"
+    df, _ = nc_to_dataframe(prog, include_line_numbers=True)
+    streamed = [line_no for line_no, _row in nc_to_rows(prog)]
+    assert df["line_no"].to_list() == streamed == [1, 4]
+
+
+def test_include_line_numbers_survives_flattening():
+    """Flatten-generated samples keep the originating block's source line, so a
+    flattened arc/spline block yields many rows all carrying its line_no - and
+    still matches the streaming path row-for-row."""
+    from nc_gcode_interpreter import nc_to_rows
+
+    program = "G1 X0 Y0 F1000\nG2 X100 Y0 I50 J0\nG1 X100 Y50\n"
+    df, _ = nc_to_dataframe(program, flatten_tolerance=0.1, include_line_numbers=True)
+    assert df.columns[0] == "line_no"
+    assert df["line_no"].null_count() == 0
+    per_line = df["line_no"].to_list()
+    # The arc on line 2 expands to many G1 samples, every one tagged line 2.
+    assert per_line.count(2) > 5
+    stream_lines = [line for line, *_ in nc_to_rows(program, flatten_tolerance=0.1)]
+    assert per_line == stream_lines

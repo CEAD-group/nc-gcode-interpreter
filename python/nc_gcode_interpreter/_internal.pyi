@@ -33,6 +33,7 @@ def nc_to_batches(
     allow_undefined_variables: bool = False,
     input_is_path: bool = False,
     flatten_tolerance: Optional[float] = None,
+    include_line_numbers: bool = False,
 ) -> Any:
     """Interpret an NC program into an iterator of columnar polars DataFrames."""
     ...

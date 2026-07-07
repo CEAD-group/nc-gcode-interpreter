@@ -237,11 +237,23 @@ impl OutputRows {
         batch_size: usize,
         disable_forward_fill: bool,
     ) -> Self {
+        // Back-compatible entry point: never emits line_no.
+        Self::batch_stream_with_line_numbers(sender, batch_size, disable_forward_fill, false)
+    }
+
+    /// As [`batch_stream`](Self::batch_stream), but with the opt-in `line_no`
+    /// column. Separate constructor so `batch_stream`'s signature stays stable.
+    pub fn batch_stream_with_line_numbers(
+        sender: std::sync::mpsc::SyncSender<Table>,
+        batch_size: usize,
+        disable_forward_fill: bool,
+        emit_line_no: bool,
+    ) -> Self {
         OutputRows {
             current: Row::default(),
             sink: RowSink::Batch(BatchStreamSink {
                 sender,
-                builder: BatchBuilder::new(disable_forward_fill),
+                builder: BatchBuilder::new(disable_forward_fill).with_line_numbers(emit_line_no),
                 buffer: Vec::new(),
                 batch_size,
             }),
@@ -516,6 +528,14 @@ fn rekey_g4_dwell(row: &mut Row) {
 /// block addresses: never forward-filled.
 pub const FLATTENED_COLUMN: &str = "flattened";
 
+/// Leading column carrying each output row's 1-based source line number (the
+/// `Row::line_no` the streaming path yields). One value per row, never
+/// forward-filled and never null; loops and jumps produce repeated /
+/// non-monotonic values, exactly matching `nc_to_rows`. Not a cell key, so it
+/// sits outside `canonical_order` and is prepended to every batch. Opt-in via
+/// the batch/dataframe `include_line_numbers` flag (default off).
+pub const LINE_NO_COLUMN: &str = "line_no";
+
 /// Canonical output-column order over the set of columns present so far:
 /// N, modal then non-modal G-group columns, the fixed axis columns, any
 /// remaining value columns (e.g. user extra axes) in alphabetical order, the
@@ -572,6 +592,8 @@ fn canonical_order(present: &HashSet<&'static str>) -> Vec<&'static str> {
 /// `from_rows` is now implemented.
 pub struct BatchBuilder {
     disable_forward_fill: bool,
+    /// Prepend the `line_no` source-line column to every batch (opt-in).
+    emit_line_no: bool,
     /// Columns seen in any batch so far, in canonical order. Grows monotonically
     /// so a column, once emitted, stays in every later batch (forward-filled or
     /// null), which is what lets the batches concatenate back to the whole
@@ -585,9 +607,18 @@ impl BatchBuilder {
     pub fn new(disable_forward_fill: bool) -> Self {
         BatchBuilder {
             disable_forward_fill,
+            emit_line_no: false,
             columns: Vec::new(),
             fill: HashMap::new(),
         }
+    }
+
+    /// Opt into the leading `line_no` column (default off). Builder-style so
+    /// `BatchBuilder::new(..)` stays a stable single-argument constructor for
+    /// existing Rust callers.
+    pub fn with_line_numbers(mut self, emit_line_no: bool) -> Self {
+        self.emit_line_no = emit_line_no;
+        self
     }
 
     /// Build the [`Table`] for one batch of rows, updating the carried
@@ -601,9 +632,10 @@ impl BatchBuilder {
     pub fn build_batch(&mut self, rows: &[Row]) -> Table {
         // Skip rows that carry no output values (blocks that only affected
         // internal state, e.g. definitions - their variable_changes are a
-        // streaming-only concern).
-        let cells: Vec<&CellMap> =
-            rows.iter().map(|r| &r.cells).filter(|r| !r.is_empty()).collect();
+        // streaming-only concern). Keep the whole `Row` so the source line
+        // number is available alongside the cells when `emit_line_no` is set.
+        let kept: Vec<&Row> = rows.iter().filter(|r| !r.cells.is_empty()).collect();
+        let cells: Vec<&CellMap> = kept.iter().map(|r| &r.cells).collect();
 
         // Union of every column seen so far with those present in this batch.
         let mut present: HashSet<&'static str> = self.columns.iter().copied().collect();
@@ -632,7 +664,16 @@ impl BatchBuilder {
             }
         }
 
-        let mut columns: Vec<(String, Column)> = Vec::with_capacity(self.columns.len());
+        // Opt-in (default off): the source line number leads every batch, one
+        // value per kept row, never null and never forward-filled. It is not a
+        // cell key, so it stays out of `self.columns` / `canonical_order` and is
+        // simply prepended. Default off keeps the output schema unchanged.
+        let extra = usize::from(self.emit_line_no);
+        let mut columns: Vec<(String, Column)> = Vec::with_capacity(self.columns.len() + extra);
+        if self.emit_line_no {
+            let line_no_column = Column::Int(kept.iter().map(|r| Some(r.line_no as i64)).collect());
+            columns.push((LINE_NO_COLUMN.to_string(), line_no_column));
+        }
         for (&name, builder) in self.columns.iter().zip(builders) {
             let mut column = builder.into_column();
             // Block addresses (spline PW/SD/PL) are never forward-filled: a
@@ -727,6 +768,7 @@ impl Table {
     /// forward-filled unless disabled. Equivalent to a single [`BatchBuilder`]
     /// batch over all rows.
     pub fn from_rows(rows: &[Row], disable_forward_fill: bool) -> Table {
+        // The whole-file / CLI path never emits line_no (opt-in, default off).
         BatchBuilder::new(disable_forward_fill).build_batch(rows)
     }
 
