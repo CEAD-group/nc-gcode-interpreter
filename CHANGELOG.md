@@ -21,12 +21,13 @@ released to PyPI.
   consumed, source line numbers and auxiliary cells preserved; generated
   samples carry a `flattened = 1` marker column so the original programmed
   points remain distinguishable
-- Optional `viz` extra: `nc_gcode_interpreter.viz.view_toolpath(df)` shows a
-  toolpath in threejs-viewer as an animated bead tube (feed-rate time base,
+- Optional `viz` extra (threejs-viewer >= 0.0.41):
+  `nc_gcode_interpreter.viz.view_toolpath(df)` shows a toolpath in
+  threejs-viewer as an animated bead tube (feed-rate float64 time base,
   programmed vs flattened point coloring), and the `nc-view` console command
   interprets + flattens + animates an .mpf in one step, with a nozzle
   marker riding the path tip, camera follow/look-at tracking, and travel
-  moves drawn as a thin animated line
+  moves drawn natively as a thin line in lockstep with the bead
 
 - Program jumps and branches: `GOTOF`/`GOTOB`/`GOTO`/`GOTOC`/`GOTOS` and
   `CASE ... OF ... DEFAULT`, with per-scope label/block-number resolution,

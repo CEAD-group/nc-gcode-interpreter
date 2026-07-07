@@ -242,11 +242,9 @@ def view_toolpath(
         nozzle: add a cone marker riding the path tip - the visible
             progress indicator the camera modes track. Forced on when
             ``follow`` is set.
-        travels: draw non-extruding moves as a thin (1 px) line, revealed
-            in lockstep with the bead. Uses ``add_toolpath(travel="line")``
-            when the installed threejs-viewer supports it (> 0.0.39); older
-            versions fall back to a whole-path line hidden inside the opaque
-            bead tube, so only the travel hops show.
+        travels: draw non-extruding moves as a thin (1 px) line
+            (``add_toolpath(travel="line")``), revealed in lockstep with
+            the bead.
         id: viewer object id (reuse to replace a previous path).
         viewer: an existing ``threejs_viewer`` client; a new one is started
             (opening the browser) when None.
@@ -278,14 +276,11 @@ def view_toolpath(
     else:
         toolpath.colorize("viridis")
 
-    # threejs-viewer > 0.0.39 renders travel moves natively
-    # (add_toolpath(travel="line"), CEAD-group/threejs-viewer#88): one
-    # line-segments child wired into the group's draw-range distribution -
-    # travel hops reveal in lockstep with the beads by contract.
-    import inspect
-
-    native_travel = travels and "travel" in inspect.signature(v.add_toolpath).parameters
-    if native_travel:
+    # Travel moves render natively (threejs-viewer >= 0.0.41,
+    # CEAD-group/threejs-viewer#88): one line-segments child wired into the
+    # group's draw-range distribution - travel hops reveal in lockstep with
+    # the beads by contract.
+    if travels:
         tube_kwargs.update(travel="line", travel_color=TRAVEL_COLOR)
     v.add_toolpath(id, toolpath, **tube_kwargs)
 
@@ -305,27 +300,8 @@ def view_toolpath(
     # Frame times from the float64 column, NOT toolpath.times (float32 - a
     # long program's late frames would collapse to zero duration).
     animation.set_frame_times(data[:, 0])
-    fractions = np.linspace(0.0, 1.0, len(toolpath), dtype=np.float32)
-    animated_ids = [id]
-
-    if travels and not native_travel:
-        # Fallback for released threejs-viewer <= 0.0.39 without the native
-        # travel line: one 1px line over the WHOLE path, revealed by the same
-        # draw fractions as the tube - occlusion by the opaque bead leaves
-        # exactly the travel hops visible. Relies on the tube being opaque.
-        travel_id = f"{id}_travel"
-        v.add_polyline(
-            travel_id,
-            toolpath.points,
-            color=TRAVEL_COLOR,
-            fat=False,  # native 1 px line, one draw call even at millions of points
-            pickable=False,
-        )
-        animated_ids.append(travel_id)
-
-    animation.set_draw_range_data(
-        animated_ids, np.repeat(fractions[:, None], len(animated_ids), axis=1)
-    )
+    fractions = np.linspace(0.0, 1.0, len(toolpath), dtype=np.float64)
+    animation.set_draw_range_data([id], fractions[:, None])
 
     if nozzle:
         # Cone marker riding the path tip (the progress indicator the camera

@@ -243,15 +243,11 @@ def test_view_toolpath_nozzle_and_follow():
             self.objects = {}
             self.animation = None
 
-        def add_toolpath(self, id, tp, **kw):
-            self.objects[id] = "toolpath"
+        def add_toolpath(self, id, tp, travel=None, travel_color=None, **kw):
+            self.objects[id] = f"toolpath(travel={travel})"
 
         def add_cylinder(self, id, **kw):
             self.objects[id] = "cylinder"
-
-        def add_polyline(self, id, points, **kw):
-            assert kw.get("fat") is False, "travel line must be a native 1px line"
-            self.objects[id] = "polyline"
 
         def load_animation(self, anim):
             self.animation = anim
@@ -261,34 +257,20 @@ def test_view_toolpath_nozzle_and_follow():
 
     v = Stub()
     view_toolpath(df, viewer=v, follow="follow")
+    # Travel moves render via the native travel line (threejs-viewer >=
+    # 0.0.41, CEAD-group/threejs-viewer#88): no separate polyline, one
+    # draw-range channel on the group.
     assert v.objects == {
-        "toolpath": "toolpath",
-        "toolpath_travel": "polyline",
+        "toolpath": "toolpath(travel=line)",
         "toolpath_nozzle": "cylinder",
     }
-    # The travel line is revealed by the same channel as the bead tube.
     assert v.animation._frame_times.dtype == np.float64
     draw = next(c for c in v.animation._channels if c.name == "draw_ranges")
-    assert draw.ids == ["toolpath", "toolpath_travel"]
-    assert draw.data.shape[1] == 2
-    assert (draw.data[:, 0] == draw.data[:, 1]).all()
+    assert draw.ids == ["toolpath"]
 
     v_no_travel = Stub()
     view_toolpath(df, viewer=v_no_travel, travels=False, nozzle=True)
-    assert "toolpath_travel" not in v_no_travel.objects
-
-    # A client whose add_toolpath supports travel= (threejs-viewer > 0.0.39,
-    # CEAD-group/threejs-viewer#88) gets the native travel line: no separate
-    # polyline, one draw-range channel on the group.
-    class NativeStub(Stub):
-        def add_toolpath(self, id, tp, travel=None, travel_color=None, **kw):
-            self.objects[id] = f"toolpath(travel={travel})"
-
-    v_native = NativeStub()
-    view_toolpath(df, viewer=v_native, nozzle=False)
-    assert v_native.objects == {"toolpath": "toolpath(travel=line)"}
-    draw = next(c for c in v_native.animation._channels if c.name == "draw_ranges")
-    assert draw.ids == ["toolpath"]
+    assert v_no_travel.objects["toolpath"] == "toolpath(travel=None)"
     assert v.animation.camera_follow == "toolpath_nozzle"
     assert v.animation.camera_lookat is None
     # Nozzle transforms ride the tip: one keyframe per point.

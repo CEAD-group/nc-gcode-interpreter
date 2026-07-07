@@ -27,7 +27,7 @@ dev = [
     "jupyter>=1.1.1"
 ]
 viz = [
-    "threejs-viewer>=0.0.39",
+    "threejs-viewer>=0.0.41",
     "numpy>=1.26",
 ]
 test = [

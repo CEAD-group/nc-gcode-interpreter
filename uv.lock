@@ -1163,7 +1163,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'viz'", specifier = ">=1.26" },
     { name = "polars", extras = ["pyarrow"], specifier = ">=1.9.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.3" },
-    { name = "threejs-viewer", marker = "extra == 'viz'", specifier = ">=0.0.39" },
+    { name = "threejs-viewer", marker = "extra == 'viz'", specifier = ">=0.0.41" },
 ]
 provides-extras = ["dev", "test", "viz"]
 
@@ -1842,15 +1842,15 @@ wheels = [
 
 [[package]]
 name = "threejs-viewer"
-version = "0.0.39"
+version = "0.0.41"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/20/9e/809f1ef7ce02ffad83e4f816363f35a761147fa7e653e239c7e68f8eec4f/threejs_viewer-0.0.39.tar.gz", hash = "sha256:f7db922d742009d4c31d27afe749dee602efb5223caeab054dd691a509ce06b3", size = 320712, upload-time = "2026-07-02T18:15:54.526Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/fc/5bd3152e996edbb4ff55719dc1efd1da8fa188fc540059f1ebcafd221974/threejs_viewer-0.0.41.tar.gz", hash = "sha256:30b94563c560bb609351e7e05d57f4848db9b17add84f1afcb9ab17318eaa67d", size = 378514, upload-time = "2026-07-07T06:13:40.487Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/93/fac1319b55fe55db2261828ec7b298f283aa657989ebc7ea560be9293288/threejs_viewer-0.0.39-py3-none-any.whl", hash = "sha256:7226d8ce33116e4c52f6f3a10ece59febc56cfbbf471ce6f769ecdad5d30a9a6", size = 322948, upload-time = "2026-07-02T18:15:52.696Z" },
+    { url = "https://files.pythonhosted.org/packages/db/35/5432be350ae56c7b67bfdedfaa0fc56bd1b29e337d6ac2ed6c7498bca8e0/threejs_viewer-0.0.41-py3-none-any.whl", hash = "sha256:44df2fc08b678f6a4f6f613f27bef175398aea95d8a36585b2bd282003e8b132", size = 381074, upload-time = "2026-07-07T06:13:38.724Z" },
 ]
 
 [[package]]
