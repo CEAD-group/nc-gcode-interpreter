@@ -453,8 +453,9 @@ class _BatchIterator:
 
     Wraps the Rust batch iterator, which yields each batch as an Arrow record
     batch built column-wise in Rust and handed over the Arrow PyCapsule
-    interface (``__arrow_c_array__``, via pyo3-arrow) - a zero-copy transfer
-    with no Python list of primitives materialized. ``pl.DataFrame`` wraps that
+    interface (``__arrow_c_array__``, exported directly with the minimal
+    arrow-rs crates - no pyo3-arrow/pyo3-polars) - a zero-copy transfer with
+    no Python list of primitives materialized. ``pl.DataFrame`` wraps that
     capsule directly (polars >= 1.3), so no ``pyarrow`` is involved. After
     exhaustion its ``state`` attribute holds the final interpreter state (axes,
     symbol_table, translation), like the iterator returned by :func:`nc_to_rows`.

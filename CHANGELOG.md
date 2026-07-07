@@ -6,19 +6,6 @@ released to PyPI.
 
 ## [v0.2.0] - 2026-07-07
 
-### Changed
-
-- Rust-side polars is gone. The Table -> Python DataFrame handoff no longer
-  builds a polars DataFrame in Rust (via `pyo3-polars`); it builds an Arrow
-  record batch with the minimal `arrow-array`/`arrow-schema`/`arrow-data`
-  crates and hands it to Python zero-copy through the Arrow PyCapsule
-  interface (`__arrow_c_array__`), where `pl.DataFrame(...)` wraps it. The
-  Python API is unchanged (still returns `polars.DataFrame`), needs no
-  `pyarrow`, and performance is unchanged. This drops ~60 crates from the
-  `python`-feature build (127 -> 64), cutting a clean release build ~4x
-  (83s -> 21s), and bumps PyO3 0.28 -> 0.29 (resolving the RUSTSEC pyo3
-  advisories).
-
 ### Added
 
 - `dwell` output column: F/S on a `G4` block is the dwell time (seconds /
@@ -95,6 +82,16 @@ released to PyPI.
 
 ### Changed
 
+- Rust-side polars is gone. The Table -> Python DataFrame handoff no longer
+  builds a polars DataFrame in Rust (via `pyo3-polars`); it builds an Arrow
+  record batch with the minimal `arrow-array`/`arrow-schema`/`arrow-data`
+  crates and hands it to Python zero-copy through the Arrow PyCapsule
+  interface (`__arrow_c_array__`), where `pl.DataFrame(...)` wraps it. The
+  Python API is unchanged (still returns `polars.DataFrame`), needs no
+  `pyarrow`, and performance is unchanged. This drops ~60 crates from the
+  `python`-feature build (127 -> 64), cutting a clean release build ~4x
+  (83s -> 21s), and bumps PyO3 0.28 -> 0.29 (resolving the RUSTSEC pyo3
+  advisories).
 - **Breaking:** `I`/`J`/`K`/`CR` are now treated as arc interpolation-parameter
   block addresses (output columns), so they can no longer be used as user
   variable names: `I=5` followed by `X=I+1` was a variable read before and is
