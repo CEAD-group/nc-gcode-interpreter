@@ -48,3 +48,9 @@ nc-view = "nc_gcode_interpreter.cli:main"
 Homepage = "https://github.com/CEAD-group/nc-gcode-interpreter"
 Repository = "https://github.com/CEAD-group/nc-gcode-interpreter.git"
 Documentation = "https://github.com/CEAD-group/nc-gcode-interpreter/blob/main/README.md"
+
+[tool.mypy]
+# The viz extra's dependencies are optional: mypy runs in CI without them.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*", "threejs_viewer", "threejs_viewer.*"]
+ignore_missing_imports = true
