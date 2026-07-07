@@ -174,7 +174,7 @@ def test_nc_view_cli_axis_index_map(tmp_path, monkeypatch):
 
 
 def test_viz_bead_detection_and_travel():
-    np = pytest.importorskip("numpy")
+    pytest.importorskip("numpy")
     from nc_gcode_interpreter.viz import detect_bead_size, toolpath_arrays
 
     program = (
