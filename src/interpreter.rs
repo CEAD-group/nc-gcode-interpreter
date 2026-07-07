@@ -73,7 +73,16 @@ fn install_flattener(
     flatten_tolerance: Option<f64>,
 ) -> Result<(), ParsingError> {
     if let Some(tolerance) = flatten_tolerance {
-        output.set_flattener(crate::flatten::Flattener::new(tolerance, &state.axis_identifiers)?);
+        let mut flattener = crate::flatten::Flattener::new(tolerance, &state.axis_identifiers)?;
+        // Seed with the machine positions the state already knows (an
+        // initial-state file may have established the start point of the
+        // first arc/spline of the main program).
+        for axis in state.axes.keys() {
+            if let Some(machine_value) = state.get_axis_machine(axis) {
+                flattener.seed_position(axis, machine_value);
+            }
+        }
+        output.set_flattener(flattener);
     }
     Ok(())
 }
@@ -561,6 +570,80 @@ mod tests {
         );
         assert_eq!(floats(&table, "F"), &[Some(1000.0), Some(1000.0), Some(1000.0)]);
         assert_eq!(floats(&table, "dwell"), &[None, Some(0.01), None]);
+    }
+
+    /// A G4 block that programs BOTH F and S must consume both: the dwell
+    /// value is F, and neither may forward-fill into the modal F/S columns.
+    #[test]
+    fn g4_consumes_both_f_and_s() {
+        let (table, _state) = nc_to_table(
+            "G1 X0 Y0 F1000 S200\n\
+             G4 F0.5 S2\n\
+             G1 X10 Y0\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            None,
+        )
+        .expect("program should interpret");
+        assert_eq!(floats(&table, "F"), &[Some(1000.0), Some(1000.0), Some(1000.0)]);
+        assert_eq!(floats(&table, "S"), &[Some(200.0), Some(200.0), Some(200.0)]);
+        assert_eq!(floats(&table, "dwell"), &[None, Some(0.5), None]);
+    }
+
+    /// A start position established by the initial-state file must seed the
+    /// flattener: the first arc of the main program flattens from the correct
+    /// start point instead of warning that the position is unknown.
+    #[test]
+    fn initial_state_position_seeds_flattener() {
+        let (table, _state) = nc_to_table(
+            "G2 X100 Y0 I50 J0 F1000\n",
+            Some("G1 X0 Y0 Z0 F100\n"),
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            Some(0.1),
+        )
+        .expect("program should interpret");
+        let x = floats(&table, "X");
+        // A half circle of radius 50 at 0.1 mm tolerance needs ~25 samples;
+        // an unseeded flattener would pass the single G2 row through instead.
+        assert!(x.len() > 10, "arc was not flattened: {} row(s)", x.len());
+        assert_eq!(x.last().unwrap(), &Some(100.0));
+        // The intermediate samples sit on the r=50 circle around (50, 0).
+        let y = floats(&table, "Y");
+        for (xv, yv) in x.iter().zip(y).filter_map(|(a, b)| a.zip(*b)) {
+            let r = ((xv - 50.0).powi(2) + yv.powi(2)).sqrt();
+            assert!((r - 50.0).abs() < 1e-6, "sample ({xv}, {yv}) off the circle: r={r}");
+        }
+    }
+
+    /// A pathologically tight tolerance must not materialize a gigabyte-scale
+    /// row burst: the per-arc sample count is clamped (loudly) at 100k.
+    #[test]
+    fn arc_segment_count_is_clamped() {
+        let (table, _state) = nc_to_table(
+            "G1 X0 Y0 F1000\n\
+             G2 X0 Y0 I1000 J0\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            Some(1e-9),
+        )
+        .expect("program should interpret");
+        // Full circle of radius 1000 at 1e-9 tolerance wants ~2.2M segments.
+        assert_eq!(floats(&table, "X").len(), 1 + 100_000);
     }
 
     /// The CR= radius form is likewise a per-block interpolation parameter and

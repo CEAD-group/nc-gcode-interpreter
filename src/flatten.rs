@@ -141,6 +141,17 @@ pub struct Flattener {
 }
 
 impl Flattener {
+    /// Seed the current machine position of `axis` (uppercase identifier),
+    /// e.g. from the state an initial-state file established - without this,
+    /// the first arc/spline of the main program would not know its start
+    /// point even though the interpreter does.
+    pub fn seed_position(&mut self, axis: &str, machine_value: f64) {
+        let key = intern_column(&axis.to_uppercase());
+        if self.geometric_axes.contains(&key) {
+            self.positions.insert(key, machine_value);
+        }
+    }
+
     pub fn new(tolerance: f64, axis_identifiers: &[String]) -> Result<Self, ParsingError> {
         if !(tolerance > 0.0 && tolerance.is_finite()) {
             return Err(ParsingError::ParseError {
@@ -366,12 +377,22 @@ impl Flattener {
         let r_max = r_start.max(r_end);
         let cos_half = (1.0 - self.tolerance / r_max).clamp(-1.0, 1.0);
         let theta_step = 2.0 * cos_half.acos();
-        let segments = if theta_step > 1e-12 {
+        // Cap the per-arc sample count: a pathological tolerance/radius combo
+        // would otherwise materialize a gigabyte-scale row burst. The clamp is
+        // loud - the emitted polyline is then coarser than requested.
+        const MAX_ARC_SEGMENTS: usize = 100_000;
+        let requested = if theta_step > 1e-12 {
             (sweep.abs() / theta_step).ceil() as usize
         } else {
             1
+        };
+        let segments = requested.clamp(1, MAX_ARC_SEGMENTS);
+        if requested > MAX_ARC_SEGMENTS {
+            emit_warning(format_args!(
+                "Warning [line {}]: arc needs {} segments to meet the tolerance; clamped to {} (deviation will exceed the requested tolerance)",
+                row.line_no, requested, MAX_ARC_SEGMENTS
+            ));
         }
-        .clamp(1, 10_000_000);
 
         // Channels interpolated linearly over the sweep: every other
         // geometric axis programmed on this block.
@@ -381,7 +402,20 @@ impl Flattener {
                 continue;
             }
             if let Some(end) = cell_float(&row, axis) {
-                let start = self.positions.get(axis).copied().unwrap_or(end);
+                let start = match self.positions.get(axis) {
+                    Some(&start) => start,
+                    None => {
+                        // First-ever position of this axis: there is nothing
+                        // to ramp from, so the channel holds its end value
+                        // over the whole arc. Louder than silently stepping,
+                        // and still better than leaving the arc curved.
+                        emit_warning(format_args!(
+                            "Warning [line {}]: start position of axis {} is unknown; it is held at {} over the flattened arc",
+                            row.line_no, axis, end
+                        ));
+                        end
+                    }
+                };
                 linear.push((axis, start, end));
             }
         }

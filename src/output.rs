@@ -500,8 +500,11 @@ fn rekey_g4_dwell(row: &mut Row) {
     if !is_g4 {
         return;
     }
-    let dwell = row.cells.remove("F").or_else(|| row.cells.remove("S"));
-    if let Some(value) = dwell {
+    // Consume BOTH F and S: whichever is not the dwell value must still not
+    // forward-fill into the modal feed/spindle columns.
+    let f = row.cells.remove("F");
+    let s = row.cells.remove("S");
+    if let Some(value) = f.or(s) {
         row.cells.insert(intern_column(DWELL_COLUMN), value);
     }
 }
