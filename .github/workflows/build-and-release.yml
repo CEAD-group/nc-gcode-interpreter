@@ -301,6 +301,25 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: 3.12
+      # PyPI rejects ZIP archives with trailing data ("ZIP archive not
+      # accepted: Trailing data"), which the cross-compiled macOS wheels carry.
+      # Round-tripping each wheel through `wheel unpack`/`pack` rewrites a clean
+      # ZIP with a regenerated RECORD, stripping the trailing bytes. Harmless
+      # for the wheels that were already clean.
+      - name: Normalize wheels (strip trailing data)
+        run: |
+          python -m pip install --upgrade wheel
+          mkdir -p normalized
+          for w in dist/*.whl; do
+            python -m wheel unpack "$w" -d _unpack
+            d=$(find _unpack -mindepth 1 -maxdepth 1 -type d)
+            python -m wheel pack "$d" -d normalized
+            rm -rf _unpack
+          done
+          rm -f dist/*.whl
+          mv normalized/*.whl dist/
+          rmdir normalized
+          echo "Normalized wheels:" && ls -1 dist/*.whl
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v1
         with:
