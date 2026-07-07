@@ -53,6 +53,9 @@ pub enum ColKind {
 pub struct State {
     pub axes: HashMap<String, f64>,
     pub symbol_table: HashMap<String, f64>,
+    /// String variables (DEF STRING[n]); kept apart from the numeric
+    /// symbol_table - using one in a numeric expression is a loud error.
+    pub string_table: HashMap<String, String>,
     pub translation: HashMap<String, f64>,
     pub axis_identifiers: Vec<String>,
     pub iteration_limit: usize,
@@ -129,6 +132,7 @@ impl State {
         State {
             axes: HashMap::new(),
             symbol_table: symbols,
+            string_table: HashMap::new(),
             translation,
             axis_identifiers,
             iteration_limit,

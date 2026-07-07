@@ -525,6 +525,60 @@ mod tests {
         table.columns.iter().map(|(n, _)| n.as_str()).collect()
     }
 
+    /// DEF STRING[n] declares string variables (manual 1.3: STRING is a
+    /// standard data type): declaration with and without initialization,
+    /// plus reassignment, must all parse; strings live outside the numeric
+    /// pipeline and never produce output columns.
+    #[test]
+    fn def_string_variables() {
+        let (table, state) = nc_to_table(
+            "DEF STRING[28] CALIBRATION_TOOLPATH = \"move_grid_baseline\"\n\
+             DEF STRING[200] _LOGFILENAME\n\
+             DEF STRING[8] TAG = \"x\", NOTE = \"\"\n\
+             _LOGFILENAME = \"LOG_TRACKER.MPF\"\n\
+             G1 X0 Y0 F100\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            None,
+        )
+        .expect("program should interpret");
+        assert_eq!(state.string_table["CALIBRATION_TOOLPATH"], "move_grid_baseline");
+        assert_eq!(state.string_table["_LOGFILENAME"], "LOG_TRACKER.MPF");
+        assert_eq!(state.string_table["TAG"], "x");
+        assert_eq!(state.string_table["NOTE"], "");
+        assert_eq!(floats(&table, "X").len(), 1);
+    }
+
+    /// Strings must stay out of the numeric pipeline - loudly. Using a
+    /// STRING variable in a numeric expression, initializing a STRING with a
+    /// number, or a numeric variable with a string are all hard errors, never
+    /// a silent 0.0.
+    #[test]
+    fn string_numeric_boundaries_error_loudly() {
+        let run = |src: &str| nc_to_table(src, None, None, None, 10000, false, None, false, None);
+        let err = run("DEF STRING[8] NAME = \"abc\"\nX = NAME + 1\n").unwrap_err();
+        assert!(format!("{err}").contains("STRING variable"), "got: {err}");
+        let err = run("DEF STRING[8] NAME = 5\n").unwrap_err();
+        assert!(format!("{err}").contains("initialized with a number"), "got: {err}");
+        let err = run("DEF REAL R1 = \"abc\"\n").unwrap_err();
+        assert!(format!("{err}").contains("initialized with a string"), "got: {err}");
+        let err = run("DEF STRING[8] NAME\nG1 X=\"abc\"\n").unwrap_err();
+        assert!(format!("{err}").contains("cannot assign a string"), "got: {err}");
+        // Every name has exactly one type: no numeric->string or
+        // string->numeric flips after definition.
+        let err = run("DEF REAL R_VAL = 1\nR_VAL = \"abc\"\n").unwrap_err();
+        assert!(format!("{err}").contains("numeric variable"), "got: {err}");
+        let err = run("DEF STRING[8] NAME = \"abc\"\nNAME = 5\n").unwrap_err();
+        assert!(format!("{err}").contains("STRING variable"), "got: {err}");
+        // A negative declared length must not parse.
+        assert!(run("DEF STRING[-1] NAME\n").is_err());
+    }
+
     /// The interpolation parameters I/J/K (arc-centre offsets) and the CR
     /// radius form must be emitted on the arc block that programs them and be
     /// absent (null) on ordinary linear blocks - never silently dropped and

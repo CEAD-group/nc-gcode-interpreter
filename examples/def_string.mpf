@@ -1,0 +1,14 @@
+; String variable definitions (DEF STRING[n]): declared with or without an
+; initial value, and reassignable. Strings live outside the numeric pipeline,
+; so they never appear as output columns - the moves below are unaffected.
+DEF STRING[28] CALIBRATION_TOOLPATH = "move_grid_baseline"
+DEF STRING[200] _LOGFILENAME
+DEF STRING[8] TAG = "A-7", NOTE = ""
+
+_LOGFILENAME = "LOG_TRACKER_MCS_TEST_V1.MPF"
+
+G1 X0 Y0 Z0 F1000
+X10 Y5
+TAG = "B-2"
+X20 Y10
+M30

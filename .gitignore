@@ -39,3 +39,6 @@ test-data/
 # local exploration scripts
 python/example/plot_trace.py
 python/example/smooth_e.py
+
+# local field-test data (customer programs; never commit)
+test-data/
