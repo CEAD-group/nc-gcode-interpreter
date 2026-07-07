@@ -13,17 +13,18 @@ pub fn emit_warning(args: std::fmt::Arguments) {
 /// non-modal: each value belongs to the block that programs it and is never
 /// forward-filled onto later blocks.
 ///
-/// Two families share these semantics:
+/// Three families share these semantics:
 /// * the circular/helical interpolation parameters `I`, `J`, `K` (arc-centre
-///   offsets relative to the start point) and `CR` (the arc-radius form),
-///   programmed on G2/G3 (and CIP/CT) blocks;
+///   offsets relative to the start point), `CR` (the arc-radius form) and
+///   `TURN` (additional full helix turns), programmed on G2/G3 (and CIP/CT)
+///   blocks;
 /// * the spline programming addresses `PW` (point weight), `SD` (spline
 ///   degree) and `PL` (parameter interval length).
 ///
 /// Before these were listed here the arc-centre offsets were silently dropped
 /// from the output (they fell through to the user-variable branch), so arcs
 /// came out as bare straight-line endpoints.
-pub const BLOCK_ADDRESSES: &[&str] = &["I", "J", "K", "CR", "PW", "SD", "PL"];
+pub const BLOCK_ADDRESSES: &[&str] = &["I", "J", "K", "CR", "TURN", "PW", "SD", "PL"];
 
 /// Which kind of output column an assignment key resolves to. Variables (which
 /// never appear as output cells) are represented by the absence of a resolution

@@ -38,10 +38,30 @@
 //! * All splines start at the current position (the first point / control
 //!   point) and are modal until deselected by another motion command.
 //!
-//! Out of scope (rows pass through unchanged, with a warning where the
-//! block clearly programmed a curve): `CIP`/`CT` (the intermediate-point
-//! addresses `I1=`/`J1=`/`K1=` are not captured by the parser), `POLY`,
-//! thread cutting, and `TURN=` multi-turn helices.
+//! Helical `TURN=` (additional full turns, manual 3.9.7) is supported.
+//!
+//! Out of scope (rows pass through unchanged, with a once-per-word
+//! warning): `CIP`/`CT` (the intermediate-point addresses `I1=`/`J1=`/`K1=`
+//! are not captured by the parser), `POLY`, thread cutting (G33/G34/G35)
+//! and involutes (INVCW/INVCCW).
+//!
+//! Known approximations, checked against the NC programming manual:
+//! * Spline start/end conditions (`BAUTO`/`BNAT`/`BTAN`,
+//!   `EAUTO`/`ENAT`/`ETAN`, manual 4.7.2) are not evaluated: CSPLINE uses
+//!   natural end conditions (= BNAT/ENAT; the control default is
+//!   BAUTO/EAUTO) and ASPLINE uses the standard Akima boundary
+//!   extrapolation. Only the first/last spline segments differ.
+//! * A/C splines are chord-length parameterized; a per-block `PL` parameter
+//!   interval is not applied.
+//! * The spline channels are all axes programmed in the spline blocks
+//!   (`SPLINEPATH` declarations are not parsed; the control default is the
+//!   first three channel axes).
+//! * `G91` incremental mode is not resolved by the interpreter, so arcs and
+//!   splines under G91 are wrong before flattening ever sees them.
+//! * The arc-centre offsets I/J/K are always interpreted as increments
+//!   relative to the start point (the control default); the `I=AC(...)`
+//!   absolute form is not supported by the parser (it fails to parse rather
+//!   than being misread).
 
 use crate::errors::ParsingError;
 use crate::output::{intern_column, CellMap, Row, FLATTENED_COLUMN};
@@ -115,6 +135,9 @@ pub struct Flattener {
     spline_start: HashMap<&'static str, f64>,
     /// Current B-spline degree (`SD=`, modal within the spline).
     spline_degree: usize,
+    /// Curve motion words already warned about (CIP, CT, POLY, ...): one
+    /// warning per word per run, not one per block.
+    warned_motions: Vec<String>,
 }
 
 impl Flattener {
@@ -139,6 +162,7 @@ impl Flattener {
             spline_buffer: Vec::new(),
             spline_start: HashMap::new(),
             spline_degree: 3,
+            warned_motions: Vec::new(),
         })
     }
 
@@ -185,7 +209,23 @@ impl Flattener {
             Motion::Arc { cw } => {
                 self.flatten_arc(row, cw, out);
             }
-            Motion::Linear | Motion::Other => {
+            Motion::Other => {
+                // A curve interpolation the flattener does not implement
+                // (CIP, CT, POLY, G33/G34/G35 threads, INVCW/INVCCW, ...):
+                // the block passes through unchanged. Warn once per word.
+                if let Some(Value::Str(word)) = row.cells.get("gg01_motion") {
+                    if !self.warned_motions.iter().any(|w| w == word) {
+                        emit_warning(format_args!(
+                            "Warning [line {}]: {} interpolation is not flattened; its blocks pass through unchanged",
+                            row.line_no, word
+                        ));
+                        self.warned_motions.push(word.clone());
+                    }
+                }
+                self.track_positions(&row);
+                out.push(row);
+            }
+            Motion::Linear => {
                 self.track_positions(&row);
                 out.push(row);
             }
@@ -312,6 +352,13 @@ impl Flattener {
             if full_circle && sweep > -1e-12 {
                 sweep = -tau;
             }
+        }
+        // Helical interpolation with TURN= (NC programming manual 3.9.7):
+        // the programmed number of ADDITIONAL full circles on top of the
+        // start-to-end sweep.
+        if let Some(turns) = cell_float(&row, "TURN") {
+            let extra = turns.max(0.0).round();
+            sweep += if cw { -tau * extra } else { tau * extra };
         }
 
         // Exact sagitta bound: deviation of a chord spanning angle theta is
@@ -1078,6 +1125,117 @@ mod tests {
             let radius = (z * z + (x - 20.0).powi(2)).sqrt();
             assert!((radius - 20.0).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn g19_arc_uses_yz_plane() {
+        let mut fl = flattener(0.01);
+        let rows = vec![
+            row(1, &[("gg01_motion", s("G1")), ("gg06_plane_select", s("G19")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(0.0))]),
+            row(2, &[("gg01_motion", s("G3")), ("Y", f(40.0)), ("Z", f(0.0)), ("J", f(20.0)), ("K", f(0.0))]),
+        ];
+        let out = run(&mut fl, rows);
+        assert!(out.len() > 5);
+        // Circle in YZ around (y, z) = (20, 0); X untouched.
+        for r in &out[1..] {
+            let y = cell_float(r, "Y").unwrap();
+            let z = cell_float(r, "Z").unwrap();
+            assert!(((y - 20.0).powi(2) + z * z).sqrt() - 20.0 < 1e-9);
+            assert!(r.cells.get("X").is_none());
+        }
+        assert_eq!(
+            (cell_float(out.last().unwrap(), "Y").unwrap(), cell_float(out.last().unwrap(), "Z").unwrap()),
+            (40.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn cr_with_g3_mirrors_g2() {
+        // G3 CR=20 over a 40 chord: semicircle counter-clockwise -> dips to -20.
+        let mut fl = flattener(0.01);
+        let rows = vec![
+            row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
+            row(2, &[("gg01_motion", s("G3")), ("X", f(40.0)), ("Y", f(0.0)), ("CR", f(20.0))]),
+        ];
+        let out = run(&mut fl, rows);
+        let min_y = out[1..].iter().map(|r| cell_float(r, "Y").unwrap()).fold(f64::MAX, f64::min);
+        assert!((min_y + 20.0).abs() < 0.05, "G3 semicircle should dip to -20, got {min_y}");
+        assert_eq!(xy(out.last().unwrap()), (40.0, 0.0));
+    }
+
+    #[test]
+    fn full_circle_in_g18() {
+        let mut fl = flattener(0.1);
+        let rows = vec![
+            row(1, &[("gg01_motion", s("G1")), ("gg06_plane_select", s("G18")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(0.0))]),
+            row(2, &[("gg01_motion", s("G2")), ("Z", f(0.0)), ("X", f(0.0)), ("K", f(25.0)), ("I", f(0.0))]),
+        ];
+        let out = run(&mut fl, rows);
+        assert!(out.len() > 20, "full circle in G18 under-sampled: {}", out.len());
+        // Passes through the far side (z = 50).
+        assert!(out[1..].iter().any(|r| cell_float(r, "Z").unwrap() > 49.0));
+    }
+
+    /// TURN= adds full helix turns (NC programming manual 3.9.7).
+    #[test]
+    fn turn_adds_full_helix_turns() {
+        let helix = |turn: Option<f64>| {
+            let mut fl = flattener(0.1);
+            let mut cells = vec![
+                ("gg01_motion", s("G2")),
+                ("X", f(0.0)),
+                ("Y", f(0.0)),
+                ("Z", f(30.0)),
+                ("I", f(25.0)),
+                ("J", f(0.0)),
+            ];
+            if let Some(v) = turn {
+                cells.push(("TURN", f(v)));
+            }
+            run(
+                &mut fl,
+                vec![
+                    row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0)), ("Z", f(0.0))]),
+                    row(2, &cells),
+                ],
+            )
+        };
+        let single = helix(None).len();
+        let out = helix(Some(2.0));
+        // Sweep of 3 full circles instead of 1: ~3x the samples, and X crosses
+        // the far side of the circle 3 times.
+        assert!(out.len() > 2 * single, "TURN=2 should triple the sweep: {} vs {single}", out.len());
+        let far_crossings = out[1..]
+            .windows(2)
+            .filter(|w| {
+                let a = cell_float(&w[0], "X").unwrap();
+                let b = cell_float(&w[1], "X").unwrap();
+                (a < 49.0) != (b < 49.0)
+            })
+            .count();
+        assert!(far_crossings >= 5, "expected 3 far-side passes, got {far_crossings} crossings");
+        // Z still lands exactly, monotonically.
+        let zs: Vec<f64> = out[1..].iter().map(|r| cell_float(r, "Z").unwrap()).collect();
+        assert!((zs.last().unwrap() - 30.0).abs() < 1e-9);
+        assert!(zs.windows(2).all(|w| w[1] > w[0]));
+        // TURN is consumed like the other interpolation addresses.
+        assert!(out.iter().all(|r| r.cells.get("TURN").is_none()));
+    }
+
+    /// CIP and other unimplemented curve interpolations pass through
+    /// unchanged (with a once-per-word warning).
+    #[test]
+    fn cip_passes_through_unchanged() {
+        let mut fl = flattener(0.01);
+        let rows = vec![
+            row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
+            row(2, &[("gg01_motion", s("CIP")), ("X", f(20.0)), ("Y", f(0.0)), ("I", f(10.0)), ("J", f(5.0))]),
+            row(3, &[("gg01_motion", s("G1")), ("X", f(30.0)), ("Y", f(0.0))]),
+        ];
+        let out = run(&mut fl, rows);
+        assert_eq!(out.len(), 3);
+        assert!(matches!(out[1].cells.get("gg01_motion"), Some(Value::Str(m)) if m == "CIP"));
+        assert!(out[1].cells.get("I").is_some(), "CIP block must keep its parameters");
     }
 
     #[test]

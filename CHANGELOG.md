@@ -13,6 +13,8 @@ released to PyPI.
   never-forward-filled `dwell` column instead of polluting the modal F/S
   columns (previously `G4 F0.01` set the feed to 0.01 mm/min for every
   following block until the next real F word)
+- `TURN` output column (block address, never forward-filled): additional
+  full helix turns on G2/G3 blocks; previously swallowed as a user variable
 - Curve flattening: `flatten_tolerance` on `nc_to_dataframe` / `nc_to_rows` /
   `nc_to_batches` (CLI: `--flatten-tolerance`) converts G2/G3 arcs (I/J/K and
   CR= forms, all planes, helical, full circles) and ASPLINE/BSPLINE/CSPLINE
