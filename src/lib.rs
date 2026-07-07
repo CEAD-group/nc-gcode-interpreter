@@ -36,11 +36,16 @@ mod python_bindings {
 
     #[pymethods]
     impl ArrowBatch {
+        // The Arrow PyCapsule protocol passes `requested_schema` optionally, and
+        // consumers (polars) call it with no args, so it must default to None; we
+        // always export our own schema and ignore the request.
+        #[pyo3(signature = (requested_schema=None))]
         fn __arrow_c_array__<'py>(
             &self,
             py: Python<'py>,
-            _requested_schema: Option<Bound<'py, PyAny>>,
+            requested_schema: Option<Bound<'py, PyAny>>,
         ) -> PyResult<(Bound<'py, PyCapsule>, Bound<'py, PyCapsule>)> {
+            let _ = requested_schema;
             let (array, schema) = arrow_array::ffi::to_ffi(&self.data)
                 .map_err(|e| PyErr::new::<PyValueError, _>(format!("Arrow FFI export failed: {}", e)))?;
             // Capsule names are fixed by the Arrow C data interface; the boxed
