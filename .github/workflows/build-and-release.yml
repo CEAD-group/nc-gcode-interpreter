@@ -294,32 +294,33 @@ jobs:
       contents: write
       attestations: write
     steps:
+      # Do NOT use `merge-multiple: true`. With `--find-interpreter`, every
+      # build matrix leg (py3.12 AND py3.13) produces cp312/cp313/cp314 wheels
+      # with identical filenames but non-identical bytes (sccache makes builds
+      # nondeterministic). Merging them into one directory makes
+      # download-artifact overwrite colliding paths concurrently, truncating
+      # the file mid-write and corrupting the ZIP central directory - which
+      # PyPI reports as "Trailing data" and `wheel unpack` as "Bad magic
+      # number for central directory". Instead download each artifact into its
+      # own subdirectory and collect one intact copy of each filename.
       - uses: actions/download-artifact@v4
         with:
-          merge-multiple: true
-          path: dist
+          path: artifacts
       - uses: actions/setup-python@v6
         with:
           python-version: 3.12
-      # PyPI rejects ZIP archives with trailing data ("ZIP archive not
-      # accepted: Trailing data"), which the cross-compiled macOS wheels carry.
-      # Round-tripping each wheel through `wheel unpack`/`pack` rewrites a clean
-      # ZIP with a regenerated RECORD, stripping the trailing bytes. Harmless
-      # for the wheels that were already clean.
-      - name: Normalize wheels (strip trailing data)
+      - name: Collect unique wheels and sdist
         run: |
-          python -m pip install --upgrade wheel
-          mkdir -p normalized
-          for w in dist/*.whl; do
-            python -m wheel unpack "$w" -d _unpack
-            d=$(find _unpack -mindepth 1 -maxdepth 1 -type d)
-            python -m wheel pack "$d" -d normalized
-            rm -rf _unpack
+          mkdir -p dist
+          # Each artifact is in its own subdir, so no path collides during
+          # download. Copy the first occurrence of each basename; duplicate
+          # filenames are the same wheel for the same platform tag, so either
+          # copy is a valid, complete ZIP.
+          find artifacts -type f \( -name '*.whl' -o -name '*.tar.gz' \) | while read -r f; do
+            b=$(basename "$f")
+            [ -e "dist/$b" ] || cp "$f" "dist/$b"
           done
-          rm -f dist/*.whl
-          mv normalized/*.whl dist/
-          rmdir normalized
-          echo "Normalized wheels:" && ls -1 dist/*.whl
+          echo "Collected artifacts:" && ls -1 dist/
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v1
         with:
