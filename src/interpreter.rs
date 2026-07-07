@@ -543,8 +543,17 @@ mod tests {
         assert_eq!(value_of_r9("R9 = 6 B_OR 3\n"), 7.0);
         // AND has higher priority than OR: 1 OR (0 AND 0) = 1.
         assert_eq!(value_of_r9("R9 = 1 OR 0 AND 0\n"), 1.0);
-        // Word boundaries: ANDGATE / ORIGIN are variables, not operators.
+        // Word boundaries: ANDGATE / ORIGIN / DIVISOR / MODAL are variables,
+        // not operators followed by trailing names.
         assert_eq!(value_of_r9("ANDGATE=3 ORIGIN=4\nR9 = ANDGATE + ORIGIN\n"), 7.0);
+        assert_eq!(value_of_r9("DIVISOR=2 MODAL=3\nR9 = DIVISOR * MODAL\n"), 6.0);
+        // DIV/MOD still work word-bounded (and now case-insensitively).
+        assert_eq!(value_of_r9("R9 = 7 DIV 2\n"), 3.0);
+        assert_eq!(value_of_r9("R9 = 7 mod 2\n"), 1.0);
+        // Bit-by-bit operators reject non-integer operands loudly instead of
+        // silently truncating (manual 4.1.3.2: CHAR/INT only).
+        let err = nc_to_table("R9 = 6.5 B_AND 3\n", None, None, None, 10000, false, None, false).unwrap_err();
+        assert!(format!("{err}").contains("integer operands"), "got: {err}");
     }
 
     /// The interpolation parameters I/J/K (arc-centre offsets) and the CR

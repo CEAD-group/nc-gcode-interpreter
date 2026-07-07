@@ -441,6 +441,26 @@ fn evaluate_comparison(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State)
     Ok(lhs)
 }
 
+/// Validate a bit-by-bit operand: the manual restricts B_AND/B_XOR/B_OR to
+/// CHAR/INT (with automatic conversion); a fractional, non-finite or
+/// out-of-range REAL has no defined bit pattern, and `as i64` would silently
+/// truncate/saturate it - loud error instead.
+fn bit_operand(value: f64, operator: &Pair<Rule>, state: &State) -> Result<i64, ParsingError> {
+    if !value.is_finite() || value.fract() != 0.0 || value.abs() >= 9_007_199_254_740_992.0 {
+        let (line_no, preview) = get_error_context(operator, state);
+        return Err(ParsingError::with_context(
+            line_no,
+            preview,
+            "bit-by-bit operator".to_string(),
+            format!(
+                "{} requires integer operands (manual 4.1.3.2: types CHAR/INT), got {value}",
+                operator.as_str()
+            ),
+        ));
+    }
+    Ok(value as i64)
+}
+
 fn evaluate_or(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
     let mut lhs = evaluate_xor(pairs, pos, state)?;
     while matches!(pairs.get(*pos).map(|p| p.as_rule()), Some(Rule::op_or)) {
@@ -474,9 +494,10 @@ fn evaluate_and(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Res
 fn evaluate_b_or(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
     let mut lhs = evaluate_b_xor(pairs, pos, state)?;
     while matches!(pairs.get(*pos).map(|p| p.as_rule()), Some(Rule::op_b_or)) {
+        let operator = pairs[*pos].clone();
         *pos += 1;
         let rhs = evaluate_b_xor(pairs, pos, state)?;
-        lhs = ((lhs as i64) | (rhs as i64)) as f64;
+        lhs = (bit_operand(lhs, &operator, state)? | bit_operand(rhs, &operator, state)?) as f64;
     }
     Ok(lhs)
 }
@@ -484,9 +505,10 @@ fn evaluate_b_or(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Re
 fn evaluate_b_xor(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
     let mut lhs = evaluate_b_and(pairs, pos, state)?;
     while matches!(pairs.get(*pos).map(|p| p.as_rule()), Some(Rule::op_b_xor)) {
+        let operator = pairs[*pos].clone();
         *pos += 1;
         let rhs = evaluate_b_and(pairs, pos, state)?;
-        lhs = ((lhs as i64) ^ (rhs as i64)) as f64;
+        lhs = (bit_operand(lhs, &operator, state)? ^ bit_operand(rhs, &operator, state)?) as f64;
     }
     Ok(lhs)
 }
@@ -494,9 +516,10 @@ fn evaluate_b_xor(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> R
 fn evaluate_b_and(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
     let mut lhs = evaluate_additive(pairs, pos, state)?;
     while matches!(pairs.get(*pos).map(|p| p.as_rule()), Some(Rule::op_b_and)) {
+        let operator = pairs[*pos].clone();
         *pos += 1;
         let rhs = evaluate_additive(pairs, pos, state)?;
-        lhs = ((lhs as i64) & (rhs as i64)) as f64;
+        lhs = (bit_operand(lhs, &operator, state)? & bit_operand(rhs, &operator, state)?) as f64;
     }
     Ok(lhs)
 }
