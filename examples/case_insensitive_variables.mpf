@@ -1,0 +1,13 @@
+; Variable identifiers are case-insensitive (manual 3.3.2: "No distinction
+; is made between uppercase and lowercase characters"): lAYER_HEIGHT,
+; LAYER_HEIGHT and layer_height are all the same variable. Seen in a real
+; program that declares a typo'd name but assigns the intended one.
+DEF REAL lAYER_HEIGHT
+LAYER_HEIGHT = 2.5
+
+G1 X0 Y0 Z0 F1000
+Z=IC(layer_height)
+Z=IC(Layer_Height)
+R1 = LAYER_HEIGHT * 4
+X = r1
+M30
