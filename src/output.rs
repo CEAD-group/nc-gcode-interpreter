@@ -199,6 +199,8 @@ pub struct OutputRows {
     /// sink: arc and spline rows are replaced by sampled runs of G1 rows
     /// before they reach the sink (see [`crate::flatten`]).
     flattener: Option<crate::flatten::Flattener>,
+    /// Whether the once-per-run G91 warning has fired (see `flush`).
+    warned_g91: bool,
 }
 
 impl OutputRows {
@@ -208,6 +210,7 @@ impl OutputRows {
             sink: RowSink::Collect(Vec::new()),
             record_variables: false,
             flattener: None,
+            warned_g91: false,
         }
     }
 
@@ -218,6 +221,7 @@ impl OutputRows {
             sink: RowSink::Stream(sender),
             record_variables: true,
             flattener: None,
+            warned_g91: false,
         }
     }
 
@@ -242,6 +246,7 @@ impl OutputRows {
             }),
             record_variables: false,
             flattener: None,
+            warned_g91: false,
         }
     }
 
@@ -287,6 +292,18 @@ impl OutputRows {
         }
         let mut row = std::mem::take(&mut self.current);
         rekey_g4_dwell(&mut row);
+        // G91 is parsed but incremental dimensioning is NOT applied: every
+        // axis value is emitted as if absolute, so positions are wrong from
+        // this block on. Loud once-per-run warning - never butcher silently.
+        if !self.warned_g91 {
+            if matches!(row.cells.get("gg14_wp_measure_mode"), Some(Value::Str(code)) if code == "G91") {
+                crate::state::emit_warning(format_args!(
+                    "Warning [line {}]: G91 incremental dimensioning is not interpreted - axis values are emitted as absolute positions and will be wrong from this block on",
+                    row.line_no
+                ));
+                self.warned_g91 = true;
+            }
+        }
         self.deliver(row)
     }
 

@@ -1510,6 +1510,7 @@ fn interpret_statement(
             // axis_word is the hoisted fast-path form of assignment's first
             // alternative; both carry (variable_single_char, value) inners.
             Rule::assignment | Rule::axis_word => {
+                let line_no = statement.line_col().0;
                 let (key, local_value) = interpret_assignment(statement, state)?;
                 match state.resolve_output_key(&key) {
                     Some((ColKind::Axis, skey)) => {
@@ -1522,6 +1523,7 @@ fn interpret_statement(
                         last.insert(skey, Value::Float(local_value));
                     }
                     None => {
+                        state.warn_unsupported_address(&key, line_no);
                         output.record_variable_change(&key, local_value);
                     }
                 }

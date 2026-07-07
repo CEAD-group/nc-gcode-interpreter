@@ -13,6 +13,11 @@ released to PyPI.
   never-forward-filled `dwell` column instead of polluting the modal F/S
   columns (previously `G4 F0.01` set the feed to 0.01 mm/min for every
   following block until the next real F word)
+- Loud warnings for known-but-uninterpreted constructs (never silently
+  butcher a statement): assignments to `AR`/`AP`/`RP` (opening-angle and
+  polar arc forms) warn once per run that the motion will be wrong; `G91`
+  warns once that incremental dimensioning is not applied; the flattener
+  warns per word for CIP/CT/POLY/thread/involute pass-through
 - `TURN` output column (block address, never forward-filled): additional
   full helix turns on G2/G3 blocks; previously swallowed as a user variable
 - Curve flattening: `flatten_tolerance` on `nc_to_dataframe` / `nc_to_rows` /

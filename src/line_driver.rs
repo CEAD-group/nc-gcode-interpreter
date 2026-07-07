@@ -362,6 +362,7 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                         last.insert(skey, Value::Float(*value));
                     }
                     None => {
+                        state.warn_unsupported_address(key, line.line_no);
                         output.record_variable_change(key, *value);
                         state.symbol_table.insert(key.to_string(), *value);
                     }
@@ -428,6 +429,7 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                         last.insert(skey, Value::Float(local_value));
                     }
                     None => {
+                        state.warn_unsupported_address(key, line.line_no);
                         let local_value = increment_local(state, key, value);
                         output.record_variable_change(key, local_value);
                         state.symbol_table.insert(key.to_string(), local_value);

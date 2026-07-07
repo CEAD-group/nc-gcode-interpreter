@@ -289,3 +289,38 @@ def test_view_toolpath_nozzle_and_follow():
 
     with pytest.raises(ValueError):
         view_toolpath(df, viewer=Stub(), follow="chase")
+
+
+def test_unsupported_constructs_warn_loudly(capfd):
+    # AR= (opening-angle arc) is not interpreted: it must warn, once per run,
+    # instead of silently producing a straight line.
+    nc_to_dataframe("G1 X0 Y0 F100\nG2 X50 Y0 AR=105\nG2 X100 Y0 AR=105\n")
+    err = capfd.readouterr().err
+    assert err.count("'AR'") == 1, err
+    assert "not interpreted" in err
+
+    # Polar coordinates (AP=/RP=) likewise.
+    nc_to_dataframe("G1 X0 Y0 F100\nG111 X20 Y20\nG1 AP=45 RP=30\n")
+    err = capfd.readouterr().err
+    assert "'AP'" in err and "'RP'" in err
+
+    # G91 incremental dimensioning is parsed but not applied: loud warning.
+    nc_to_dataframe("G1 X10 Y10 F100\nG91\nX5 Y5\nX5 Y5\n")
+    err = capfd.readouterr().err
+    assert err.count("G91 incremental dimensioning") == 1, err
+
+    # The CIP intermediate-point form (I1=/J1=) fails to parse - a loud
+    # error, not a silent misread.
+    with pytest.raises(ValueError, match="line 2"):
+        nc_to_dataframe("G1 X0 Y0 F100\nCIP X20 Y0 I1=10 J1=5\n")
+    capfd.readouterr()
+
+    # A CIP block that does parse passes through flattening with a warning
+    # naming the word.
+    nc_to_dataframe("G1 X0 Y0 F100\nCIP X20 Y0 I10 J5\n", flatten_tolerance=0.1)
+    err = capfd.readouterr().err
+    assert "CIP" in err
+
+    # Supported constructs stay quiet.
+    nc_to_dataframe(ARC_PROGRAM, flatten_tolerance=0.1)
+    assert capfd.readouterr().err == ""
