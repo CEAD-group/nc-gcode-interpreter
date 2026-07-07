@@ -60,7 +60,8 @@ mod python_bindings {
 
     use crate::errors::ErrorLocation;
     use crate::interpreter::{nc_to_batch_stream_with_line_numbers, nc_to_row_stream};
-    use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table};
+    use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table, VariableEvents};
+    use crate::state::FinalState;
     use crate::types::Value;
 
     pyo3::create_exception!(
@@ -106,6 +107,19 @@ mod python_bindings {
             let _ = value.setattr("line_text", line_text);
             err
         }
+    }
+
+    /// Render a [`FinalState`] as the Python `.state` dict:
+    /// `{axes, symbol_table, translation, string_table}`. The three numeric
+    /// sub-tables become `dict[str, float]`; `string_table` (DEF STRING
+    /// variables) becomes `dict[str, str]`. Shared by both iterators.
+    fn final_state_to_py<'py>(py: Python<'py>, state: &FinalState) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        dict.set_item("axes", state.axes.clone())?;
+        dict.set_item("symbol_table", state.symbol_table.clone())?;
+        dict.set_item("translation", state.translation.clone())?;
+        dict.set_item("string_table", state.string_table.clone())?;
+        Ok(dict)
     }
 
     /// Build one Arrow [`RecordBatch`](arrow::record_batch::RecordBatch) directly
@@ -214,7 +228,7 @@ mod python_bindings {
                     row_sender,
                 );
                 let message = match outcome {
-                    Ok(state) => Ok(state.to_python_dict()),
+                    Ok(state) => Ok(state.final_state()),
                     // The consumer hung up: nothing to report to nobody.
                     Err(crate::errors::ParsingError::StreamClosed) => return,
                     Err(error) => Err(ErrInfo::from_error(&error)),
@@ -242,9 +256,11 @@ mod python_bindings {
         allow_undefined_variables: bool,
         flatten_tolerance: Option<f64>,
         emit_line_no: bool,
+        include_variables: bool,
     ) -> PyResult<(
         mpsc::Receiver<Table>,
         mpsc::Receiver<Result<FinalState, ErrInfo>>,
+        mpsc::Receiver<VariableEvents>,
         std::thread::JoinHandle<()>,
     )> {
         // A cap of 3 lets the worker build one batch ahead while the consumer
@@ -252,6 +268,10 @@ mod python_bindings {
         // buffering.
         let (batch_sender, batch_receiver) = mpsc::sync_channel::<Table>(3);
         let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, ErrInfo>>(1);
+        // Variable-change events are a small sparse side-table sent once at the
+        // end; an unbounded channel so the worker never blocks emitting them
+        // (they are only read after the batch stream is drained).
+        let (events_sender, events_receiver) = mpsc::channel::<VariableEvents>();
 
         let handle = std::thread::Builder::new()
             .name("nc-interpreter".to_string())
@@ -269,9 +289,11 @@ mod python_bindings {
                     batch_size,
                     emit_line_no,
                     batch_sender,
+                    include_variables,
+                    events_sender,
                 );
                 let message = match outcome {
-                    Ok(state) => Ok(state.to_python_dict()),
+                    Ok(state) => Ok(state.final_state()),
                     // The consumer hung up: nothing to report to nobody.
                     Err(crate::errors::ParsingError::StreamClosed) => return,
                     Err(error) => Err(ErrInfo::from_error(&error)),
@@ -279,10 +301,8 @@ mod python_bindings {
                 let _ = result_sender.send(message);
             })
             .map_err(|e| PyErr::new::<PyValueError, _>(format!("failed to spawn interpreter thread: {}", e)))?;
-        Ok((batch_receiver, result_receiver, handle))
+        Ok((batch_receiver, result_receiver, events_receiver, handle))
     }
-
-    type FinalState = HashMap<String, HashMap<String, f64>>;
 
     /// Iterator over interpreted rows: `next()` yields
     /// `(line_no, {column: value})` while the interpreter runs on a worker
@@ -440,11 +460,12 @@ mod python_bindings {
             }
         }
 
-        /// The final interpreter state (axes, symbol_table, translation),
-        /// available once the iterator is exhausted.
+        /// The final interpreter state
+        /// (`{axes, symbol_table, translation, string_table}`), available once
+        /// the iterator is exhausted.
         #[getter]
-        fn state(&self) -> Option<FinalState> {
-            self.state.clone()
+        fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+            self.state.as_ref().map(|s| final_state_to_py(py, s)).transpose()
         }
     }
 
@@ -512,8 +533,14 @@ mod python_bindings {
     struct NcBatchIterator {
         batches: Option<Mutex<mpsc::Receiver<Table>>>,
         result: Option<Mutex<mpsc::Receiver<Result<FinalState, ErrInfo>>>>,
+        /// Set at construction only when `include_variables`; drained at finish
+        /// into `variable_events`.
+        events: Option<Mutex<mpsc::Receiver<VariableEvents>>>,
         handle: Option<std::thread::JoinHandle<()>>,
         state: Option<FinalState>,
+        /// The sparse variable-change side-table, available once exhausted.
+        /// `None` unless `include_variables` was set.
+        variable_events: Option<VariableEvents>,
     }
 
     impl NcBatchIterator {
@@ -527,6 +554,16 @@ mod python_bindings {
                         return Err(info.into_pyerr(py));
                     }
                     Err(_) => {}
+                }
+            }
+            // The worker sends the events (once) before dropping the batch
+            // sender, so by the time the batch stream has closed they are
+            // already queued on the unbounded channel; a hung-up / disabled run
+            // yields `Err` and leaves `variable_events` as `None`.
+            if let Some(events) = self.events.take() {
+                let receiver = events.into_inner().expect("events receiver mutex poisoned");
+                if let Ok(ev) = py.detach(move || receiver.recv()) {
+                    self.variable_events = Some(ev);
                 }
             }
             self.join();
@@ -579,11 +616,33 @@ mod python_bindings {
             }
         }
 
-        /// The final interpreter state (axes, symbol_table, translation),
-        /// available once the iterator is exhausted.
+        /// The final interpreter state
+        /// (`{axes, symbol_table, translation, string_table}`), available once
+        /// the iterator is exhausted.
         #[getter]
-        fn state(&self) -> Option<FinalState> {
-            self.state.clone()
+        fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+            self.state.as_ref().map(|s| final_state_to_py(py, s)).transpose()
+        }
+
+        /// The sparse variable-change events (`include_variables=True`) as an
+        /// Arrow record batch with columns `row_idx` (Int64, the output-row
+        /// index the change is seen at), `name_id` (Int64, index into
+        /// `variable_names`) and `value` (Float64). `None` when the iterator was
+        /// created without `include_variables`. Available once exhausted.
+        /// `pl.DataFrame(it.variable_events)` wraps it zero-copy.
+        #[getter]
+        fn variable_events(&self) -> PyResult<Option<ArrowBatch>> {
+            self.variable_events
+                .as_ref()
+                .map(|ev| table_to_arrow_batch(ev.to_table()))
+                .transpose()
+        }
+
+        /// The variable names `name_id` indexes into (in first-seen order).
+        /// `None` unless `include_variables` was set; available once exhausted.
+        #[getter]
+        fn variable_names(&self) -> Option<Vec<String>> {
+            self.variable_events.as_ref().map(|ev| ev.names.clone())
         }
     }
 
@@ -593,7 +652,7 @@ mod python_bindings {
     /// thread. Wrapping each with `pl.DataFrame` and concatenating reconstructs
     /// `nc_to_dataframe`.
     #[pyfunction]
-    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false))]
+    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_batches(
         input: String,
@@ -608,6 +667,7 @@ mod python_bindings {
         input_is_path: bool,
         flatten_tolerance: Option<f64>,
         include_line_numbers: bool,
+        include_variables: bool,
     ) -> PyResult<NcBatchIterator> {
         if batch_size == 0 {
             return Err(PyErr::new::<PyValueError, _>("batch_size must be greater than 0"));
@@ -619,7 +679,7 @@ mod python_bindings {
         } else {
             input
         };
-        let (batch_receiver, result_receiver, handle) = spawn_batch_stream(
+        let (batch_receiver, result_receiver, events_receiver, handle) = spawn_batch_stream(
             input,
             batch_size,
             initial_state,
@@ -631,13 +691,22 @@ mod python_bindings {
             allow_undefined_variables,
             flatten_tolerance,
             include_line_numbers,
+            include_variables,
         )?;
 
         Ok(NcBatchIterator {
             batches: Some(Mutex::new(batch_receiver)),
             result: Some(Mutex::new(result_receiver)),
+            // Only hold the events receiver when recording; otherwise leave it
+            // `None` so `.variable_events` stays `None`.
+            events: if include_variables {
+                Some(Mutex::new(events_receiver))
+            } else {
+                None
+            },
             handle: Some(handle),
             state: None,
+            variable_events: None,
         })
     }
 

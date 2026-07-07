@@ -126,6 +126,53 @@ pub struct Row {
     pub variable_changes: Vec<(String, f64)>,
 }
 
+/// Sparse side-table of variable-change events for the batch path, mirroring
+/// what the streaming `nc_to_rows` yields per row as `variable_changes`. Stored
+/// columnar (struct-of-arrays) so it converts to an Arrow table cheaply:
+///
+/// * `row_idx[i]` - the index (0-based, global across batches) of the output
+///   row this change is seen at / precedes. A change on an output row gets that
+///   row's own index; a change on a variable-only block (no output row) is
+///   attributed to the *next* output row, so replaying every event with
+///   `row_idx <= k` reconstructs the symbol table as of output row `k`.
+/// * `name_id[i]` - index into `names` (interned per run, stable, global).
+/// * `value[i]` - the new numeric value assigned.
+///
+/// Emitting is opt-in (`include_variables`); off, the batch path records
+/// nothing (no allocation), exactly as before.
+#[derive(Debug, Default, Clone)]
+pub struct VariableEvents {
+    pub row_idx: Vec<u32>,
+    pub name_id: Vec<u32>,
+    pub value: Vec<f64>,
+    pub names: Vec<String>,
+}
+
+impl VariableEvents {
+    /// Render the events as an output [`Table`]: `row_idx`/`name_id` as Int64
+    /// columns, `value` as Float64. The names list is exposed separately (as a
+    /// Python list) so `name_id` indexes into it.
+    #[allow(dead_code)] // used by the python-feature bindings, not the bin
+    pub fn to_table(&self) -> Table {
+        Table {
+            columns: vec![
+                (
+                    "row_idx".to_string(),
+                    Column::Int(self.row_idx.iter().map(|&v| Some(v as i64)).collect()),
+                ),
+                (
+                    "name_id".to_string(),
+                    Column::Int(self.name_id.iter().map(|&v| Some(v as i64)).collect()),
+                ),
+                (
+                    "value".to_string(),
+                    Column::Float(self.value.iter().map(|&v| Some(v)).collect()),
+                ),
+            ],
+        }
+    }
+}
+
 /// Where finished rows go: collected for the batch table, or pushed into a
 /// bounded channel that a streaming consumer drains while interpretation is
 /// still running.
@@ -154,21 +201,63 @@ pub struct BatchStreamSink {
     builder: BatchBuilder,
     buffer: Vec<Row>,
     batch_size: usize,
+    /// Whether to accumulate variable-change events (opt-in `include_variables`).
+    record_variables: bool,
+    /// Unbounded channel the accumulated [`VariableEvents`] are sent on once, at
+    /// finish. Unbounded so the send never blocks the worker (the events are
+    /// small and only read after the batch stream is drained).
+    events_sender: std::sync::mpsc::Sender<VariableEvents>,
+    /// Growing sparse event log, sent whole at finish.
+    events: VariableEvents,
+    /// Interned variable-name -> `name_id`, stable across the run.
+    name_ids: HashMap<String, u32>,
+    /// Count of cell-bearing (output) rows emitted so far - the `row_idx` a
+    /// change is attributed to (see [`VariableEvents`]).
+    output_row_count: u32,
 }
 
 impl BatchStreamSink {
     /// Buffer a finished row and flush a batch once `batch_size` cell-bearing
     /// rows have accumulated. Variable-only rows carry no output cells and are
-    /// dropped (they never reach the batch table).
+    /// dropped from the batch table, but their variable changes are still
+    /// recorded into the sparse event log when `record_variables` is on.
     fn accept(&mut self, row: Row) -> Result<(), ParsingError> {
+        if self.record_variables {
+            for (name, value) in &row.variable_changes {
+                let id = match self.name_ids.get(name) {
+                    Some(&id) => id,
+                    None => {
+                        let id = self.events.names.len() as u32;
+                        self.events.names.push(name.clone());
+                        self.name_ids.insert(name.clone(), id);
+                        id
+                    }
+                };
+                // Recorded at the current output-row count: a change on this row
+                // (before the increment below) gets its own index; a change on a
+                // variable-only row gets the next output row's index.
+                self.events.row_idx.push(self.output_row_count);
+                self.events.name_id.push(id);
+                self.events.value.push(*value);
+            }
+        }
         if row.cells.is_empty() {
             return Ok(());
         }
+        self.output_row_count += 1;
         self.buffer.push(row);
         if self.buffer.len() >= self.batch_size {
             self.emit()?;
         }
         Ok(())
+    }
+
+    /// Send the accumulated variable-change events once, at finish. A no-op when
+    /// not recording. Best-effort: a hung-up consumer just misses the events.
+    fn send_events(&mut self) {
+        if self.record_variables {
+            let _ = self.events_sender.send(std::mem::take(&mut self.events));
+        }
     }
 
     /// Build and send the buffered rows as one [`Table`], threading the
@@ -232,21 +321,34 @@ impl OutputRows {
     /// table drops variable-only rows), so this behaves like the collect path
     /// for parallelization purposes.
     #[allow(dead_code)] // used by the python-feature bindings, not the bin
+    #[allow(clippy::too_many_arguments)]
     pub fn batch_stream(
         sender: std::sync::mpsc::SyncSender<Table>,
         batch_size: usize,
         disable_forward_fill: bool,
+        record_variables: bool,
+        events_sender: std::sync::mpsc::Sender<VariableEvents>,
     ) -> Self {
         // Back-compatible entry point: never emits line_no.
-        Self::batch_stream_with_line_numbers(sender, batch_size, disable_forward_fill, false)
+        Self::batch_stream_with_line_numbers(
+            sender,
+            batch_size,
+            disable_forward_fill,
+            record_variables,
+            events_sender,
+            false,
+        )
     }
 
     /// As [`batch_stream`](Self::batch_stream), but with the opt-in `line_no`
     /// column. Separate constructor so `batch_stream`'s signature stays stable.
+    #[allow(clippy::too_many_arguments)]
     pub fn batch_stream_with_line_numbers(
         sender: std::sync::mpsc::SyncSender<Table>,
         batch_size: usize,
         disable_forward_fill: bool,
+        record_variables: bool,
+        events_sender: std::sync::mpsc::Sender<VariableEvents>,
         emit_line_no: bool,
     ) -> Self {
         OutputRows {
@@ -256,8 +358,15 @@ impl OutputRows {
                 builder: BatchBuilder::new(disable_forward_fill).with_line_numbers(emit_line_no),
                 buffer: Vec::new(),
                 batch_size,
+                record_variables,
+                events_sender,
+                events: VariableEvents::default(),
+                name_ids: HashMap::new(),
+                output_row_count: 0,
             }),
-            record_variables: false,
+            // Recording variable deltas on rows is what feeds the batch event
+            // log: on only when the caller opted in via `include_variables`.
+            record_variables,
             flattener: None,
             warned_g91: false,
         }
@@ -362,6 +471,7 @@ impl OutputRows {
             // full batch), then close the channel by dropping the sender.
             RowSink::Batch(mut sink) => {
                 sink.emit()?;
+                sink.send_events();
                 Ok(Vec::new())
             }
         }
