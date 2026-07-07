@@ -496,6 +496,47 @@ mod tests {
         table.columns.iter().map(|(n, _)| n.as_str()).collect()
     }
 
+    /// $AA_IW[<axis>] / $AA_IM[<axis>] read the interpreted actual position
+    /// (work / machine coordinates): the real-world layer loop
+    /// `REPEAT ... UNTIL $AA_IW[Z] > H` must terminate instead of reading an
+    /// undefined variable stuck at 0.0 until the iteration limit.
+    #[test]
+    fn actual_position_sysvars_read_axis_state() {
+        let run = |src: &str| {
+            nc_to_table(src, None, None, None, 10000, false, None, false)
+                .expect("program should interpret")
+        };
+        // Layer loop: Z climbs 1 mm per pass until above 4.5.
+        let (table, state) = run(
+            "G1 X0 Y0 Z0 F100\nREPEAT\nZ=IC(1)\nUNTIL $AA_IW[Z] > 4.5\nM30\n",
+        );
+        assert_eq!(state.axes["Z"], 5.0);
+        assert_eq!(
+            floats(&table, "Z"),
+            &[Some(0.0), Some(1.0), Some(2.0), Some(3.0), Some(4.0), Some(5.0), Some(5.0)]
+        );
+        // IW is the work coordinate, IM includes the active translation.
+        let (_, state) = run("TRANS Z10\nG1 Z5 F100\nR1 = $AA_IW[Z]\nR2 = $AA_IM[Z]\nM30\n");
+        assert_eq!(state.symbol_table["R1"], 5.0);
+        assert_eq!(state.symbol_table["R2"], 15.0);
+    }
+
+    /// Machine-state boundaries stay loud: reading an actual position before
+    /// the axis was ever positioned is an error (warning + 0.0 only under
+    /// allow_undefined_variables), and $AA_IW/$AA_IM are read-only.
+    #[test]
+    fn actual_position_sysvars_boundaries() {
+        let err = nc_to_table("R1 = $AA_IW[Z]\n", None, None, None, 10000, false, None, false).unwrap_err();
+        assert!(format!("{err}").contains("before axis Z has a position"), "got: {err}");
+        // With allow_undefined_variables it degrades to a warned 0.0.
+        let (_, state) = nc_to_table("R1 = $AA_IW[Z]\n", None, None, None, 10000, false, None, true)
+            .expect("allow_undefined_variables tolerates the early read");
+        assert_eq!(state.symbol_table["R1"], 0.0);
+        let err = nc_to_table("G1 Z0 F100\n$AA_IW[Z] = 5\n", None, None, None, 10000, false, None, false)
+            .unwrap_err();
+        assert!(format!("{err}").contains("read-only"), "got: {err}");
+    }
+
     /// The interpolation parameters I/J/K (arc-centre offsets) and the CR
     /// radius form must be emitted on the arc block that programs them and be
     /// absent (null) on ordinary linear blocks - never silently dropped and
