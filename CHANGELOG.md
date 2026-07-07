@@ -4,6 +4,22 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Fixed
+
+- Arithmetic-function arity: added a regression test pinning that every
+  `SIN`/`COS`/`ATAN2`/`BOUND`/... call already validates its argument count
+  (`check_args`) before indexing `args[..]`, returning
+  `ParsingError::InvalidFunctionArity` instead of panicking on a wrong-arity
+  call (#16).
+
+### Documented
+
+- Pinned iterator-drop -> `ParsingError::StreamClosed` as the supported
+  cancel contract for `nc_to_rows`/`nc_to_batches` (README, docstrings) and
+  noted the release-profile `strip`/`lto` tradeoff in `Development.md` (#49).
+
 ## [v0.2.0] - 2026-07-07
 
 ### Changed

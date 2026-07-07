@@ -415,6 +415,13 @@ def nc_to_rows(
     an anonymous iterator drops it; a stored iterator keeps the worker
     alive (parked on the bounded channel) until it is deleted or
     garbage-collected.
+
+    Dropping the iterator is the **supported cancel contract**: the
+    background thread's next attempted send hits the now-closed channel and
+    returns internally via ``ParsingError::StreamClosed``, so it unwinds
+    promptly instead of finishing the rest of the program. There is no
+    separate ``.cancel()``/``.close()`` - drop is the whole mechanism.
+
     Errors raise ``ValueError`` from ``next()`` when reached. After the
     iterator is exhausted, its ``state`` attribute holds the final
     interpreter state (axes, symbol_table, translation).
@@ -503,6 +510,12 @@ def nc_to_batches(
 
     The returned iterator exposes a ``state`` attribute holding the final
     interpreter state once it is exhausted, like :func:`nc_to_rows`.
+
+    Like :func:`nc_to_rows`, this runs on a background thread behind a
+    bounded channel, and dropping the iterator is the supported way to
+    cancel: the next attempted send hits the closed channel and returns
+    internally via ``ParsingError::StreamClosed``, unwinding the thread
+    promptly instead of finishing the rest of the program.
 
     Example:
     --------

@@ -30,6 +30,21 @@ cargo build --release
 maturing develop --release --uv
 ```
 
+### Release profile
+
+`[profile.release]` currently sets no `strip`/`lto` overrides. `strip = true` was
+tried and dropped (`e1ff63a`): cargo runs the *host* `strip` binary even on a
+cross-compiled artifact, so stripping the cross-built macOS x86_64 dylib with
+the arm64 host `strip` produced a wheel PyPI rejected as "not a zipfile" -
+stripping was reverted to unblock the release. It was a secondary size win
+(mostly orthogonal to the polars removal that motivated it) and can be
+revisited via maturin's cross-aware `--strip` flag instead of a Cargo
+profile setting.
+
+`lto` remains an untried, plausible speed knob (doesn't invoke an external
+tool, so it isn't blocked by the cross-compile issue above) - just not yet
+evaluated for its extra build time across the wheel matrix.
+
 
 ## Super simple test
 

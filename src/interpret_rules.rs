@@ -2039,3 +2039,56 @@ fn run_blocks(
     Ok(BlockFlow::Continue)
 }
 
+/// Regression tests for #16: every arithmetic function in
+/// `evaluate_arithmetic_function` validates its argument count via
+/// `check_args` before indexing `args[..]`, so a wrong-arity call returns
+/// `ParsingError::InvalidFunctionArity` instead of panicking.
+#[cfg(test)]
+mod arity_tests {
+    use crate::interpreter::nc_to_table;
+
+    fn run(program: &str) -> Result<(), String> {
+        nc_to_table(program, None, None, None, 10_000, false, None, false, None)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn unary_function_with_two_args_errors_not_panics() {
+        // SIN expects 1 argument; feeding it 2 must not index out of bounds.
+        let err = run("X=SIN(30, 45)\nM30\n").expect_err("wrong arity must error");
+        assert!(err.contains("SIN"), "error should name the offending function: {err}");
+        assert!(err.contains("expects 1 argument"), "error should state the expected arity: {err}");
+    }
+
+    #[test]
+    fn unary_function_with_zero_args_errors_not_panics() {
+        // COS expects 1 argument; feeding it 0 must not index out of bounds.
+        let err = run("X=COS()\nM30\n").expect_err("wrong arity must error");
+        assert!(err.contains("COS"), "error should name the offending function: {err}");
+    }
+
+    #[test]
+    fn binary_function_with_one_arg_errors_not_panics() {
+        // ATAN2 expects 2 arguments; feeding it 1 must not index out of bounds.
+        let err = run("X=ATAN2(30)\nM30\n").expect_err("wrong arity must error");
+        assert!(err.contains("ATAN2"), "error should name the offending function: {err}");
+        assert!(err.contains("expects 2 argument"), "error should state the expected arity: {err}");
+    }
+
+    #[test]
+    fn ternary_function_with_two_args_errors_not_panics() {
+        // BOUND expects 3 arguments; feeding it 2 must not index out of bounds.
+        let err = run("X=BOUND(0, 10)\nM30\n").expect_err("wrong arity must error");
+        assert!(err.contains("BOUND"), "error should name the offending function: {err}");
+        assert!(err.contains("expects 3 argument"), "error should state the expected arity: {err}");
+    }
+
+    #[test]
+    fn correct_arity_still_succeeds() {
+        run("X=SIN(30)\nM30\n").expect("correct arity must not error");
+        run("X=ATAN2(30, 45)\nM30\n").expect("correct arity must not error");
+        run("X=BOUND(0, 10, 5)\nM30\n").expect("correct arity must not error");
+    }
+}
+
