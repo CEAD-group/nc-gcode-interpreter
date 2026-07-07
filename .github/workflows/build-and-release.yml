@@ -39,6 +39,14 @@ jobs:
       - name: Lint Python code with ruff
         run: ruff check .
 
+  rust-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      - name: Run Rust unit and integration tests
+        run: cargo test
+
   linux-x64:
     needs: [lint]
     runs-on: ${{ matrix.platform.runner }}

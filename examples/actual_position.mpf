@@ -1,0 +1,17 @@
+; $AA_IW[<axis>] / $AA_IM[<axis>]: actual work / machine position of an
+; axis, served from the interpreted axis state. The classic use is a layer
+; loop that repeats until the part height is reached:
+DEF REAL LAYER_HEIGHT = 2, PART_HEIGHT = 9
+
+G1 X0 Y0 Z0 F1000
+REPEAT
+    X=IC(10)
+    Z=IC(LAYER_HEIGHT)
+UNTIL $AA_IW[Z] > (PART_HEIGHT-0.05)
+
+; $AA_IW is the work coordinate; $AA_IM includes the active translation:
+TRANS Z100
+R1 = $AA_IW[Z] ; 10 (work)
+R2 = $AA_IM[Z] ; 110 (machine)
+Y = R2 - R1
+M30

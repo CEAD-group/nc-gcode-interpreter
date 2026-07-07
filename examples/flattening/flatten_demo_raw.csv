@@ -1,0 +1,15 @@
+gg01_motion,gg06_plane_select,X,Y,Z,F,I,J,PW,M,comment
+,,,,,,,,,,"; Curve flattening demo: a G2 arc and a BSPLINE, flattened to G1 moves"
+,,,,,,,,,,"; with --flatten-tolerance 0.1 (max deviation from the true curve, in path"
+,,,,,,,,,,; units). flatten_demo_raw.csv is the same program interpreted without
+,,,,,,,,,,; flattening; flatten_demo_flattened.csv is the tol-0.1 result: only G1
+,,,,,,,,,,"; motions remain, the consumed I/J/PW columns are gone, and generated"
+,,,,,,,,,,; samples carry flattened=1 (programmed points stay unmarked).
+G1,G17,0.000,0.000,0.000,1000.000,,,,,
+G2,G17,100.000,0.000,0.000,1000.000,50.000,0.000,,,
+G1,G17,100.000,50.000,0.000,1000.000,,,,,
+BSPLINE,G17,110.000,60.000,0.000,1000.000,,,2.000,,
+BSPLINE,G17,120.000,40.000,0.000,1000.000,,,,,
+BSPLINE,G17,130.000,60.000,0.000,1000.000,,,,,
+BSPLINE,G17,140.000,50.000,0.000,1000.000,,,,,
+G1,G17,150.000,50.000,0.000,1000.000,,,,M30,

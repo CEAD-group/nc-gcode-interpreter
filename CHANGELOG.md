@@ -4,9 +4,37 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
-## [v0.2.0] - unreleased
+## [v0.2.0] - 2026-07-07
 
 ### Added
+
+- `dwell` output column: F/S on a `G4` block is the dwell time (seconds /
+  spindle revolutions), a per-block parameter - it now lands in its own
+  never-forward-filled `dwell` column instead of polluting the modal F/S
+  columns (previously `G4 F0.01` set the feed to 0.01 mm/min for every
+  following block until the next real F word)
+- Loud warnings for known-but-uninterpreted constructs (never silently
+  butcher a statement): assignments to `AR`/`AP`/`RP` (opening-angle and
+  polar arc forms) warn once per run that the motion will be wrong; `G91`
+  warns once that incremental dimensioning is not applied; the flattener
+  warns per word for CIP/CT/POLY/thread/involute pass-through
+- `TURN` output column (block address, never forward-filled): additional
+  full helix turns on G2/G3 blocks; previously swallowed as a user variable
+- Curve flattening: `flatten_tolerance` on `nc_to_dataframe` / `nc_to_rows` /
+  `nc_to_batches` (CLI: `--flatten-tolerance`) converts G2/G3 arcs (I/J/K and
+  CR= forms, all planes, helical, full circles) and ASPLINE/BSPLINE/CSPLINE
+  splines (PW weights, SD degree) into runs of G1 rows within a single
+  max-deviation tolerance of the true curve; interpolation addresses are
+  consumed, source line numbers and auxiliary cells preserved; generated
+  samples carry a `flattened = 1` marker column so the original programmed
+  points remain distinguishable
+- Optional `viz` extra (threejs-viewer >= 0.0.41):
+  `nc_gcode_interpreter.viz.view_toolpath(df)` shows a toolpath in
+  threejs-viewer as an animated bead tube (feed-rate float64 time base,
+  programmed vs flattened point coloring), and the `nc-view` console command
+  interprets + flattens + animates an .mpf in one step, with a nozzle
+  marker riding the path tip, camera follow/look-at tracking, and travel
+  moves drawn natively as a thin line in lockstep with the bead
 
 - Program jumps and branches: `GOTOF`/`GOTOB`/`GOTO`/`GOTOC`/`GOTOS` and
   `CASE ... OF ... DEFAULT`, with per-scope label/block-number resolution,

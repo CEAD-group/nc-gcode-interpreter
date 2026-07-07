@@ -26,6 +26,10 @@ dependencies = [
 dev = [
     "jupyter>=1.1.1"
 ]
+viz = [
+    "threejs-viewer>=0.0.41",
+    "numpy>=1.26",
+]
 test = [
     "pytest>=8.3.3",
     "mypy"
@@ -37,7 +41,16 @@ module-name = "nc_gcode_interpreter._internal"
 python-source = "python"
 include = ["python/nc_gcode_interpreter/py.typed", "python/nc_gcode_interpreter/ggroups.json"]
 
+[project.scripts]
+nc-view = "nc_gcode_interpreter.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/CEAD-group/nc-gcode-interpreter"
 Repository = "https://github.com/CEAD-group/nc-gcode-interpreter.git"
 Documentation = "https://github.com/CEAD-group/nc-gcode-interpreter/blob/main/README.md"
+
+[tool.mypy]
+# The viz extra's dependencies are optional: mypy runs in CI without them.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*", "threejs_viewer", "threejs_viewer.*"]
+ignore_missing_imports = true
