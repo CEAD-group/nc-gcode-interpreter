@@ -170,6 +170,13 @@ def toolpath_arrays(
         zero_len = np.concatenate(([False], seg < 1e-10))
         departing = np.diff(e, append=e[-1]) > 1e-10
         extruding = arriving | (zero_len & departing)
+        # An isolated extruding point (travel in, travel out) yields a
+        # single-point tube segment, which has no drawable bead and is
+        # rejected by add_toolpath ("needs >= 2 spine points"): render it
+        # as part of the travel instead.
+        prev_extrudes = np.concatenate(([False], extruding[:-1]))
+        next_extrudes = np.concatenate((extruding[1:], [False]))
+        extruding &= prev_extrudes | next_extrudes
     else:
         extruding = np.ones(n, dtype=bool)
 

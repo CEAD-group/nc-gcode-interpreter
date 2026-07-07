@@ -194,7 +194,9 @@ def test_viz_bead_detection_and_travel():
     # The 2 comment rows sit at the forward-filled position and are deduped
     # away (zero-length segments); 5 motion points remain. Extruding points
     # get the detected bead; the start cap and the travel move get width 0.
-    assert widths.tolist() == [0.0, 6.0, 6.0, 0.0, 6.0]
+    # The final point extrudes but is isolated (travel in, path end): a
+    # single-point tube segment cannot render, so it stays travel too.
+    assert widths.tolist() == [0.0, 6.0, 6.0, 0.0, 0.0]
     assert data[:, 5].max() == 1.5
     # Explicit arguments beat detection.
     data, _ = toolpath_arrays(df, bead_width=2.0, bead_height=1.0)
@@ -205,6 +207,33 @@ def test_viz_bead_detection_and_travel():
     data, _ = toolpath_arrays(df_plain)
     assert (data[:, 4] == 4.0).all() and (data[:, 5] == 2.0).all()
     assert detect_bead_size(df_plain) == (None, None)
+
+
+def test_viz_isolated_extrusion_point_renders_as_travel():
+    """A lone extruding move between travels must not yield a 1-point tube
+    segment: threejs-viewer's add_toolpath splits the spine at width==0 and
+    rejects single-point segments ("needs >= 2 spine points" - crashed on a
+    real-world program). Such a point has no drawable bead; it becomes travel.
+    """
+    np = pytest.importorskip("numpy")
+    from nc_gcode_interpreter.viz import toolpath_arrays
+
+    program = (
+        "G1 X0 Y0 Z0 E0 F1000\n"
+        "G0 X10 Y0\n"          # travel
+        "G1 X20 Y0 E1\n"       # isolated extruding move
+        "G0 X30 Y0\n"          # travel
+        "G1 X40 Y0 E2\n"       # extrusion run of two moves
+        "G1 X50 Y0 E3\n"
+    )
+    df, _ = nc_to_dataframe(program)
+    data, _ = toolpath_arrays(df, bead_width=4.0)
+    widths = data[:, 4]
+    assert widths.tolist() == [0.0, 0.0, 0.0, 0.0, 4.0, 4.0]
+    # Every remaining extrusion run is drawable (>= 2 consecutive points).
+    extruding = widths > 0
+    runs = np.diff(np.flatnonzero(np.diff(np.concatenate(([0], extruding, [0])))).reshape(-1, 2), axis=1)
+    assert (runs >= 2).all()
 
 
 def test_g4_dwell_and_run_start_feed():
