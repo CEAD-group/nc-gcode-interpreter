@@ -231,12 +231,18 @@ fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Re
 
     let file = NCParser::parse(Rule::file, input)
         .map_err(|e| {
-            let (line, _col) = match &e.line_col {
+            let (line, col) = match &e.line_col {
                 pest::error::LineColLocation::Pos(pos) => *pos,
                 pest::error::LineColLocation::Span(start, _) => *start,
             };
             let preview = state.get_line(line).unwrap_or("(could not retrieve line)").to_string();
-            ParsingError::with_context(line, preview, "initial file parsing".to_string(), describe_parse_error(&e))
+            ParsingError::ParsingContext {
+                line_no: line,
+                column: Some(col),
+                preview,
+                context: "initial file parsing".to_string(),
+                message: describe_parse_error(&e),
+            }
         })?
         .next()
         .ok_or_else(|| ParsingError::ParseError {

@@ -18,6 +18,12 @@ released to PyPI.
   block's line number; `dataframe_to_nc` ignores it (source provenance, not an
   emittable word). Concatenating batches reconstructs the same per-row
   `line_no` as the whole-file dataframe (#45)
+- Structured error locations: parse/interpret failures now raise
+  `nc_gcode_interpreter.NcError` (a `ValueError` subclass, so existing
+  `except ValueError` keeps working) carrying the position as data - `.line`,
+  `.column` (syntax errors), `.context`, and `.line_text` attributes (each an
+  int / str or `None`) - so a caller (e.g. an editor) can locate the offending
+  token without regex-parsing the message. `str(err)` is unchanged
 
 ### Fixed
 

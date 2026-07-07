@@ -60,9 +60,55 @@ mod python_bindings {
     }
     use std::sync::{mpsc, Mutex};
 
+    use crate::errors::ErrorLocation;
     use crate::interpreter::{nc_to_batch_stream_with_line_numbers, nc_to_row_stream};
     use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table};
     use crate::types::Value;
+
+    pyo3::create_exception!(
+        _internal,
+        NcError,
+        PyValueError,
+        "NC parse/interpret error. Subclasses ValueError (so `except ValueError` \
+         still catches it) and carries the error's source location as data: the \
+         `line`, `column`, `context`, and `line_text` attributes (each an int / \
+         str, or None when not applicable). `str(err)` is the full formatted \
+         message as before."
+    );
+
+    /// An error crossing the worker channel: the formatted message plus the
+    /// structured location, so the consuming thread can raise an `NcError`
+    /// carrying both.
+    struct ErrInfo {
+        message: String,
+        location: Option<ErrorLocation>,
+    }
+
+    impl ErrInfo {
+        fn from_error(error: &crate::errors::ParsingError) -> Self {
+            ErrInfo {
+                message: error.to_string(),
+                location: error.location(),
+            }
+        }
+
+        /// Build the Python `NcError`, always setting the four location
+        /// attributes (None when absent) so callers can read them
+        /// unconditionally.
+        fn into_pyerr(self, py: Python<'_>) -> PyErr {
+            let err = NcError::new_err(self.message);
+            let value = err.value(py);
+            let (line, column, context, line_text) = match self.location {
+                Some(l) => (Some(l.line), l.column, l.context, l.line_text),
+                None => (None, None, None, None),
+            };
+            let _ = value.setattr("line", line);
+            let _ = value.setattr("column", column);
+            let _ = value.setattr("context", context);
+            let _ = value.setattr("line_text", line_text);
+            err
+        }
+    }
 
     /// Build one Arrow [`RecordBatch`](arrow::record_batch::RecordBatch) directly
     /// from an output [`Table`], in column order. Each [`Column`] becomes an Arrow
@@ -150,11 +196,11 @@ mod python_bindings {
         flatten_tolerance: Option<f64>,
     ) -> PyResult<(
         mpsc::Receiver<Row>,
-        mpsc::Receiver<Result<FinalState, String>>,
+        mpsc::Receiver<Result<FinalState, ErrInfo>>,
         std::thread::JoinHandle<()>,
     )> {
         let (row_sender, row_receiver) = mpsc::sync_channel::<Row>(1024);
-        let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, String>>(1);
+        let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, ErrInfo>>(1);
 
         let handle = std::thread::Builder::new()
             .name("nc-interpreter".to_string())
@@ -174,7 +220,7 @@ mod python_bindings {
                     Ok(state) => Ok(state.to_python_dict()),
                     // The consumer hung up: nothing to report to nobody.
                     Err(crate::errors::ParsingError::StreamClosed) => return,
-                    Err(error) => Err(format!("{}", error)),
+                    Err(error) => Err(ErrInfo::from_error(&error)),
                 };
                 let _ = result_sender.send(message);
             })
@@ -203,14 +249,14 @@ mod python_bindings {
         emit_line_no: bool,
     ) -> PyResult<(
         mpsc::Receiver<Table>,
-        mpsc::Receiver<Result<FinalState, String>>,
+        mpsc::Receiver<Result<FinalState, ErrInfo>>,
         std::thread::JoinHandle<()>,
     )> {
         // A cap of 3 lets the worker build one batch ahead while the consumer
         // converts the previous one to a polars DataFrame, without unbounded
         // buffering.
         let (batch_sender, batch_receiver) = mpsc::sync_channel::<Table>(3);
-        let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, String>>(1);
+        let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, ErrInfo>>(1);
 
         let handle = std::thread::Builder::new()
             .name("nc-interpreter".to_string())
@@ -233,7 +279,7 @@ mod python_bindings {
                     Ok(state) => Ok(state.to_python_dict()),
                     // The consumer hung up: nothing to report to nobody.
                     Err(crate::errors::ParsingError::StreamClosed) => return,
-                    Err(error) => Err(format!("{}", error)),
+                    Err(error) => Err(ErrInfo::from_error(&error)),
                 };
                 let _ = result_sender.send(message);
             })
@@ -253,7 +299,7 @@ mod python_bindings {
     #[pyclass]
     struct NcRowIterator {
         rows: Option<Mutex<mpsc::Receiver<crate::output::Row>>>,
-        result: Option<Mutex<mpsc::Receiver<Result<FinalState, String>>>>,
+        result: Option<Mutex<mpsc::Receiver<Result<FinalState, ErrInfo>>>>,
         handle: Option<std::thread::JoinHandle<()>>,
         /// Running forward-fill values, keyed by interned column name.
         fill: HashMap<&'static str, Value>,
@@ -305,9 +351,9 @@ mod python_bindings {
                 let receiver = result.into_inner().expect("result receiver mutex poisoned");
                 match py.detach(move || receiver.recv()) {
                     Ok(Ok(state)) => self.state = Some(state),
-                    Ok(Err(message)) => {
+                    Ok(Err(info)) => {
                         self.join();
-                        return Err(PyErr::new::<PyValueError, _>(message));
+                        return Err(info.into_pyerr(py));
                     }
                     Err(_) => {}
                 }
@@ -473,7 +519,7 @@ mod python_bindings {
     #[pyclass]
     struct NcBatchIterator {
         batches: Option<Mutex<mpsc::Receiver<Table>>>,
-        result: Option<Mutex<mpsc::Receiver<Result<FinalState, String>>>>,
+        result: Option<Mutex<mpsc::Receiver<Result<FinalState, ErrInfo>>>>,
         handle: Option<std::thread::JoinHandle<()>>,
         state: Option<FinalState>,
     }
@@ -484,9 +530,9 @@ mod python_bindings {
                 let receiver = result.into_inner().expect("result receiver mutex poisoned");
                 match py.detach(move || receiver.recv()) {
                     Ok(Ok(state)) => self.state = Some(state),
-                    Ok(Err(message)) => {
+                    Ok(Err(info)) => {
                         self.join();
-                        return Err(PyErr::new::<PyValueError, _>(message));
+                        return Err(info.into_pyerr(py));
                     }
                     Err(_) => {}
                 }
@@ -611,6 +657,7 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(nc_to_batches, m)?)?;
         m.add_class::<NcRowIterator>()?;
         m.add_class::<NcBatchIterator>()?;
+        m.add("NcError", m.py().get_type::<NcError>())?;
         Ok(())
     }
 }

@@ -3,6 +3,7 @@ import os
 import polars as pl
 from ._internal import nc_to_rows as _nc_to_rows
 from ._internal import nc_to_batches as _nc_to_batches
+from ._internal import NcError
 from ._internal import __doc__  # noqa: F401
 import json
 from pathlib import Path
@@ -21,6 +22,7 @@ __all__ = [
     "nc_to_batches",
     "sanitize_dataframe",
     "dataframe_to_nc",
+    "NcError",
 ]
 
 # Batch size nc_to_dataframe uses internally when draining the batch stream it
