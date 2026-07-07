@@ -106,6 +106,29 @@ def test_flattened_marker_column():
     assert "flattened" not in df_plain.columns
 
 
+def test_flattening_example_csvs_are_current():
+    """examples/flattening/ holds the reviewable demo pair: the same program
+    interpreted raw and with flatten_tolerance=0.1. Keep both CSVs in sync
+    with the interpreter (regenerate with float_precision=3 when behavior
+    changes intentionally)."""
+    import pathlib
+
+    from polars.testing import assert_frame_equal
+
+    d = pathlib.Path(__file__).parent.parent.parent / "examples" / "flattening"
+    text = (d / "flatten_demo.mpf").read_text()
+    for suffix, tol in [("raw", None), ("flattened", 0.1)]:
+        df, _ = nc_to_dataframe(text, flatten_tolerance=tol)
+        if "M" in df.columns:
+            df = df.with_columns(pl.col("M").list.join(","))
+        expected = pl.read_csv(d / f"flatten_demo_{suffix}.csv")
+        assert_frame_equal(expected, df, abs_tol=1e-3)
+    # The flattened variant is G1-only with the marker column present.
+    flat = pl.read_csv(d / "flatten_demo_flattened.csv")
+    assert set(flat["gg01_motion"].drop_nulls().to_list()) == {"G1"}
+    assert "flattened" in flat.columns and "PW" not in flat.columns
+
+
 def test_viz_toolpath_arrays():
     np = pytest.importorskip("numpy")
     from nc_gcode_interpreter.viz import FLATTENED_COLOR, PROGRAMMED_COLOR, toolpath_arrays
