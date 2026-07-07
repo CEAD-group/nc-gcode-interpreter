@@ -237,6 +237,9 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
         },
         Rule::variable_array => {
             let (line_no, preview) = get_error_context(&inner_pair, state);
+            if let Some(value) = read_actual_position_sysvar(&inner_pair, state)? {
+                return Ok(value);
+            }
             interpret_variable_array(inner_pair, state).and_then(|keys| {
                 let key = &keys[keys.len() - 1];
                 if let Some(value) = state.symbol_table.get(key).cloned() {
@@ -796,6 +799,15 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
             (key, value)
         }
         (Rule::variable_array, Rule::expression) => {
+            if let Some(name) = actual_position_sysvar_name(&variable_pair) {
+                let (line_no, preview) = get_error_context(&variable_pair, state);
+                return Err(ParsingError::with_context(
+                    line_no,
+                    preview,
+                    "actual-position system variable".to_string(),
+                    format!("{name} is a read-only actual position; it cannot be assigned"),
+                ));
+            }
             let keys = interpret_variable_array(variable_pair, state)?;
             let value = evaluate_expression(expression_pair, state)?;
             (keys[keys.len() - 1].clone(), value)
@@ -975,6 +987,75 @@ fn interpret_variable_array(inner: Pair<Rule>, state: &mut State) -> Result<Vec<
     }
     Ok(variable_names)
 }
+/// Read of `$AA_IW[<axis>]` / `$AA_IM[<axis>]`: the actual work / machine
+/// position of an axis, served from the interpreted axis state (work = the
+/// local coordinate, machine = local + active translation). Real programs
+/// use this to loop until a height is reached (`UNTIL $AA_IW[Z] > ...`);
+/// without it the read came back as an undefined user variable stuck at 0.0
+/// and such loops never terminated. Returns `Ok(None)` when the variable is
+/// not one of these two or the index is not a plain axis name - those fall
+/// through to the generic variable-array path.
+/// The uppercased name if `pair` is a `variable_array` whose base is the
+/// `$AA_IW` / `$AA_IM` system variable (whatever the index): structural
+/// check on the parse tree, so it is immune to whitespace and case in the
+/// source (`\$aa_iw [ Z ]`).
+fn actual_position_sysvar_name(pair: &Pair<Rule>) -> Option<String> {
+    let name_pair = pair.clone().into_inner().next()?;
+    if name_pair.as_rule() != Rule::nc_variable {
+        return None;
+    }
+    let name = name_pair.as_str().to_uppercase();
+    (name == "$AA_IW" || name == "$AA_IM").then_some(name)
+}
+
+fn read_actual_position_sysvar(pair: &Pair<Rule>, state: &mut State) -> Result<Option<f64>, ParsingError> {
+    let Some(name) = actual_position_sysvar_name(pair) else {
+        return Ok(None);
+    };
+    let mut inner = pair.clone().into_inner();
+    let (Some(_name_pair), Some(indices_pair)) = (inner.next(), inner.next()) else {
+        return Ok(None);
+    };
+    let index_exprs: Vec<Pair<Rule>> = indices_pair.into_inner().collect();
+    let [index_expr] = index_exprs.as_slice() else {
+        return Ok(None);
+    };
+    let axis = index_expr.as_str().trim().to_uppercase();
+    if !state.is_axis(&axis) {
+        return Ok(None);
+    }
+    let value = if name == "$AA_IW" {
+        state.get_axis_local(&axis)
+    } else {
+        state.get_axis_machine(&axis)
+    };
+    match value {
+        Some(v) => Ok(Some(v)),
+        None => {
+            // The axis has no interpreted position yet. A real control always
+            // has an actual value; we do not, so this is machine-state-
+            // dependent logic the interpretation cannot answer.
+            let (line_no, preview) = get_error_context(pair, state);
+            if state.allow_undefined_variables {
+                crate::state::emit_warning(format_args!(
+                    "Warning [line {}]: {}[{}] read before axis {} was positioned; returning 0.0",
+                    line_no, name, axis, axis
+                ));
+                Ok(Some(0.0))
+            } else {
+                Err(ParsingError::with_context(
+                    line_no,
+                    preview,
+                    "actual-position system variable".to_string(),
+                    format!(
+                        "{name}[{axis}] is read before axis {axis} has a position; set a start position (e.g. via an initial-state file) or pass allow_undefined_variables"
+                    ),
+                ))
+            }
+        }
+    }
+}
+
 fn interpret_indices(pair: Pair<Rule>, state: &mut State) -> Result<Vec<f64>, ParsingError> {
     let mut indices = Vec::new();
     // Get error context before consuming pair
