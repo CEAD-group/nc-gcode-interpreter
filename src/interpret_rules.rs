@@ -1168,9 +1168,17 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
                 let (line_no, preview) = get_error_context(&pair, state);
                 let res = interpret_assignment(pair, state)?;
                 if state.is_axis(res.0.as_str()) {
-                    return Err(ParsingError::AxisUsedAsVariable { name: res.0 });
+                    return Err(ParsingError::AxisUsedAsVariable {
+                        name: res.0,
+                        line_no,
+                        preview,
+                    });
                 } else if state.is_block_address(res.0.as_str()) {
-                    return Err(ParsingError::ReservedNameUsedAsVariable { name: res.0 });
+                    return Err(ParsingError::ReservedNameUsedAsVariable {
+                        name: res.0,
+                        line_no,
+                        preview,
+                    });
                 }
                 match res.1 {
                     Some(value) => {
@@ -1207,11 +1215,20 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
                 }
             }
             Rule::variable => {
+                let (line_no, preview) = get_error_context(&pair, state);
                 let key = interpret_variable(pair, state)?;
                 if state.is_axis(&key) {
-                    return Err(ParsingError::AxisUsedAsVariable { name: key });
+                    return Err(ParsingError::AxisUsedAsVariable {
+                        name: key,
+                        line_no,
+                        preview,
+                    });
                 } else if state.is_block_address(&key) {
-                    return Err(ParsingError::ReservedNameUsedAsVariable { name: key });
+                    return Err(ParsingError::ReservedNameUsedAsVariable {
+                        name: key,
+                        line_no,
+                        preview,
+                    });
                 }
                 if is_string {
                     state.string_table.insert(key.clone(), String::new());
@@ -1883,6 +1900,8 @@ fn frame_assignments(pairs: Vec<Pair<Rule>>, state: &mut State) -> Result<Vec<(S
             return Err(ParsingError::UnexpectedAxis {
                 axis: key,
                 axes: state.axis_identifiers.join(", "),
+                line_no: pair_line_no,
+                preview: pair_preview,
             });
         }
         result.push((key, value));
@@ -1908,14 +1927,14 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
             // frames"). Bare TRANS is therefore just the reset.
             state.reset_translations();
             for (key, value) in frame_assignments(assignments, state)? {
-                state.update_translation(&key, value)?;
+                state.update_translation(&key, value, line_no, &preview)?;
             }
             Ok(())
         }
         "ATRANS" => {
             for (key, value) in frame_assignments(assignments, state)? {
                 let current_translation = state.get_translation(&key);
-                state.update_translation(&key, current_translation + value)?;
+                state.update_translation(&key, current_translation + value, line_no, &preview)?;
             }
             Ok(())
         }

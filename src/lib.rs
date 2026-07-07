@@ -71,15 +71,18 @@ mod python_bindings {
         "NC parse/interpret error. Subclasses ValueError (so `except ValueError` \
          still catches it) and carries the error's source location as data: the \
          `line`, `column`, `context`, and `line_text` attributes (each an int / \
-         str, or None when not applicable). `str(err)` is the full formatted \
-         message as before."
+         str, or None when not applicable), plus a stable `kind` string \
+         discriminating the error class (e.g. 'unexpected_axis', \
+         'undefined_variable') for branching without matching the message. \
+         `str(err)` is the full formatted message as before."
     );
 
-    /// An error crossing the worker channel: the formatted message plus the
-    /// structured location, so the consuming thread can raise an `NcError`
-    /// carrying both.
+    /// An error crossing the worker channel: the formatted message, the stable
+    /// error-kind discriminator, and the structured location, so the consuming
+    /// thread can raise an `NcError` carrying all three.
     struct ErrInfo {
         message: String,
+        kind: &'static str,
         location: Option<ErrorLocation>,
     }
 
@@ -87,13 +90,14 @@ mod python_bindings {
         fn from_error(error: &crate::errors::ParsingError) -> Self {
             ErrInfo {
                 message: error.to_string(),
+                kind: error.kind(),
                 location: error.location(),
             }
         }
 
-        /// Build the Python `NcError`, always setting the four location
-        /// attributes (None when absent) so callers can read them
-        /// unconditionally.
+        /// Build the Python `NcError`, always setting the `kind` discriminator
+        /// and the four location attributes (None when absent) so callers can
+        /// read them unconditionally.
         fn into_pyerr(self, py: Python<'_>) -> PyErr {
             let err = NcError::new_err(self.message);
             let value = err.value(py);
@@ -101,6 +105,7 @@ mod python_bindings {
                 Some(l) => (Some(l.line), l.column, l.context, l.line_text),
                 None => (None, None, None, None),
             };
+            let _ = value.setattr("kind", self.kind);
             let _ = value.setattr("line", line);
             let _ = value.setattr("column", column);
             let _ = value.setattr("context", context);

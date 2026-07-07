@@ -4,6 +4,26 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- `NcError.kind`: a stable, machine-readable string discriminating the error
+  class (e.g. `"unexpected_axis"`, `"undefined_variable"`, `"unknown_g_command"`,
+  `"parse_context"`), so a consumer can branch on the kind of error without
+  string-matching the formatted message. Present on every `NcError` alongside
+  the existing `line` / `column` / `context` / `line_text` location attributes
+  (#56).
+
+### Fixed
+
+- Validation/semantic errors now carry their source location. `Unexpected axis`,
+  and the "axis/reserved name used as a variable" definition errors, previously
+  raised an `NcError` with `line` / `column` / `context` / `line_text` all
+  `None`; they now anchor to the offending line (and expose its text), so an
+  editor can mark the exact spot - matching what syntactic parse errors already
+  did (#56).
+
 ## [v0.2.2] - 2026-07-07
 
 ### Added
