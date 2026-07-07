@@ -518,6 +518,21 @@ mod tests {
         assert_eq!(state.symbol_table["R1"], 8.0);
         assert!(!state.symbol_table.contains_key("lAYER_HEIGHT"));
         assert_eq!(state.axes["Z"], 4.0);
+        // $-prefixed system variables normalize the same way.
+        let (_, state) = nc_to_table(
+            "$AC_MARKER = 7\nR2 = $ac_marker + 1\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+        )
+        .expect("program should interpret");
+        assert_eq!(state.symbol_table["$AC_MARKER"], 7.0);
+        assert_eq!(state.symbol_table["R2"], 8.0);
+        assert!(!state.symbol_table.contains_key("$ac_marker"));
     }
 
     /// The interpolation parameters I/J/K (arc-centre offsets) and the CR

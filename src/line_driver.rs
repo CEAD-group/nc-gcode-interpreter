@@ -376,13 +376,19 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                 let value = match *ident {
                     Some(name) => {
                         // Case-insensitive lookup: same normalization as the
-                        // grammar path (interpret_variable uppercases).
-                        let name = &name.to_uppercase();
-                        let ident_value = match state.symbol_table.get(name).copied() {
+                        // grammar path (interpret_variable uppercases). Symbol
+                        // keys are uppercase, so the typical all-uppercase CAM
+                        // name borrows; only mixed-case names allocate.
+                        let name: std::borrow::Cow<str> = if name.bytes().any(|b| b.is_ascii_lowercase()) {
+                            std::borrow::Cow::Owned(name.to_uppercase())
+                        } else {
+                            std::borrow::Cow::Borrowed(name)
+                        };
+                        let ident_value = match state.symbol_table.get(name.as_ref()).copied() {
                             Some(v) => v,
                             None if state.allow_undefined_variables => {
                                 crate::state::emit_warning(format_args!("Warning: Variable '{}' is undefined, initializing to 0.0", name));
-                                state.symbol_table.insert(name.to_string(), 0.0);
+                                state.symbol_table.insert(name.clone().into_owned(), 0.0);
                                 0.0
                             }
                             None => {
@@ -393,7 +399,7 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                                 return Err(ParsingError::UndefinedVariable {
                                     line_no: line.line_no,
                                     preview,
-                                    name: name.to_string(),
+                                    name: name.into_owned(),
                                 });
                             }
                         };
