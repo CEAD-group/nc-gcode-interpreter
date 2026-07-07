@@ -9,6 +9,10 @@ class NcError(ValueError):
     """NC parse/interpret error carrying structured location data. Subclasses
     ValueError so `except ValueError` keeps working."""
 
+    #: Stable, machine-readable discriminator for the error class (e.g.
+    #: ``"unexpected_axis"``, ``"undefined_variable"``), for branching without
+    #: matching the formatted message.
+    kind: str
     line: Optional[int]
     column: Optional[int]
     context: Optional[str]

@@ -48,3 +48,44 @@ def test_str_is_still_the_full_message():
     with pytest.raises(NcError) as exc:
         nc_to_dataframe("X=R99\n")
     assert "Undefined variable" in str(exc.value)
+
+
+def test_kind_is_a_stable_machine_readable_discriminator():
+    # #56: consumers branch on `kind` instead of string-matching the message.
+    with pytest.raises(NcError) as exc:
+        nc_to_dataframe("X=R99\n")
+    assert exc.value.kind == "undefined_variable"
+
+    with pytest.raises(NcError) as exc:
+        nc_to_dataframe("G999 X1\n")
+    assert exc.value.kind == "unknown_g_command"
+
+    # Present (and stable) on every NcError, alongside the location attrs.
+    with pytest.raises(NcError) as exc:
+        nc_to_dataframe("G1 X10\nX20 Y((\n")
+    assert exc.value.kind == "parse_context"
+
+
+def test_validation_error_carries_kind_and_location():
+    # #56: an undeclared axis is a validation error; it now reports both a
+    # stable kind AND the source location (previously all-None).
+    with pytest.raises(NcError) as exc:
+        # Q is not a declared axis; the frame instruction is on line 2.
+        nc_to_dataframe("G1 X0 Y0 F100\nTRANS Q=10\n")
+    e = exc.value
+    assert e.kind == "unexpected_axis"
+    assert e.line == 2
+    assert e.column is None
+    assert e.line_text is not None and "Q=10" in e.line_text
+    assert "Unexpected axis" in str(e)
+
+
+def test_axis_used_as_variable_carries_location():
+    # Declaring a variable with an axis name is a validation error that now
+    # anchors to the offending DEF line.
+    with pytest.raises(NcError) as exc:
+        nc_to_dataframe("DEF REAL X\n")
+    e = exc.value
+    assert e.kind == "axis_used_as_variable"
+    assert e.line == 1
+    assert e.line_text is not None and "X" in e.line_text

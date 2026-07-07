@@ -226,7 +226,13 @@ impl State {
     }
 
     /// Updates the translation value for an axis
-    pub fn update_translation(&mut self, axis: &str, value: f64) -> Result<(), ParsingError> {
+    pub fn update_translation(
+        &mut self,
+        axis: &str,
+        value: f64,
+        line_no: usize,
+        preview: &str,
+    ) -> Result<(), ParsingError> {
         if self.is_axis(axis) {
             self.translation.insert(axis.to_string(), value);
             Ok(())
@@ -234,6 +240,8 @@ impl State {
             Err(ParsingError::UnexpectedAxis {
                 axis: axis.to_string(),
                 axes: self.axis_identifiers.join(", "),
+                line_no,
+                preview: preview.to_string(),
             })
         }
     }

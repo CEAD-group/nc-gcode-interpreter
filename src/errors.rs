@@ -99,11 +99,26 @@ To fix this, ensure that each block contains at most one M command.
         message: String,
     },
     #[error("Unexpected axis '{axis}'. Valid axes are: {axes}")]
-    UnexpectedAxis { axis: String, axes: String },
+    UnexpectedAxis {
+        axis: String,
+        axes: String,
+        /// Source location of the offending axis word. Not shown in the
+        /// formatted message, only exposed as data (see [`ParsingError::location`]).
+        line_no: usize,
+        preview: String,
+    },
     #[error("Cannot define a variable named '{name}', as it conflicts with an axis name")]
-    AxisUsedAsVariable { name: String },
+    AxisUsedAsVariable {
+        name: String,
+        line_no: usize,
+        preview: String,
+    },
     #[error("Cannot define a variable named '{name}', as it is a reserved block address (spline PW/SD/PL)")]
-    ReservedNameUsedAsVariable { name: String },
+    ReservedNameUsedAsVariable {
+        name: String,
+        line_no: usize,
+        preview: String,
+    },
     #[error(
         r#"
 Missing axis mapping on line {line_no}
@@ -280,16 +295,48 @@ impl ParsingError {
             | Self::JumpTargetNotFound { line_no, preview, .. }
             | Self::UnmatchedStructure { line_no, preview, .. }
             | Self::UnknownGCommand { line_no, preview, .. }
-            | Self::InvalidFunctionArity { line_no, preview, .. } => some(*line_no, None, None, Some(preview)),
+            | Self::InvalidFunctionArity { line_no, preview, .. }
+            // Semantic/validation errors: the offending block is known at raise
+            // time, so they anchor to a line (no column) like the others above.
+            | Self::UnexpectedAxis { line_no, preview, .. }
+            | Self::AxisUsedAsVariable { line_no, preview, .. }
+            | Self::ReservedNameUsedAsVariable { line_no, preview, .. } => some(*line_no, None, None, Some(preview)),
             Self::ParseError { .. }
             | Self::InvalidElementCount { .. }
             | Self::InvalidCondition
             | Self::UnexpectedOperator { .. }
             | Self::LoopLimit { .. }
-            | Self::StreamClosed
-            | Self::UnexpectedAxis { .. }
-            | Self::AxisUsedAsVariable { .. }
-            | Self::ReservedNameUsedAsVariable { .. } => None,
+            | Self::StreamClosed => None,
+        }
+    }
+
+    /// A stable, machine-readable discriminator for the error class, so a
+    /// consumer can branch on the kind of error without string-matching the
+    /// formatted message. Exposed to Python as the `NcError.kind` attribute.
+    /// These strings are part of the public API: keep them stable.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::ParsingContext { .. } => "parse_context",
+            Self::UnknownVariable { .. } => "unknown_variable",
+            Self::UndefinedVariable { .. } => "undefined_variable",
+            Self::UnexpectedRule { .. } => "unexpected_rule",
+            Self::ParseError { .. } => "parse_error",
+            Self::InvalidElementCount { .. } => "invalid_element_count",
+            Self::InvalidCondition => "invalid_condition",
+            Self::UnexpectedOperator { .. } => "unexpected_operator",
+            Self::LoopLimit { .. } => "loop_limit",
+            Self::StreamClosed => "stream_closed",
+            Self::TooManyMCommands { .. } => "too_many_m_commands",
+            Self::UnexpectedAxis { .. } => "unexpected_axis",
+            Self::AxisUsedAsVariable { .. } => "axis_used_as_variable",
+            Self::ReservedNameUsedAsVariable { .. } => "reserved_name_used_as_variable",
+            Self::MissingAxisMapping { .. } => "missing_axis_mapping",
+            Self::InvalidAxisIndex { .. } => "invalid_axis_index",
+            Self::UnsupportedStatement { .. } => "unsupported_statement",
+            Self::JumpTargetNotFound { .. } => "jump_target_not_found",
+            Self::UnmatchedStructure { .. } => "unmatched_structure",
+            Self::UnknownGCommand { .. } => "unknown_g_command",
+            Self::InvalidFunctionArity { .. } => "invalid_function_arity",
         }
     }
 }
@@ -332,5 +379,53 @@ mod tests {
         // Errors with no source anchor return None.
         assert!(ParsingError::StreamClosed.location().is_none());
         assert!(ParsingError::InvalidCondition.location().is_none());
+    }
+
+    #[test]
+    fn validation_errors_now_carry_a_location() {
+        // #56: semantic/validation errors (previously location-less) anchor to
+        // the offending line so an editor can mark the spot.
+        let axis = ParsingError::UnexpectedAxis {
+            axis: "QQ".to_string(),
+            axes: "X, Y, Z".to_string(),
+            line_no: 4,
+            preview: "TRANS QQ10".to_string(),
+        };
+        let loc = axis.location().expect("UnexpectedAxis now has a location");
+        assert_eq!((loc.line, loc.column), (4, None));
+        assert_eq!(loc.line_text.as_deref(), Some("TRANS QQ10"));
+
+        let dup = ParsingError::AxisUsedAsVariable {
+            name: "X".to_string(),
+            line_no: 2,
+            preview: "DEF REAL X".to_string(),
+        };
+        assert_eq!(dup.location().expect("has location").line, 2);
+    }
+
+    #[test]
+    fn kind_is_a_stable_per_variant_discriminator() {
+        // A representative spread; the strings are public API and must stay put.
+        assert_eq!(
+            ParsingError::UnexpectedAxis {
+                axis: "QQ".to_string(),
+                axes: String::new(),
+                line_no: 1,
+                preview: String::new(),
+            }
+            .kind(),
+            "unexpected_axis"
+        );
+        assert_eq!(
+            ParsingError::UndefinedVariable {
+                line_no: 1,
+                preview: String::new(),
+                name: "R1".to_string(),
+            }
+            .kind(),
+            "undefined_variable"
+        );
+        assert_eq!(ParsingError::StreamClosed.kind(), "stream_closed");
+        assert_eq!(ParsingError::InvalidCondition.kind(), "invalid_condition");
     }
 }
