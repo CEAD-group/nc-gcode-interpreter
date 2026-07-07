@@ -114,6 +114,21 @@ enum LineExec<'a, 'i> {
     Blank,
 }
 
+/// One type per name (mirrors `interpret_assignment`): assigning a number to
+/// an existing STRING variable is a hard error, also on the fast path.
+fn reject_string_variable(key: &str, state: &State, line_no: usize) -> Result<(), ParsingError> {
+    if state.string_table.contains_key(key) {
+        let preview = state.get_line(line_no).unwrap_or("").to_string();
+        return Err(ParsingError::with_context(
+            line_no,
+            preview,
+            "assignment".to_string(),
+            format!("'{key}' is a STRING variable; it cannot be assigned a number"),
+        ));
+    }
+    Ok(())
+}
+
 /// Interpret a structure-free program line by line. Mirrors
 /// `interpret_blocks` for a flat block list: jumps resolve against the
 /// line index; an unresolved jump propagates to the caller.
@@ -363,6 +378,9 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                     }
                     None => {
                         state.warn_unsupported_address(key, line.line_no);
+                        // Same one-type-per-name rule as interpret_assignment:
+                        // a STRING variable must not silently become numeric.
+                        reject_string_variable(key, state, line.line_no)?;
                         output.record_variable_change(key, *value);
                         state.symbol_table.insert(key.to_string(), *value);
                     }
@@ -430,6 +448,7 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                     }
                     None => {
                         state.warn_unsupported_address(key, line.line_no);
+                        reject_string_variable(key, state, line.line_no)?;
                         let local_value = increment_local(state, key, value);
                         output.record_variable_change(key, local_value);
                         state.symbol_table.insert(key.to_string(), local_value);
