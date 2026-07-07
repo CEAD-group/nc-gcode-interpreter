@@ -13,8 +13,10 @@ def test_keyword_g_commands_classify_to_their_group():
 
 
 def test_lowercase_keyword_g_commands_work():
+    # Case-insensitive language (manual: "No distinction is made between
+    # uppercase and lowercase characters"); values normalize to uppercase.
     df, _state = nc_to_dataframe("bspline\nX1")
-    assert df["gg01_motion"][0] == "bspline"
+    assert df["gg01_motion"][0] == "BSPLINE"
 
 
 def test_gframe_classifies():

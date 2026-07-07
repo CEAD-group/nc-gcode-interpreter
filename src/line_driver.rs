@@ -362,6 +362,7 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                         last.insert(skey, Value::Float(*value));
                     }
                     None => {
+                        state.warn_unsupported_address(key, line.line_no);
                         output.record_variable_change(key, *value);
                         state.symbol_table.insert(key.to_string(), *value);
                     }
@@ -428,6 +429,7 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                         last.insert(skey, Value::Float(local_value));
                     }
                     None => {
+                        state.warn_unsupported_address(key, line.line_no);
                         let local_value = increment_local(state, key, value);
                         output.record_variable_change(key, local_value);
                         state.symbol_table.insert(key.to_string(), local_value);
@@ -447,7 +449,8 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
             }
             Word::GCommand(group, as_written) => {
                 let last = output.last_mut().expect("row was just pushed");
-                last.insert(group, Value::Str(as_written.to_string()));
+                // Uppercase like the grammar path: g2 IS G2.
+                last.insert(group, Value::Str(as_written.to_uppercase()));
             }
             Word::MCode(code) => {
                 let last = output.last_mut().expect("row was just pushed");
@@ -792,12 +795,9 @@ fn decode_line_inner<'a>(
         let word_start = i;
         i += 1;
         let bare_number_follows = i < n_len && (bytes[i].is_ascii_digit() || bytes[i] == b'-' || bytes[i] == b'.');
-        // The grammar's bare-word forms: M/G addresses are case-insensitive,
-        // but variable_single_char (axis letters) is uppercase-only - a
-        // lowercase x100 parses as a subprogram call in the full grammar.
-        if bare_number_follows
-            && (bytes[word_start].is_ascii_uppercase() || matches!(bytes[word_start], b'm' | b'g'))
-        {
+        // The grammar's bare-word forms are all case-insensitive: M/G
+        // addresses and variable_single_char (axis letters) alike.
+        if bare_number_follows && bytes[word_start].is_ascii_alphabetic() {
             let letter = bytes[word_start].to_ascii_uppercase();
             if letter == b'M' || letter == b'G' {
                 // M/G addresses take integer codes and are not axis words.
@@ -822,11 +822,17 @@ fn decode_line_inner<'a>(
                 }
             } else {
                 // Axis-address letters: exactly the grammar's
-                // variable_single_char set. Anything else needs the grammar.
-                if !matches!(letter, b'X' | b'Y' | b'Z' | b'A' | b'B' | b'C' | b'U' | b'V' | b'W' | b'I' | b'J' | b'K' | b'T' | b'S' | b'F' | b'D' | b'H' | b'E')
-                {
-                    return DecodeResult::NeedsGrammar;
-                }
+                // variable_single_char set (normalized to the uppercase
+                // column key). Anything else needs the grammar.
+                let key = match letter {
+                    b'X' => "X", b'Y' => "Y", b'Z' => "Z",
+                    b'A' => "A", b'B' => "B", b'C' => "C",
+                    b'U' => "U", b'V' => "V", b'W' => "W",
+                    b'I' => "I", b'J' => "J", b'K' => "K",
+                    b'T' => "T", b'S' => "S", b'F' => "F",
+                    b'D' => "D", b'H' => "H", b'E' => "E",
+                    _ => return DecodeResult::NeedsGrammar,
+                };
                 let Some(value) = parse_number(line, &mut i) else {
                     return DecodeResult::NeedsGrammar;
                 };
@@ -834,10 +840,6 @@ fn decode_line_inner<'a>(
                 if i < n_len && bytes[i] == b'[' {
                     return DecodeResult::NeedsGrammar;
                 }
-                // Axis letters reach this branch only when already uppercase
-                // (the guard above requires it), so the source byte is already
-                // the normalized key. Borrow it directly.
-                let key = &line[word_start..word_start + 1];
                 arena.push(Word::Assign(key, value));
             }
         } else {
@@ -987,6 +989,7 @@ mod tests {
             false,
             Some(HashMap::from([("E".to_string(), 4)])),
             allow_undefined,
+            None,
         );
         std::env::remove_var("NC_STAGE1");
         result
