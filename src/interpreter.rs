@@ -88,9 +88,14 @@ fn install_flattener(
 }
 
 /// Streaming twin of `nc_to_table`: interpret the program pushing each
-/// finished row into `sender` as `(line_no, row)`, returning the final
-/// state. Blocks on the channel when the consumer is slower than the
-/// interpreter; aborts with `StreamClosed` when the consumer hangs up.
+/// finished `Row` (which carries its own `line_no`) into `sender`, returning
+/// the final state. The Python-facing `nc_to_rows` splits each `Row` into the
+/// `(line_no, row)` tuple it yields. Blocks on the channel when the consumer is
+/// slower than the interpreter; aborts with `StreamClosed` when it hangs up.
+/// That hang-up is the supported cancel contract for the Python-facing
+/// `nc_to_rows` iterator: dropping it closes this end of the channel, the
+/// next send here returns `StreamClosed`, and the thread unwinds promptly
+/// instead of running the rest of the program.
 #[allow(clippy::too_many_arguments)]
 #[allow(dead_code)] // used by the python-feature bindings, not the bin
 pub fn nc_to_row_stream(
@@ -128,7 +133,9 @@ pub fn nc_to_row_stream(
 /// partial batch). Forward-fill state is carried across batches, so - rows being
 /// produced in program order - concatenating the batches reconstructs the
 /// whole-file table. Blocks on the channel when the consumer is slower;
-/// aborts with `StreamClosed` when the consumer hangs up.
+/// aborts with `StreamClosed` when the consumer hangs up - the same
+/// drop-to-cancel contract as `nc_to_row_stream`, backing the Python-facing
+/// `nc_to_batches` iterator.
 #[allow(clippy::too_many_arguments)]
 #[allow(dead_code)] // used by the python-feature bindings, not the bin
 pub fn nc_to_batch_stream(

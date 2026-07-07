@@ -161,6 +161,8 @@ for line_no, row, variables in nc_to_rows(program, include_variables=True):
 
 Rows are typed and forward-filled like the batch DataFrame (disable with `forward_fill=False`); errors raise from `next()` at the offending row; after exhaustion the iterator's `state` attribute holds the final interpreter state. See `python/example/streaming.py` for a runnable version.
 
+**Cancellation.** Dropping the iterator is the supported way to cancel a `nc_to_rows`/`nc_to_batches` run — leaving a `for` loop early or `del`-ing it drops it immediately; relying on garbage collection works too but only whenever the runtime happens to collect it, so it is not prompt on all interpreters: the background interpreter thread's next attempt to send a row hits a closed channel and returns internally via `ParsingError::StreamClosed`, so the thread unwinds promptly instead of running the rest of the program to completion. No explicit `.close()`/`.cancel()` call is needed or provided — drop is the whole contract, and downstreams (e.g. ribweaver's `/sim` live-edit reinterpret) rely on it for latest-wins cancellation.
+
 Additionally, conversion from a Polars DataFrame back to an MPF (NC) program is also supported:
 
 ```bash
