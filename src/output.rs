@@ -236,13 +236,24 @@ impl OutputRows {
         sender: std::sync::mpsc::SyncSender<Table>,
         batch_size: usize,
         disable_forward_fill: bool,
+    ) -> Self {
+        // Back-compatible entry point: never emits line_no.
+        Self::batch_stream_with_line_numbers(sender, batch_size, disable_forward_fill, false)
+    }
+
+    /// As [`batch_stream`](Self::batch_stream), but with the opt-in `line_no`
+    /// column. Separate constructor so `batch_stream`'s signature stays stable.
+    pub fn batch_stream_with_line_numbers(
+        sender: std::sync::mpsc::SyncSender<Table>,
+        batch_size: usize,
+        disable_forward_fill: bool,
         emit_line_no: bool,
     ) -> Self {
         OutputRows {
             current: Row::default(),
             sink: RowSink::Batch(BatchStreamSink {
                 sender,
-                builder: BatchBuilder::new(disable_forward_fill, emit_line_no),
+                builder: BatchBuilder::new(disable_forward_fill).with_line_numbers(emit_line_no),
                 buffer: Vec::new(),
                 batch_size,
             }),
@@ -593,13 +604,21 @@ pub struct BatchBuilder {
 }
 
 impl BatchBuilder {
-    pub fn new(disable_forward_fill: bool, emit_line_no: bool) -> Self {
+    pub fn new(disable_forward_fill: bool) -> Self {
         BatchBuilder {
             disable_forward_fill,
-            emit_line_no,
+            emit_line_no: false,
             columns: Vec::new(),
             fill: HashMap::new(),
         }
+    }
+
+    /// Opt into the leading `line_no` column (default off). Builder-style so
+    /// `BatchBuilder::new(..)` stays a stable single-argument constructor for
+    /// existing Rust callers.
+    pub fn with_line_numbers(mut self, emit_line_no: bool) -> Self {
+        self.emit_line_no = emit_line_no;
+        self
     }
 
     /// Build the [`Table`] for one batch of rows, updating the carried
@@ -750,7 +769,7 @@ impl Table {
     /// batch over all rows.
     pub fn from_rows(rows: &[Row], disable_forward_fill: bool) -> Table {
         // The whole-file / CLI path never emits line_no (opt-in, default off).
-        BatchBuilder::new(disable_forward_fill, false).build_batch(rows)
+        BatchBuilder::new(disable_forward_fill).build_batch(rows)
     }
 
     pub fn height(&self) -> usize {

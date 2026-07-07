@@ -8,9 +8,9 @@ released to PyPI.
 
 ### Added
 
-- Optional `line_no` output column on the batch/dataframe path, gated by
-  `include_line_numbers=False` on `nc_to_dataframe` / `nc_to_batches`
-  (default off, so the output schema is unchanged unless requested). When
+- Optional `line_no` output column on the batch/dataframe path, enabled with
+  `include_line_numbers=True` on `nc_to_dataframe` / `nc_to_batches` (default
+  `False`, so the output schema is unchanged unless you ask for it). When
   enabled it prepends a leading `Int64` column giving the 1-based source line
   each output row came from - previously only the streaming `nc_to_rows`
   exposed it. Loops repeat the value and jumps make it non-monotonic, matching

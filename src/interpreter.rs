@@ -138,7 +138,42 @@ pub fn nc_to_row_stream(
 /// `nc_to_batches` iterator.
 #[allow(clippy::too_many_arguments)]
 #[allow(dead_code)] // used by the python-feature bindings, not the bin
+#[allow(clippy::too_many_arguments)]
 pub fn nc_to_batch_stream(
+    input: &str,
+    initial_state: Option<&str>,
+    axis_identifiers: Option<Vec<String>>,
+    extra_axes: Option<Vec<String>>,
+    iteration_limit: usize,
+    disable_forward_fill: bool,
+    axis_index_map: Option<HashMap<String, usize>>,
+    allow_undefined_variables: bool,
+    flatten_tolerance: Option<f64>,
+    batch_size: usize,
+    sender: std::sync::mpsc::SyncSender<Table>,
+) -> Result<state::State, ParsingError> {
+    // Back-compatible entry point: never emits the opt-in line_no column.
+    nc_to_batch_stream_with_line_numbers(
+        input,
+        initial_state,
+        axis_identifiers,
+        extra_axes,
+        iteration_limit,
+        disable_forward_fill,
+        axis_index_map,
+        allow_undefined_variables,
+        flatten_tolerance,
+        batch_size,
+        false,
+        sender,
+    )
+}
+
+/// As [`nc_to_batch_stream`], but with the opt-in `line_no` column. Separate
+/// function so `nc_to_batch_stream`'s signature stays stable for existing Rust
+/// callers.
+#[allow(clippy::too_many_arguments)]
+pub fn nc_to_batch_stream_with_line_numbers(
     input: &str,
     initial_state: Option<&str>,
     axis_identifiers: Option<Vec<String>>,
@@ -163,7 +198,8 @@ pub fn nc_to_batch_stream(
         let mut discard = OutputRows::collect();
         interpret_file(initial_state, &mut state, &mut discard)?;
     }
-    let mut output = OutputRows::batch_stream(sender, batch_size, disable_forward_fill, emit_line_no);
+    let mut output =
+        OutputRows::batch_stream_with_line_numbers(sender, batch_size, disable_forward_fill, emit_line_no);
     install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_file(input, &mut state, &mut output)?;
     output.finish()?;
@@ -523,7 +559,7 @@ mod tests {
     /// emitted [`Table`] carries the whole program's `line_no` column.
     fn interpret_with_line_numbers(input: &str) -> Table {
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
-        nc_to_batch_stream(
+        nc_to_batch_stream_with_line_numbers(
             input, None, None, None, 10000, false, None, false, None, 1_000_000, true, tx,
         )
         .expect("program should interpret");

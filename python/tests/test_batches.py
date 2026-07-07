@@ -191,3 +191,20 @@ def test_include_line_numbers_matches_streaming_under_jumps():
     df, _ = nc_to_dataframe(prog, include_line_numbers=True)
     streamed = [line_no for line_no, _row in nc_to_rows(prog)]
     assert df["line_no"].to_list() == streamed == [1, 4]
+
+
+def test_include_line_numbers_survives_flattening():
+    """Flatten-generated samples keep the originating block's source line, so a
+    flattened arc/spline block yields many rows all carrying its line_no - and
+    still matches the streaming path row-for-row."""
+    from nc_gcode_interpreter import nc_to_rows
+
+    program = "G1 X0 Y0 F1000\nG2 X100 Y0 I50 J0\nG1 X100 Y50\n"
+    df, _ = nc_to_dataframe(program, flatten_tolerance=0.1, include_line_numbers=True)
+    assert df.columns[0] == "line_no"
+    assert df["line_no"].null_count() == 0
+    per_line = df["line_no"].to_list()
+    # The arc on line 2 expands to many G1 samples, every one tagged line 2.
+    assert per_line.count(2) > 5
+    stream_lines = [line for line, *_ in nc_to_rows(program, flatten_tolerance=0.1)]
+    assert per_line == stream_lines

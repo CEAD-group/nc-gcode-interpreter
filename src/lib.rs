@@ -60,7 +60,7 @@ mod python_bindings {
     }
     use std::sync::{mpsc, Mutex};
 
-    use crate::interpreter::{nc_to_batch_stream, nc_to_row_stream};
+    use crate::interpreter::{nc_to_batch_stream_with_line_numbers, nc_to_row_stream};
     use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table};
     use crate::types::Value;
 
@@ -215,7 +215,7 @@ mod python_bindings {
         let handle = std::thread::Builder::new()
             .name("nc-interpreter".to_string())
             .spawn(move || {
-                let outcome = nc_to_batch_stream(
+                let outcome = nc_to_batch_stream_with_line_numbers(
                     &input,
                     initial_state.as_deref(),
                     axis_identifiers,
