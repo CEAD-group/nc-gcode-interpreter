@@ -657,14 +657,13 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
             (key, value)
         }
         (Rule::variable_array, Rule::expression) => {
-            let upper = variable_pair.as_str().to_uppercase();
-            if upper.starts_with("$AA_IW[") || upper.starts_with("$AA_IM[") {
+            if let Some(name) = actual_position_sysvar_name(&variable_pair) {
                 let (line_no, preview) = get_error_context(&variable_pair, state);
                 return Err(ParsingError::with_context(
                     line_no,
                     preview,
                     "actual-position system variable".to_string(),
-                    "$AA_IW/$AA_IM are read-only actual positions; they cannot be assigned".to_string(),
+                    format!("{name} is a read-only actual position; it cannot be assigned"),
                 ));
             }
             let keys = interpret_variable_array(variable_pair, state)?;
@@ -845,18 +844,27 @@ fn interpret_variable_array(inner: Pair<Rule>, state: &mut State) -> Result<Vec<
 /// and such loops never terminated. Returns `Ok(None)` when the variable is
 /// not one of these two or the index is not a plain axis name - those fall
 /// through to the generic variable-array path.
-fn read_actual_position_sysvar(pair: &Pair<Rule>, state: &mut State) -> Result<Option<f64>, ParsingError> {
-    let mut inner = pair.clone().into_inner();
-    let (Some(name_pair), Some(indices_pair)) = (inner.next(), inner.next()) else {
-        return Ok(None);
-    };
+/// The uppercased name if `pair` is a `variable_array` whose base is the
+/// `$AA_IW` / `$AA_IM` system variable (whatever the index): structural
+/// check on the parse tree, so it is immune to whitespace and case in the
+/// source (`\$aa_iw [ Z ]`).
+fn actual_position_sysvar_name(pair: &Pair<Rule>) -> Option<String> {
+    let name_pair = pair.clone().into_inner().next()?;
     if name_pair.as_rule() != Rule::nc_variable {
-        return Ok(None);
+        return None;
     }
     let name = name_pair.as_str().to_uppercase();
-    if name != "$AA_IW" && name != "$AA_IM" {
+    (name == "$AA_IW" || name == "$AA_IM").then_some(name)
+}
+
+fn read_actual_position_sysvar(pair: &Pair<Rule>, state: &mut State) -> Result<Option<f64>, ParsingError> {
+    let Some(name) = actual_position_sysvar_name(pair) else {
         return Ok(None);
-    }
+    };
+    let mut inner = pair.clone().into_inner();
+    let (Some(_name_pair), Some(indices_pair)) = (inner.next(), inner.next()) else {
+        return Ok(None);
+    };
     let index_exprs: Vec<Pair<Rule>> = indices_pair.into_inner().collect();
     let [index_expr] = index_exprs.as_slice() else {
         return Ok(None);

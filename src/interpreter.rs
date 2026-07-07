@@ -535,6 +535,11 @@ mod tests {
         let err = nc_to_table("G1 Z0 F100\n$AA_IW[Z] = 5\n", None, None, None, 10000, false, None, false)
             .unwrap_err();
         assert!(format!("{err}").contains("read-only"), "got: {err}");
+        // The guard is structural, not textual: whitespace inside the
+        // subscript must not sneak the assignment past it.
+        let err = nc_to_table("G1 Z0 F100\n$AA_IW[ Z ] = 5\n", None, None, None, 10000, false, None, false)
+            .unwrap_err();
+        assert!(format!("{err}").contains("read-only"), "got: {err}");
     }
 
     /// The interpolation parameters I/J/K (arc-centre offsets) and the CR
