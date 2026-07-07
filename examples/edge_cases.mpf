@@ -44,10 +44,10 @@ X1
 TRANS
 X2
 
-; bare parameterless subprogram calls; lowercase word is a call, not an axis
+; bare parameterless subprogram calls; lowercase axis words are axis words
 N53 MATERIAL_UPDATE
 x100
-X100
+X101
 
 ; labels, backward jump with a loop counter (single-line IF is not a block)
 N40 R3=30 R4=3

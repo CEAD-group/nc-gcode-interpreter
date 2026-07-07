@@ -572,6 +572,40 @@ mod tests {
         assert_eq!(floats(&table, "dwell"), &[None, Some(0.01), None]);
     }
 
+    /// The NC language is case-insensitive: lowercase axis words are axis
+    /// words (not silently-swallowed subprogram calls), and G/M values are
+    /// normalized to uppercase in the output - a lowercase g18 must never
+    /// reach the flattener as a distinct plane string.
+    #[test]
+    fn lowercase_program_is_normalized() {
+        let table = interpret("g17 g1 x0 y0 f100 m8\ng2 x10 y0 i5 j0\n");
+        assert_eq!(floats(&table, "X"), &[Some(0.0), Some(10.0)]);
+        assert_eq!(floats(&table, "I"), &[None, Some(5.0)]);
+        assert!(
+            !column_names(&table).contains(&"non_returning_function_call"),
+            "lowercase axis word was treated as a subprogram call: {:?}",
+            column_names(&table)
+        );
+        let strs = |name: &str| -> Vec<Option<String>> {
+            match &table.columns.iter().find(|(n, _)| n == name).unwrap().1 {
+                Column::Str(v) => v.clone(),
+                other => panic!("column {name} is not a str column: {other:?}"),
+            }
+        };
+        assert_eq!(
+            strs("gg01_motion"),
+            &[Some("G1".to_string()), Some("G2".to_string())]
+        );
+        assert_eq!(
+            strs("gg06_plane_select"),
+            &[Some("G17".to_string()), Some("G17".to_string())]
+        );
+        match &table.columns.iter().find(|(n, _)| n == "M").unwrap().1 {
+            Column::StrList(v) => assert_eq!(v[0], Some(vec!["M8".to_string()])),
+            other => panic!("M is not a str-list column: {other:?}"),
+        }
+    }
+
     /// A G4 block that programs BOTH F and S must consume both: the dwell
     /// value is F, and neither may forward-fill into the modal F/S columns.
     #[test]
