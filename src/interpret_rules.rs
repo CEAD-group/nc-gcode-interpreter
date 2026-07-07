@@ -780,7 +780,9 @@ fn interpret_variable(pair: Pair<Rule>, state: &State) -> Result<String, Parsing
         // A plain user variable, or a `$`-prefixed system variable such as
         // `$AC_TIMER`. There is no system-variable model, so system variables
         // are keyed and stored like ordinary variables by their full name.
-        Rule::identifier | Rule::nc_variable => Ok(inner.as_str().to_string()),
+        // Uppercased: the language is case-insensitive (manual 3.3.2), so
+        // `lAYER_HEIGHT` and `LAYER_HEIGHT` are the same variable.
+        Rule::identifier | Rule::nc_variable => Ok(inner.as_str().to_uppercase()),
         _ => Err(annotate_error(&pair, "variable parsing",
             format!("Expected identifier, found '{:?}'", inner.as_rule()), state)),
     }
@@ -875,7 +877,8 @@ fn interpret_identifier(pair: Pair<Rule>) -> Result<String, ParsingError> {
     // `$AC_TIMER[1]`); the latter are stored by their full name like ordinary
     // variables, since there is no dedicated system-variable model.
     if pair.as_rule() == Rule::identifier || pair.as_rule() == Rule::nc_variable {
-        Ok(pair.as_str().to_string())
+        // Uppercased: identifiers are case-insensitive (manual 3.3.2).
+        Ok(pair.as_str().to_uppercase())
     } else {
         Err(ParsingError::ParsingContext {
             line_no,

@@ -362,8 +362,11 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                         last.insert(skey, Value::Float(*value));
                     }
                     None => {
-                        output.record_variable_change(key, *value);
-                        state.symbol_table.insert(key.to_string(), *value);
+                        // User variable: identifiers are case-insensitive, so
+                        // the symbol key is the uppercased name (manual 3.3.2).
+                        let key = key.to_uppercase();
+                        output.record_variable_change(&key, *value);
+                        state.symbol_table.insert(key, *value);
                     }
                 }
             }
@@ -372,6 +375,9 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                 // undefined-variable behavior of interpret_primary.
                 let value = match *ident {
                     Some(name) => {
+                        // Case-insensitive lookup: same normalization as the
+                        // grammar path (interpret_variable uppercases).
+                        let name = &name.to_uppercase();
                         let ident_value = match state.symbol_table.get(name).copied() {
                             Some(v) => v,
                             None if state.allow_undefined_variables => {
@@ -428,9 +434,10 @@ fn execute_decoded(line: &DecodedLine, arena: &[Word], output: &mut Output, stat
                         last.insert(skey, Value::Float(local_value));
                     }
                     None => {
-                        let local_value = increment_local(state, key, value);
-                        output.record_variable_change(key, local_value);
-                        state.symbol_table.insert(key.to_string(), local_value);
+                        let key = key.to_uppercase();
+                        let local_value = increment_local(state, &key, value);
+                        output.record_variable_change(&key, local_value);
+                        state.symbol_table.insert(key, local_value);
                     }
                 }
             }

@@ -496,6 +496,30 @@ mod tests {
         table.columns.iter().map(|(n, _)| n.as_str()).collect()
     }
 
+    /// User-variable identifiers are case-insensitive (manual 3.3.2: "No
+    /// distinction is made between uppercase and lowercase characters"):
+    /// a real program declares `lAYER_HEIGHT` (typo) but assigns
+    /// `LAYER_HEIGHT` - on the control that is ONE variable, and treating
+    /// them as two silently zeroed every layer increment.
+    #[test]
+    fn variable_identifiers_are_case_insensitive() {
+        let (_, state) = nc_to_table(
+            "DEF REAL lAYER_HEIGHT\nLAYER_HEIGHT = 4\nR1 = layer_height * 2\nZ_STEP = Layer_Height\nG1 Z=Z_step F100\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+        )
+        .expect("program should interpret");
+        assert_eq!(state.symbol_table["LAYER_HEIGHT"], 4.0);
+        assert_eq!(state.symbol_table["R1"], 8.0);
+        assert!(!state.symbol_table.contains_key("lAYER_HEIGHT"));
+        assert_eq!(state.axes["Z"], 4.0);
+    }
+
     /// The interpolation parameters I/J/K (arc-centre offsets) and the CR
     /// radius form must be emitted on the arc block that programs them and be
     /// absent (null) on ordinary linear blocks - never silently dropped and
