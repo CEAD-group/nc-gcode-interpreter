@@ -3,10 +3,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// A `HashMap` using the non-cryptographic FxHash instead of the default
-/// SipHash. The hot interpreter maps (`axes`, `translation`, `symbol_table`,
-/// `output_keys`) have tiny, trusted keys and are hit millions of times a run;
-/// profiling the 1.1 GB file showed SipHash of these keys (esp. in
-/// `update_axis`) as a top cost. FxHash needs no DoS resistance here.
+/// SipHash. Reserved for hot maps with a *closed, trusted* key vocabulary:
+/// `axes`, `translation`, `output_keys` — axis/block names fixed at
+/// construction, hit millions of times a run. Profiling the 1.1 GB file showed
+/// SipHash of these keys (esp. in `update_axis`) as a top cost, and with a
+/// closed key set there is nothing to hash-flood.
+///
+/// NOTE: deliberately *not* used for `symbol_table`, whose keys are
+/// user-controlled, unbounded-length variable names parsed from the input.
+/// That map stays on SipHash to preserve hash-flooding (DoS) resistance on
+/// crafted programs; it is also cold on the CAM-flood workloads that motivated
+/// this change, so the default hasher costs nothing there.
 pub(crate) type FxMap<K, V> = HashMap<K, V, rustc_hash::FxBuildHasher>;
 
 /// Emit an interpreter warning to stderr. Callers pass `format_args!(...)` so
@@ -59,7 +66,10 @@ pub enum ColKind {
 #[derive(Debug, Clone)]
 pub struct State {
     pub axes: FxMap<String, f64>,
-    pub symbol_table: FxMap<String, f64>,
+    /// Numeric variables. Keys are user-controlled variable names parsed from
+    /// the input, so this map stays on the default SipHash hasher for
+    /// hash-flooding resistance (see [`FxMap`]).
+    pub symbol_table: HashMap<String, f64>,
     /// String variables (DEF STRING[n]); kept apart from the numeric
     /// symbol_table - using one in a numeric expression is a loud error.
     pub string_table: HashMap<String, String>,
@@ -106,7 +116,7 @@ impl State {
         axis_index_map: Option<HashMap<String, usize>>,
         allow_undefined_variables: bool,
     ) -> Self {
-        let mut symbols = FxMap::default();
+        let mut symbols: HashMap<String, f64> = HashMap::new();
         symbols.insert("TRUE".to_string(), 1.0);
         symbols.insert("FALSE".to_string(), 0.0);
 
@@ -335,7 +345,7 @@ impl State {
 #[allow(dead_code)] // fields read only by the python-feature bindings, not the bin
 pub struct FinalState {
     pub axes: FxMap<String, f64>,
-    pub symbol_table: FxMap<String, f64>,
+    pub symbol_table: HashMap<String, f64>,
     pub translation: FxMap<String, f64>,
     pub string_table: HashMap<String, String>,
 }
