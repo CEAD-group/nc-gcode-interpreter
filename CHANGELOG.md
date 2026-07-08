@@ -4,6 +4,20 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Changed
+
+- Interpreter throughput on the DataFrame/batch path: the per-output-row `Row`
+  allocations are now recycled instead of freed. Profiling the 1.1 GB → DataFrame
+  conversion showed ~50% of CPU in the system allocator, dominated by allocating
+  and freeing each of the 22M rows' cell buffers. After a batch is built its rows
+  are cleared (capacity retained) into a pool and handed back to the interpreter
+  to refill, bounding live row allocations to ~2× the batch size instead of the
+  whole-file row count. Output is byte-identical; the streaming (`nc_to_rows`)
+  and in-memory collect paths are unchanged. ~10% off end-to-end on the large
+  real-world program (#61).
+
 ## [v0.2.4] - 2026-07-08
 
 ### Changed
