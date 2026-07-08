@@ -378,6 +378,39 @@ impl OutputRows {
         self.flattener = Some(flattener);
     }
 
+    /// Number of committed rows in a `Collect` sink (0 for streaming sinks).
+    /// Lets the experimental resumable VM (#47) pause at a row boundary.
+    #[allow(dead_code)]
+    pub(crate) fn collected_len(&self) -> usize {
+        match &self.sink {
+            RowSink::Collect(rows) => rows.len(),
+            _ => 0,
+        }
+    }
+
+    /// Deep-clone a checkpointable `Collect`-sink output: the committed rows,
+    /// the in-flight row, and the warn latches. `None` when the sink is a
+    /// streaming channel or a flattener is installed (their state isn't
+    /// snapshottable this simply). For the experimental resumable VM (#47);
+    /// the whole-file forward-fill happens later in `Table::from_rows`, so a
+    /// Collect snapshot needs no columnar carry.
+    #[allow(dead_code)]
+    pub(crate) fn snapshot_collect(&self) -> Option<OutputRows> {
+        if self.flattener.is_some() {
+            return None;
+        }
+        match &self.sink {
+            RowSink::Collect(rows) => Some(OutputRows {
+                current: self.current.clone(),
+                sink: RowSink::Collect(rows.clone()),
+                record_variables: self.record_variables,
+                flattener: None,
+                warned_g91: self.warned_g91,
+            }),
+            _ => None,
+        }
+    }
+
     /// Route a finished row to the sink, passing it through the flattener
     /// first when one is installed. Shared by `flush`.
     fn deliver(&mut self, row: Row) -> Result<(), ParsingError> {

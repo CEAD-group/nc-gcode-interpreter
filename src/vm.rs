@@ -36,7 +36,10 @@ pub(crate) fn vm_enabled() -> bool {
 }
 
 /// One active scope on the reified control stack — the heap equivalent of a
-/// live `interpret_blocks`/`run_blocks` frame.
+/// live `interpret_blocks`/`run_blocks` frame. `Clone` is what makes a
+/// checkpoint cheap: the whole stack snapshots by value (the `Pair`s are index
+/// ranges into the shared, still-alive parse tree).
+#[derive(Clone)]
 struct Frame<'i> {
     /// The scope's block list; `index` is an offset into this (== `run_blocks`'
     /// `block_pairs`). Cloning a `Pair` is cheap (an index range into the tree).
@@ -52,6 +55,7 @@ struct Frame<'i> {
 }
 
 /// What kind of scope a frame is, and the loop state its recursive twin held.
+#[derive(Clone)]
 enum FrameKind<'i> {
     /// The top-level program scope (or an IF branch): no loop-back.
     Straight,
@@ -84,41 +88,81 @@ enum Step<'i> {
     Enter(Box<Frame<'i>>),
 }
 
-/// Drop-in replacement for `interpret_blocks` at the top level: interpret the
-/// program with the explicit-stack VM. Returns `Continue` or `EndProgram`; an
-/// unresolvable jump becomes a `JumpTargetNotFound` error here (the recursive
-/// path returns it up to `interpret_file`, which does the same).
-pub(crate) fn run(blocks: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
-    let root = new_frame(collect_blocks(blocks), FrameKind::Straight, state);
-    let mut stack: Vec<Frame> = vec![root];
+/// The reified interpreter: an explicit control stack that can be stepped,
+/// paused at a row boundary, and cloned. Cloning a `Vm` (plus the `State` and a
+/// `Collect` output snapshot) is a checkpoint; resuming is dropping the clone
+/// back into `step_until`. The `'i` lifetime ties it to the parse tree, which
+/// an in-memory session keeps alive (Phase 1 — see the design doc).
+#[derive(Clone)]
+pub(crate) struct Vm<'i> {
+    stack: Vec<Frame<'i>>,
+}
 
-    while let Some(top) = stack.last() {
-        if top.index >= top.blocks.len() {
-            // End of this scope: loop back, or pop to the enclosing scope.
-            // (Program end is signalled by `Step::EndProgram` in `exec_block`,
-            // never here.)
-            scope_end(&mut stack, output, state)?;
-            continue;
-        }
+/// Why `step_until` returned: the program ended (carrying its terminal
+/// `BlockFlow`), or it paused having reached the requested row budget.
+pub(crate) enum Outcome {
+    Done(BlockFlow),
+    Paused,
+}
 
-        let block = stack.last().unwrap().blocks[stack.last().unwrap().index].clone();
-        match exec_block(block, output, state)? {
-            Step::Continue => stack.last_mut().unwrap().index += 1,
-            Step::EndProgram => {
-                pop_all(&mut stack, state);
-                return Ok(BlockFlow::EndProgram);
+impl<'i> Vm<'i> {
+    /// Start a VM at the top of `blocks` (registers the root scope's jump
+    /// targets with `state`, like `interpret_blocks`).
+    pub(crate) fn new(blocks: Pair<'i, Rule>, state: &mut State) -> Self {
+        let root = new_frame(collect_blocks(blocks), FrameKind::Straight, state);
+        Vm { stack: vec![root] }
+    }
+
+    /// Step the VM until the program ends or (when `stop_at_rows` is `Some(k)`)
+    /// the `Collect` sink has committed at least `k` rows — pausing at a block
+    /// boundary. Resumes cleanly on the next call.
+    pub(crate) fn step_until(
+        &mut self,
+        output: &mut Output,
+        state: &mut State,
+        stop_at_rows: Option<usize>,
+    ) -> Result<Outcome, ParsingError> {
+        while let Some(top) = self.stack.last() {
+            if top.index >= top.blocks.len() {
+                // End of this scope: loop back, or pop to the enclosing scope.
+                // (Program end is `Step::EndProgram` from `exec_block`.)
+                scope_end(&mut self.stack, output, state)?;
+                continue;
             }
-            Step::Enter(frame) => {
-                push_frame(&mut stack, *frame, state);
+
+            let top = self.stack.last().unwrap();
+            let block = top.blocks[top.index].clone();
+            match exec_block(block, output, state)? {
+                Step::Continue => self.stack.last_mut().unwrap().index += 1,
+                Step::EndProgram => {
+                    pop_all(&mut self.stack, state);
+                    return Ok(Outcome::Done(BlockFlow::EndProgram));
+                }
+                Step::Enter(frame) => push_frame(&mut self.stack, *frame, state),
+                Step::Jump(request) => {
+                    resolve_across_stack(&mut self.stack, request, state)?;
+                }
             }
-            Step::Jump(request) => {
-                if !resolve_across_stack(&mut stack, request, state)? {
-                    unreachable!("resolve_across_stack returns Err, not false");
+
+            if let Some(k) = stop_at_rows {
+                if output.collected_len() >= k {
+                    return Ok(Outcome::Paused);
                 }
             }
         }
+        Ok(Outcome::Done(BlockFlow::Continue))
     }
-    Ok(BlockFlow::Continue)
+}
+
+/// Drop-in replacement for `interpret_blocks` at the top level: interpret the
+/// program to completion with the explicit-stack VM. An unresolvable jump
+/// becomes a `JumpTargetNotFound` error (as in the recursive path).
+pub(crate) fn run(blocks: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
+    let mut vm = Vm::new(blocks, state);
+    match vm.step_until(output, state, None)? {
+        Outcome::Done(flow) => Ok(flow),
+        Outcome::Paused => unreachable!("no row budget was set"),
+    }
 }
 
 /// Collect a `blocks` pair's child `block`s into an owned vector of (cheap)
@@ -322,11 +366,11 @@ fn exec_control<'i>(
 ) -> Result<ControlOutcome<'i>, ParsingError> {
     for stmt in control.into_inner() {
         let leaf = match stmt.as_rule() {
-            Rule::while_statement => return Ok(enter_while(stmt, output, state)?),
-            Rule::loop_statement => return Ok(enter_loop(stmt, state)?),
-            Rule::for_statement => return Ok(enter_for(stmt, output, state)?),
-            Rule::repeat_until_statement => return Ok(enter_repeat(stmt, output, state)?),
-            Rule::if_statement => return Ok(enter_if(stmt, output, state)?),
+            Rule::while_statement => return enter_while(stmt, output, state),
+            Rule::loop_statement => return enter_loop(stmt, state),
+            Rule::for_statement => return enter_for(stmt, output, state),
+            Rule::repeat_until_statement => return enter_repeat(stmt, output, state),
+            Rule::if_statement => return enter_if(stmt, output, state),
             // Leaf jumps: reuse the recursive path's leaf fns.
             Rule::goto_statement => interpret_goto(stmt, state)?,
             Rule::if_goto_statement => interpret_if_goto(stmt, state)?,
@@ -497,5 +541,119 @@ fn resolve_across_stack(
         if stack.is_empty() {
             return Err(request.into_not_found_error(state));
         }
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    //! Demonstrates that the reified stack makes checkpoint/resume work: run a
+    //! loop, pause mid-way, snapshot `{Vm, State, Collect output}`, discard the
+    //! originals, and resume purely from the snapshot — producing output
+    //! byte-identical to a straight run. This is the Phase-1 payoff of #47.
+    use super::*;
+    use crate::output::Row;
+    use crate::types::NCParser;
+    use pest::Parser;
+
+    fn axes() -> Vec<String> {
+        ["N", "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    fn parse_blocks(input: &str) -> Pair<Rule> {
+        let file = NCParser::parse(Rule::file, input).expect("parse").next().expect("file");
+        file.into_inner().next().expect("blocks")
+    }
+
+    fn fresh_state(input: &str) -> State {
+        let mut s = State::new(axes(), 100_000, None, false);
+        s.set_input(input);
+        s
+    }
+
+    fn run_full(input: &str) -> Vec<Row> {
+        let blocks = parse_blocks(input);
+        let mut state = fresh_state(input);
+        let mut out = Output::collect();
+        let mut vm = Vm::new(blocks, &mut state);
+        vm.step_until(&mut out, &mut state, None).expect("run");
+        out.finish().expect("finish")
+    }
+
+    #[test]
+    fn checkpoint_mid_loop_resumes_to_identical_output() {
+        // 1000 iterations, one output row (`X=R1`) each.
+        let program = "R1=0\nWHILE R1<1000\nX=R1\nR1=R1+1\nENDWHILE\nM30\n";
+
+        // Reference: straight run through the VM.
+        let reference = run_full(program);
+        assert!(reference.len() >= 1000, "expected ~1000 rows, got {}", reference.len());
+
+        // Run until ~500 rows committed, then pause mid-loop.
+        let blocks = parse_blocks(program);
+        let mut state = fresh_state(program);
+        let mut out = Output::collect();
+        let mut vm = Vm::new(blocks, &mut state);
+        let outcome = vm.step_until(&mut out, &mut state, Some(500)).expect("step");
+        assert!(matches!(outcome, Outcome::Paused), "VM should pause at the row budget");
+        let at = out.collected_len();
+        assert!(at >= 500 && at < reference.len(), "paused mid-loop at {at} rows");
+        // We are genuinely mid-loop: the loop counter is partway through.
+        let r1 = state.symbol_table["R1"];
+        assert!(r1 > 0.0 && r1 < 1000.0, "mid-loop counter R1={r1}");
+
+        // ---- checkpoint: clone the whole resumable state ----
+        let ckpt_vm = vm.clone();
+        let ckpt_state = state.clone();
+        let ckpt_out = out.snapshot_collect().expect("Collect snapshot");
+
+        // Prove resume depends ONLY on the checkpoint: drop the originals.
+        drop(vm);
+        drop(state);
+        drop(out);
+
+        // ---- resume purely from the checkpoint, run to completion ----
+        let mut r_vm = ckpt_vm;
+        let mut r_state = ckpt_state;
+        let mut r_out = ckpt_out;
+        r_vm.step_until(&mut r_out, &mut r_state, None).expect("resume");
+        let resumed = r_out.finish().expect("finish");
+
+        // Byte-for-byte identical to the straight run.
+        assert_eq!(resumed.len(), reference.len(), "row count diverged after resume");
+        assert_eq!(
+            format!("{reference:?}"),
+            format!("{resumed:?}"),
+            "resumed output diverged from the straight run"
+        );
+    }
+
+    #[test]
+    fn checkpoint_resume_across_a_backward_jump_loop() {
+        // Same shape but built from a GOTOB loop (exercises the jump stack, not
+        // a structured WHILE): N10 counts up, GOTOB back to the label.
+        let program = "R1=0\n\
+             LOOP_TOP: X=R1\n\
+             R1=R1+1\n\
+             IF R1<800 GOTOB LOOP_TOP\n\
+             M30\n";
+        let reference = run_full(program);
+        assert!(reference.len() >= 800);
+
+        let blocks = parse_blocks(program);
+        let mut state = fresh_state(program);
+        let mut out = Output::collect();
+        let mut vm = Vm::new(blocks, &mut state);
+        vm.step_until(&mut out, &mut state, Some(400)).expect("step");
+
+        let mut r_vm = vm.clone();
+        let mut r_state = state.clone();
+        let mut r_out = out.snapshot_collect().expect("snapshot");
+        r_vm.step_until(&mut r_out, &mut r_state, None).expect("resume");
+        let resumed = r_out.finish().expect("finish");
+
+        assert_eq!(format!("{reference:?}"), format!("{resumed:?}"));
     }
 }
