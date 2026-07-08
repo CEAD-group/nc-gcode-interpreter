@@ -2,6 +2,13 @@ use crate::errors::ParsingError;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+/// A `HashMap` using the non-cryptographic FxHash instead of the default
+/// SipHash. The hot interpreter maps (`axes`, `translation`, `symbol_table`,
+/// `output_keys`) have tiny, trusted keys and are hit millions of times a run;
+/// profiling the 1.1 GB file showed SipHash of these keys (esp. in
+/// `update_axis`) as a top cost. FxHash needs no DoS resistance here.
+pub(crate) type FxMap<K, V> = HashMap<K, V, rustc_hash::FxBuildHasher>;
+
 /// Emit an interpreter warning to stderr. Callers pass `format_args!(...)` so
 /// the message is only formatted at the point of emission.
 pub fn emit_warning(args: std::fmt::Arguments) {
@@ -51,12 +58,12 @@ pub enum ColKind {
 
 #[derive(Debug, Clone)]
 pub struct State {
-    pub axes: HashMap<String, f64>,
-    pub symbol_table: HashMap<String, f64>,
+    pub axes: FxMap<String, f64>,
+    pub symbol_table: FxMap<String, f64>,
     /// String variables (DEF STRING[n]); kept apart from the numeric
     /// symbol_table - using one in a numeric expression is a loud error.
     pub string_table: HashMap<String, String>,
-    pub translation: HashMap<String, f64>,
+    pub translation: FxMap<String, f64>,
     pub axis_identifiers: Vec<String>,
     pub iteration_limit: usize,
     pub axis_index_map: Option<HashMap<String, usize>>,
@@ -82,7 +89,7 @@ pub struct State {
     /// lookup falls back to uppercasing only when a direct (already-uppercase)
     /// hit misses. Built once at construction from the axis identifiers and the
     /// fixed block addresses.
-    output_keys: HashMap<String, (ColKind, &'static str)>,
+    output_keys: FxMap<String, (ColKind, &'static str)>,
 }
 
 impl State {
@@ -99,11 +106,11 @@ impl State {
         axis_index_map: Option<HashMap<String, usize>>,
         allow_undefined_variables: bool,
     ) -> Self {
-        let mut symbols = HashMap::new();
+        let mut symbols = FxMap::default();
         symbols.insert("TRUE".to_string(), 1.0);
         symbols.insert("FALSE".to_string(), 0.0);
 
-        let mut translation = HashMap::new();
+        let mut translation = FxMap::default();
         for axis in &axis_identifiers {
             translation.insert(axis.clone(), 0.0);
         }
@@ -120,7 +127,7 @@ impl State {
         // Pre-resolve every output-column key to its interned &'static str
         // once, up front. Axis identifiers are case-insensitive on lookup, so
         // the registry is keyed by the uppercased name.
-        let mut output_keys: HashMap<String, (ColKind, &'static str)> = HashMap::new();
+        let mut output_keys: FxMap<String, (ColKind, &'static str)> = FxMap::default();
         for axis in &axis_identifiers {
             let upper = axis.to_uppercase();
             let interned = crate::output::intern_column(&upper);
@@ -135,7 +142,7 @@ impl State {
         }
 
         State {
-            axes: HashMap::new(),
+            axes: FxMap::default(),
             symbol_table: symbols,
             string_table: HashMap::new(),
             translation,
@@ -319,8 +326,8 @@ impl State {
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)] // fields read only by the python-feature bindings, not the bin
 pub struct FinalState {
-    pub axes: HashMap<String, f64>,
-    pub symbol_table: HashMap<String, f64>,
-    pub translation: HashMap<String, f64>,
+    pub axes: FxMap<String, f64>,
+    pub symbol_table: FxMap<String, f64>,
+    pub translation: FxMap<String, f64>,
     pub string_table: HashMap<String, String>,
 }
