@@ -1850,8 +1850,11 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                 match state.resolve_output_key(&key) {
                     Some((ColKind::Axis, skey)) => {
                         // State keeps local coordinates; the output row gets the machine
-                        // coordinate under the translation active at this point in the program.
-                        let machine_value = state.get_axis_machine(skey).unwrap_or(local_value);
+                        // coordinate under the translation active here. `update_axis` just
+                        // stored this axis' local == `local_value`, so machine =
+                        // local_value + translation — one lookup instead of
+                        // `get_axis_machine`'s two (it would re-read the axis we just set).
+                        let machine_value = local_value + state.get_translation(skey);
                         last.insert(skey, Value::Float(machine_value));
                     }
                     Some((ColKind::Block, skey)) => {
