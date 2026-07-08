@@ -4,6 +4,26 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Changed
+
+- Interpreter throughput: the hot, closed-vocabulary lookup maps (`axes`,
+  `translation`, `output_keys`, and the table builder's per-cell/forward-fill
+  maps) now use the non-cryptographic FxHash hasher, and `State::update_axis`
+  overwrites in place instead of re-allocating the key on repeat writes. ~17%
+  off the collect (dataframe) path on the large real-world benchmark, with no
+  behavior change. `symbol_table` deliberately stays on the default SipHash
+  hasher: its keys are user-controlled variable names, so it keeps its
+  hash-flooding resistance (#60).
+
+### Added
+
+- Experimental execution-cursor interpreter (opt-in via `NC_VM=1`): the
+  recursive control-flow walk is reified into an explicit frame stack, enabling
+  in-memory checkpoint/resume. Off by default; the standard path is unchanged.
+  Groundwork for resumable/streaming interpretation (#47, #59).
+
 ## [v0.2.3] - 2026-07-07
 
 ### Added

@@ -2,6 +2,20 @@ use crate::errors::ParsingError;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+/// A `HashMap` using the non-cryptographic FxHash instead of the default
+/// SipHash. Reserved for hot maps with a *closed, trusted* key vocabulary:
+/// `axes`, `translation`, `output_keys` — axis/block names fixed at
+/// construction, hit millions of times a run. Profiling the 1.1 GB file showed
+/// SipHash of these keys (esp. in `update_axis`) as a top cost, and with a
+/// closed key set there is nothing to hash-flood.
+///
+/// NOTE: deliberately *not* used for `symbol_table`, whose keys are
+/// user-controlled, unbounded-length variable names parsed from the input.
+/// That map stays on SipHash to preserve hash-flooding (DoS) resistance on
+/// crafted programs; it is also cold on the CAM-flood workloads that motivated
+/// this change, so the default hasher costs nothing there.
+pub(crate) type FxMap<K, V> = HashMap<K, V, rustc_hash::FxBuildHasher>;
+
 /// Emit an interpreter warning to stderr. Callers pass `format_args!(...)` so
 /// the message is only formatted at the point of emission.
 pub fn emit_warning(args: std::fmt::Arguments) {
@@ -51,12 +65,15 @@ pub enum ColKind {
 
 #[derive(Debug, Clone)]
 pub struct State {
-    pub axes: HashMap<String, f64>,
+    pub axes: FxMap<String, f64>,
+    /// Numeric variables. Keys are user-controlled variable names parsed from
+    /// the input, so this map stays on the default SipHash hasher for
+    /// hash-flooding resistance (see [`FxMap`]).
     pub symbol_table: HashMap<String, f64>,
     /// String variables (DEF STRING[n]); kept apart from the numeric
     /// symbol_table - using one in a numeric expression is a loud error.
     pub string_table: HashMap<String, String>,
-    pub translation: HashMap<String, f64>,
+    pub translation: FxMap<String, f64>,
     pub axis_identifiers: Vec<String>,
     pub iteration_limit: usize,
     pub axis_index_map: Option<HashMap<String, usize>>,
@@ -82,7 +99,7 @@ pub struct State {
     /// lookup falls back to uppercasing only when a direct (already-uppercase)
     /// hit misses. Built once at construction from the axis identifiers and the
     /// fixed block addresses.
-    output_keys: HashMap<String, (ColKind, &'static str)>,
+    output_keys: FxMap<String, (ColKind, &'static str)>,
 }
 
 impl State {
@@ -99,11 +116,11 @@ impl State {
         axis_index_map: Option<HashMap<String, usize>>,
         allow_undefined_variables: bool,
     ) -> Self {
-        let mut symbols = HashMap::new();
+        let mut symbols: HashMap<String, f64> = HashMap::new();
         symbols.insert("TRUE".to_string(), 1.0);
         symbols.insert("FALSE".to_string(), 0.0);
 
-        let mut translation = HashMap::new();
+        let mut translation = FxMap::default();
         for axis in &axis_identifiers {
             translation.insert(axis.clone(), 0.0);
         }
@@ -120,7 +137,7 @@ impl State {
         // Pre-resolve every output-column key to its interned &'static str
         // once, up front. Axis identifiers are case-insensitive on lookup, so
         // the registry is keyed by the uppercased name.
-        let mut output_keys: HashMap<String, (ColKind, &'static str)> = HashMap::new();
+        let mut output_keys: FxMap<String, (ColKind, &'static str)> = FxMap::default();
         for axis in &axis_identifiers {
             let upper = axis.to_uppercase();
             let interned = crate::output::intern_column(&upper);
@@ -135,7 +152,7 @@ impl State {
         }
 
         State {
-            axes: HashMap::new(),
+            axes: FxMap::default(),
             symbol_table: symbols,
             string_table: HashMap::new(),
             translation,
@@ -262,8 +279,16 @@ impl State {
     /// Updates an axis value in local coordinates (without translation).
     /// Returns the machine coordinate (local + translation) for output purposes.
     pub fn update_axis(&mut self, key: &str, local_value: f64) -> Result<f64, ParsingError> {
-        // Store the local coordinate
-        self.axes.insert(key.to_string(), local_value);
+        // Store the local coordinate. Get-mut first: after the first block that
+        // moves an axis, the key already exists, so the common path overwrites
+        // in place and allocates no String (HashMap::insert would take the key
+        // by value and allocate `key.to_string()` on every row).
+        match self.axes.get_mut(key) {
+            Some(slot) => *slot = local_value,
+            None => {
+                self.axes.insert(key.to_string(), local_value);
+            }
+        }
         // Return the machine coordinate for output
         let translation_value = self.get_translation(key);
         Ok(local_value + translation_value)
@@ -319,8 +344,8 @@ impl State {
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)] // fields read only by the python-feature bindings, not the bin
 pub struct FinalState {
-    pub axes: HashMap<String, f64>,
+    pub axes: FxMap<String, f64>,
     pub symbol_table: HashMap<String, f64>,
-    pub translation: HashMap<String, f64>,
+    pub translation: FxMap<String, f64>,
     pub string_table: HashMap<String, String>,
 }

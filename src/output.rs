@@ -14,6 +14,11 @@ use crate::types::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
+/// FxHash map for the hot table-build lookups (`index_of`, per cell per row;
+/// `fill`, per column per batch) — trusted `&'static str` keys, no need for
+/// SipHash's DoS resistance. See [`crate::state::FxMap`].
+type FxMap<K, V> = HashMap<K, V, rustc_hash::FxBuildHasher>;
+
 /// Intern a column name to a process-stable `&'static str`.
 ///
 /// The set of distinct output-column names is a small closed vocabulary
@@ -743,7 +748,7 @@ pub struct BatchBuilder {
     /// table.
     columns: Vec<&'static str>,
     /// Last carried non-null value per forward-filled column.
-    fill: HashMap<&'static str, Carry>,
+    fill: FxMap<&'static str, Carry>,
 }
 
 impl BatchBuilder {
@@ -752,7 +757,7 @@ impl BatchBuilder {
             disable_forward_fill,
             emit_line_no: false,
             columns: Vec::new(),
-            fill: HashMap::new(),
+            fill: FxMap::default(),
         }
     }
 
@@ -789,7 +794,8 @@ impl BatchBuilder {
         // One typed builder per column, in canonical order, each pre-filled
         // with `height` nulls. A name->position index lets each cell find its
         // builder in O(1).
-        let mut index_of: HashMap<&'static str, usize> = HashMap::with_capacity(self.columns.len());
+        let mut index_of: FxMap<&'static str, usize> =
+            FxMap::with_capacity_and_hasher(self.columns.len(), Default::default());
         let mut builders: Vec<ColumnBuilder> = Vec::with_capacity(self.columns.len());
         for (position, &name) in self.columns.iter().enumerate() {
             index_of.insert(name, position);
@@ -798,7 +804,9 @@ impl BatchBuilder {
 
         // Single pass: dispatch each present cell to its column builder. Every
         // cell key is in `present` (hence in `index_of`), so the lookup always
-        // hits; the `if let` is defensive only.
+        // hits; the `if let` is defensive only. FxHash beat a linear scan of
+        // `self.columns` here (~22 keys need content compare — interning does
+        // NOT guarantee pointer identity across all column sources).
         for (row_index, cell) in cells.iter().enumerate() {
             for (&key, value) in cell.iter() {
                 if let Some(&position) = index_of.get(key) {
