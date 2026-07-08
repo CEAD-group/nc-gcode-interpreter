@@ -459,19 +459,36 @@ impl OutputRows {
         }
     }
 
-    /// Route a finished row to the sink, passing it through the flattener
-    /// first when one is installed. Shared by `flush`.
-    /// Route a row to the sink, returning an emptied row the sink no longer
-    /// needs (batch path) so the caller can reuse its allocation as the next
+    /// Return a recycled row to the sink's pool. Used when a single `deliver`
+    /// yields more recycled rows than the one the caller can reuse as `current`
+    /// (the flattener fans one block out to many rows): the surplus goes back to
+    /// the pool instead of being freed, so recycling stays effective on
+    /// flattened paths too. A no-op for the non-recycling sinks.
+    fn reclaim(&mut self, row: Row) {
+        if let RowSink::Batch(sink) = &mut self.sink {
+            sink.recycle.push(row);
+        }
+    }
+
+    /// Route a row to the sink, passing it through the flattener first when one
+    /// is installed, and returning an emptied row the sink no longer needs
+    /// (batch path) so the caller can reuse its allocation as the next
     /// `current`. `None` when nothing is available to recycle.
     fn deliver(&mut self, row: Row) -> Result<Option<Row>, ParsingError> {
         if let Some(mut flattener) = self.flattener.take() {
             let mut flattened = Vec::new();
             flattener.push(row, &mut flattened);
             self.flattener = Some(flattener);
+            // Keep one recycled row for the caller to reuse; hand any others the
+            // sink returns this call straight back to the pool so they are not
+            // freed (a flattened block delivers many rows in one `deliver`).
             let mut recycled = None;
             for row in flattened {
-                recycled = self.deliver_to_sink(row)?;
+                if let Some(r) = self.deliver_to_sink(row)? {
+                    if let Some(prev) = recycled.replace(r) {
+                        self.reclaim(prev);
+                    }
+                }
             }
             return Ok(recycled);
         }
