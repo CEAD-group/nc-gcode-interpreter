@@ -82,6 +82,13 @@ impl CellMap {
         None
     }
 
+    /// Empty the cells, retaining the backing allocation so a recycled row can
+    /// be refilled without a fresh heap allocation (see [`Row::reset_for_reuse`]).
+    #[inline]
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     #[inline]
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
         self.entries.iter_mut().find(|(k, _)| *k == key).map(|(_, v)| v)
@@ -129,6 +136,20 @@ pub struct Row {
     /// Replaying `variable_changes` row by row reconstructs the symbol table
     /// as it stood at any point of the stream; the batch table ignores them.
     pub variable_changes: Vec<(String, f64)>,
+}
+
+impl Row {
+    /// Empty this row for reuse as the next `current`, retaining both the cells
+    /// and variable-change allocations. On the batch path a finished row's
+    /// buffers are consumed into the columnar batch and then recycled here,
+    /// which collapses the per-row heap alloc/free (~22M on the 1.1 GB file,
+    /// the dominant allocator cost) into a small pool cycled batch-to-batch.
+    #[inline]
+    pub fn reset_for_reuse(&mut self) {
+        self.line_no = 0;
+        self.cells.clear();
+        self.variable_changes.clear();
+    }
 }
 
 /// Sparse side-table of variable-change events for the batch path, mirroring
@@ -205,6 +226,10 @@ pub struct BatchStreamSink {
     sender: std::sync::mpsc::SyncSender<Table>,
     builder: BatchBuilder,
     buffer: Vec<Row>,
+    /// Emptied rows kept for reuse: after a batch is built the buffered rows'
+    /// allocations are cleared (not freed) into this pool, and `accept` hands
+    /// them back to the interpreter to refill instead of allocating fresh.
+    recycle: Vec<Row>,
     batch_size: usize,
     /// Whether to accumulate variable-change events (opt-in `include_variables`).
     record_variables: bool,
@@ -226,7 +251,7 @@ impl BatchStreamSink {
     /// rows have accumulated. Variable-only rows carry no output cells and are
     /// dropped from the batch table, but their variable changes are still
     /// recorded into the sparse event log when `record_variables` is on.
-    fn accept(&mut self, row: Row) -> Result<(), ParsingError> {
+    fn accept(&mut self, mut row: Row) -> Result<Option<Row>, ParsingError> {
         if self.record_variables {
             for (name, value) in &row.variable_changes {
                 let id = match self.name_ids.get(name) {
@@ -246,15 +271,20 @@ impl BatchStreamSink {
                 self.events.value.push(*value);
             }
         }
+        // A variable-only row carries no output cell: it is not buffered, so hand
+        // its (cleared) allocation straight back for reuse.
         if row.cells.is_empty() {
-            return Ok(());
+            row.reset_for_reuse();
+            return Ok(Some(row));
         }
         self.output_row_count += 1;
         self.buffer.push(row);
         if self.buffer.len() >= self.batch_size {
             self.emit()?;
         }
-        Ok(())
+        // Hand back a pooled row (refilled after the last emit) so the caller
+        // refills a retained allocation instead of allocating a fresh one.
+        Ok(self.recycle.pop())
     }
 
     /// Send the accumulated variable-change events once, at finish. A no-op when
@@ -272,8 +302,20 @@ impl BatchStreamSink {
         if self.buffer.is_empty() {
             return Ok(());
         }
-        let rows = std::mem::take(&mut self.buffer);
+        // Take the buffered rows out to build the batch, then recycle their
+        // allocations: `build_batch` only borrows the rows (it copies each cell
+        // value into the columnar builders), so once it returns the row buffers
+        // are free to be cleared and pooled rather than dropped.
+        let mut rows = std::mem::take(&mut self.buffer);
         let table = self.builder.build_batch(&rows);
+        self.recycle.reserve(rows.len());
+        for mut row in rows.drain(..) {
+            row.reset_for_reuse();
+            self.recycle.push(row);
+        }
+        // `rows` is now empty but keeps its `Vec<Row>` capacity - reinstate it as
+        // the buffer so the outer vector is not reallocated each batch either.
+        self.buffer = rows;
         self.sender.send(table).map_err(|_| ParsingError::StreamClosed)
     }
 }
@@ -362,6 +404,7 @@ impl OutputRows {
                 sender,
                 builder: BatchBuilder::new(disable_forward_fill).with_line_numbers(emit_line_no),
                 buffer: Vec::new(),
+                recycle: Vec::new(),
                 batch_size,
                 record_variables,
                 events_sender,
@@ -418,30 +461,34 @@ impl OutputRows {
 
     /// Route a finished row to the sink, passing it through the flattener
     /// first when one is installed. Shared by `flush`.
-    fn deliver(&mut self, row: Row) -> Result<(), ParsingError> {
+    /// Route a row to the sink, returning an emptied row the sink no longer
+    /// needs (batch path) so the caller can reuse its allocation as the next
+    /// `current`. `None` when nothing is available to recycle.
+    fn deliver(&mut self, row: Row) -> Result<Option<Row>, ParsingError> {
         if let Some(mut flattener) = self.flattener.take() {
             let mut flattened = Vec::new();
             flattener.push(row, &mut flattened);
             self.flattener = Some(flattener);
+            let mut recycled = None;
             for row in flattened {
-                self.deliver_to_sink(row)?;
+                recycled = self.deliver_to_sink(row)?;
             }
-            return Ok(());
+            return Ok(recycled);
         }
         self.deliver_to_sink(row)
     }
 
     /// Route a finished row to the sink: collected, streamed row-at-a-time, or
     /// fed to the worker-side batch producer.
-    fn deliver_to_sink(&mut self, row: Row) -> Result<(), ParsingError> {
+    fn deliver_to_sink(&mut self, row: Row) -> Result<Option<Row>, ParsingError> {
         match &mut self.sink {
             RowSink::Collect(rows) => {
                 rows.push(row);
-                Ok(())
+                Ok(None)
             }
             // The receiver hung up: the consumer stopped iterating. Abort
             // interpretation instead of running the rest of the program.
-            RowSink::Stream(sender) => sender.send(row).map_err(|_| ParsingError::StreamClosed),
+            RowSink::Stream(sender) => sender.send(row).map(|_| None).map_err(|_| ParsingError::StreamClosed),
             RowSink::Batch(sink) => sink.accept(row),
         }
     }
@@ -464,7 +511,13 @@ impl OutputRows {
                 self.warned_g91 = true;
             }
         }
-        self.deliver(row)
+        // `mem::take` above left `current` as an empty (unallocated) default; if
+        // the sink handed back a pooled row, adopt its retained allocation for
+        // the next block instead of allocating fresh on the first cell insert.
+        if let Some(recycled) = self.deliver(row)? {
+            self.current = recycled;
+        }
+        Ok(())
     }
 
     /// Begin the row for the block at `line_no`, flushing the previous row.
