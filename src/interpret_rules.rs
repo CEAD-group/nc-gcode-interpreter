@@ -7,6 +7,11 @@ use std::collections::HashMap;
 
 type Output = crate::output::OutputRows;
 
+// Experimental execution-cursor VM (#47), a child module so it can reuse this
+// module's private leaf fns via `super::`. Gated behind `NC_VM=1`.
+#[path = "vm.rs"]
+pub(crate) mod vm;
+
 /// Control-flow signal returned by block interpretation: either fall through
 /// to the next block, or a pending GOTO that must be resolved against the
 /// block list of the current scope or, failing that, an enclosing scope
