@@ -270,7 +270,14 @@ fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Re
         message: "No inner blocks found".to_string(),
     })?;
 
-    match interpret_blocks(blocks, output, state)? {
+    // Experimental: the explicit-stack VM (#47) runs the same structured path
+    // when NC_VM=1, for differential parity against the recursive walker.
+    let flow = if crate::interpret_rules::vm::vm_enabled() {
+        crate::interpret_rules::vm::run(blocks, output, state)?
+    } else {
+        interpret_blocks(blocks, output, state)?
+    };
+    match flow {
         BlockFlow::Continue | BlockFlow::EndProgram => Ok(()),
         // A jump that no scope could resolve: the destination does not exist
         // in the programmed search direction (alarm 14080 on a real control).
