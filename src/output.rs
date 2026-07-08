@@ -771,7 +771,9 @@ impl BatchBuilder {
 
         // Single pass: dispatch each present cell to its column builder. Every
         // cell key is in `present` (hence in `index_of`), so the lookup always
-        // hits; the `if let` is defensive only.
+        // hits; the `if let` is defensive only. FxHash beat a linear scan of
+        // `self.columns` here (~22 keys need content compare — interning does
+        // NOT guarantee pointer identity across all column sources).
         for (row_index, cell) in cells.iter().enumerate() {
             for (&key, value) in cell.iter() {
                 if let Some(&position) = index_of.get(key) {

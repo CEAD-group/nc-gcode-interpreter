@@ -269,8 +269,16 @@ impl State {
     /// Updates an axis value in local coordinates (without translation).
     /// Returns the machine coordinate (local + translation) for output purposes.
     pub fn update_axis(&mut self, key: &str, local_value: f64) -> Result<f64, ParsingError> {
-        // Store the local coordinate
-        self.axes.insert(key.to_string(), local_value);
+        // Store the local coordinate. Get-mut first: after the first block that
+        // moves an axis, the key already exists, so the common path overwrites
+        // in place and allocates no String (HashMap::insert would take the key
+        // by value and allocate `key.to_string()` on every row).
+        match self.axes.get_mut(key) {
+            Some(slot) => *slot = local_value,
+            None => {
+                self.axes.insert(key.to_string(), local_value);
+            }
+        }
         // Return the machine coordinate for output
         let translation_value = self.get_translation(key);
         Ok(local_value + translation_value)
