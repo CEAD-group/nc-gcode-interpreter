@@ -1,7 +1,10 @@
 # Resumable interpretation — checkpoint/resume design (#47, targeting 0.3.0)
 
-Status: **design draft**. This document scopes the resumable-`NcSession` feature
-requested in issue #47 and the interpreter change it requires. No code yet.
+Status: **design + proof-of-concept**. This document scopes the resumable-`NcSession`
+feature requested in issue #47 and the interpreter change it requires. A working
+Phase-1 proof of concept — the execution-cursor VM (`src/vm.rs`, opt-in via
+`NC_VM=1`) plus in-memory checkpoint/resume — now exists alongside this design;
+the public API and Phases 2–3 remain future work.
 
 ## 1. Goal and consumer requirements
 

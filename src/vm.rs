@@ -332,13 +332,14 @@ fn exec_block<'i>(block: Pair<'i, Rule>, output: &mut Output, state: &mut State)
                 ControlOutcome::Flow(f) => flow = f,
             },
             other => {
+                let (line_no, preview) = get_error_context(&item, state);
                 return Err(ParsingError::UnexpectedRule {
                     rule: other,
                     context: "vm::exec_block".to_string(),
-                    line_no: 0,
-                    preview: String::new(),
+                    line_no,
+                    preview,
                     message: format!("Unexpected rule in block: {other:?}"),
-                })
+                });
             }
         }
     }
@@ -384,13 +385,14 @@ fn exec_control<'i>(
                 BlockFlow::Continue
             }
             other => {
+                let (line_no, preview) = get_error_context(&stmt, state);
                 return Err(ParsingError::UnexpectedRule {
                     rule: other,
                     context: "vm::exec_control".to_string(),
-                    line_no: 0,
-                    preview: String::new(),
+                    line_no,
+                    preview,
                     message: format!("Unexpected control rule: {other:?}"),
-                })
+                });
             }
         };
         // First non-Continue leaf jump wins (matches interpret_control).
@@ -516,12 +518,12 @@ fn enter_if<'i>(
 /// Resolve a pending jump against the scope stack, innermost first: on a hit,
 /// set that scope's cursor (bounding backward jumps by the iteration limit) and
 /// discard the inner scopes it jumped out of; on a miss, pop the scope and retry
-/// in the enclosing one. Always resolves or errors (never returns `false`).
+/// in the enclosing one. Always resolves or errors.
 fn resolve_across_stack(
     stack: &mut Vec<Frame>,
     request: super::JumpRequest,
     state: &mut State,
-) -> Result<bool, ParsingError> {
+) -> Result<(), ParsingError> {
     loop {
         let top = stack.last_mut().expect("stack non-empty during jump");
         if let Some(dest) = resolve_jump(&top.targets, top.index, &request) {
@@ -534,7 +536,7 @@ fn resolve_across_stack(
                 }
             }
             top.index = dest;
-            return Ok(true);
+            return Ok(());
         }
         // Not resolvable here: leave this scope and try the enclosing one.
         pop_frame(stack, state);
