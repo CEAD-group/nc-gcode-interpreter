@@ -840,142 +840,222 @@ mod tests {
     /// the right-hand side is one character. Real CAM output uses this to
     /// zero-pad a date (`WHILE INDEX(D," ")>0: D[INDEX(D," ")]="0"`); dropping
     /// it silently corrupts generated file names.
-    #[test]
-    fn string_single_character_write() {
-        let run = |src: &str| nc_to_table(src, None, None, None, 10000, false, None, false, None);
-        // Manual 4.1.4.8 idiom: overwrite one character in place. Index 5 is
-        // the `N` in "AXIS N HERE" (0-based: A0 X1 I2 S3 ' '4 N5).
-        let (_, state) =
-            run("DEF STRING[13] MSG = \"AXIS N HERE\"\nMSG[5] = \"X\"\n").expect("program should interpret");
-        assert_eq!(state.string_table["MSG"], "AXIS X HERE");
-
-        // Case-insensitive base name; 0-based index writes the first character.
-        let (_, state) = run("DEF STRING[8] TAG = \"abc\"\ntag[0] = \"Z\"\n").expect("program should interpret");
-        assert_eq!(state.string_table["TAG"], "Zbc");
-
-        // Error loudly, never silently: index past the end, a right-hand side
-        // that is not exactly one character, and a non-STRING target.
-        let err = run("DEF STRING[3] STR = \"abc\"\nSTR[9] = \"0\"\n").unwrap_err();
-        assert!(format!("{err}").contains("out of range"), "got: {err}");
-        let err = run("DEF STRING[3] STR = \"abc\"\nSTR[0] = \"xy\"\n").unwrap_err();
-        assert!(format!("{err}").contains("exactly one character"), "got: {err}");
-        let err = run("DEF STRING[3] STR = \"abc\"\nSTR[0] = \"\"\n").unwrap_err();
-        assert!(format!("{err}").contains("exactly one character"), "got: {err}");
-        let err = run("DEF REAL ARR[4]\nARR[1] = \"x\"\n").unwrap_err();
-        assert!(format!("{err}").contains("not a STRING variable"), "got: {err}");
-
-        // Declaring a variable whose name collides with a reserved axis letter
-        // (here S, the spindle) is rejected on a real control; with an
-        // initializer the collision - not a downstream value type error - must
-        // be what the user sees.
-        let err = run("DEF STRING[13] S = \"abc\"\n").unwrap_err();
-        assert!(format!("{err}").contains("conflicts with an axis name"), "got: {err}");
-        let err = run("DEF REAL X = 5\n").unwrap_err();
-        assert!(format!("{err}").contains("conflicts with an axis name"), "got: {err}");
+    /// Shared by the string-operation tests below: interpret `src` and hand
+    /// back the final state, so each test is a one-line assert on
+    /// `string_table`/`symbol_table`.
+    fn string_state(src: &str) -> State {
+        nc_to_table(src, None, None, None, 10000, false, None, false, None)
+            .expect("program should interpret")
+            .1
     }
 
-    /// String operations (manual 4.1.4): SPRINT formatting, SUBSTR, INDEX/
-    /// RINDEX, NUMBER, STRLEN, ISNUMBER, and the `<<` concatenation operator.
-    /// Modelled on the real CAM date-stamping idiom that motivated the work.
+    /// Shared by the string-operation error tests: interpret `src` and hand
+    /// back the error text.
+    fn string_err(src: &str) -> String {
+        format!(
+            "{}",
+            nc_to_table(src, None, None, None, 10000, false, None, false, None).unwrap_err()
+        )
+    }
+
+    /// STRING[<index>] = "<char>" overwrites one character in place (manual
+    /// 4.1.4.8). Index 5 is the `N` in "AXIS N HERE" (0-based: A0 X1 I2 S3 ' '4 N5).
     #[test]
-    fn string_operations() {
-        let state = |src: &str| {
-            nc_to_table(src, None, None, None, 10000, false, None, false, None)
-                .expect("program should interpret")
-                .1
-        };
+    fn string_char_write_replaces_one_character() {
+        let s = string_state("DEF STRING[13] MSG = \"AXIS N HERE\"\nMSG[5] = \"X\"\n");
+        assert_eq!(s.string_table["MSG"], "AXIS X HERE");
+    }
 
-        // SPRINT: `%2d` pads with spaces (right-justified), so a single-digit
-        // field leaves a gap that the zero-replacement idiom later fills.
-        let s = state("DEF STRING[13] DT\nDT = SPRINT(\"20%2d%2d%2dT%2d%2d\", 24, 5, 29, 13, 31)\n");
+    /// The base variable name is case-insensitive, like every other identifier.
+    #[test]
+    fn string_char_write_base_name_is_case_insensitive() {
+        let s = string_state("DEF STRING[8] TAG = \"abc\"\ntag[0] = \"Z\"\n");
+        assert_eq!(s.string_table["TAG"], "Zbc");
+    }
+
+    #[test]
+    fn string_char_write_rejects_out_of_range_index() {
+        let err = string_err("DEF STRING[3] STR = \"abc\"\nSTR[9] = \"0\"\n");
+        assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn string_char_write_rejects_multi_character_rhs() {
+        let err = string_err("DEF STRING[3] STR = \"abc\"\nSTR[0] = \"xy\"\n");
+        assert!(err.contains("exactly one character"), "got: {err}");
+    }
+
+    #[test]
+    fn string_char_write_rejects_empty_rhs() {
+        let err = string_err("DEF STRING[3] STR = \"abc\"\nSTR[0] = \"\"\n");
+        assert!(err.contains("exactly one character"), "got: {err}");
+    }
+
+    #[test]
+    fn string_char_write_rejects_non_string_target() {
+        let err = string_err("DEF REAL ARR[4]\nARR[1] = \"x\"\n");
+        assert!(err.contains("not a STRING variable"), "got: {err}");
+    }
+
+    /// Declaring a variable whose name collides with a reserved axis letter is
+    /// rejected on a real control. With an initializer present, the collision -
+    /// not a downstream value-type error - must be what the user sees.
+    #[test]
+    fn def_with_string_initializer_reports_axis_name_collision() {
+        let err = string_err("DEF STRING[13] S = \"abc\"\n"); // S = spindle
+        assert!(err.contains("conflicts with an axis name"), "got: {err}");
+    }
+
+    #[test]
+    fn def_with_numeric_initializer_reports_axis_name_collision() {
+        let err = string_err("DEF REAL X = 5\n");
+        assert!(err.contains("conflicts with an axis name"), "got: {err}");
+    }
+
+    /// SPRINT's `%<m>d` pads with spaces, right-justified (manual 4.1.4.9), so
+    /// a single-digit field leaves a gap - the gap the date-zeroing idiom below
+    /// then fills.
+    #[test]
+    fn sprint_pads_integer_field_with_spaces() {
+        let s = string_state("DEF STRING[13] DT\nDT = SPRINT(\"20%2d%2d%2dT%2d%2d\", 24, 5, 29, 13, 31)\n");
         assert_eq!(s.string_table["DT"], "2024 529T1331");
+    }
 
-        // The full idiom: format the date, then replace each space with "0".
-        let s = state(
+    /// The real CAM idiom this feature exists for: format a date, then replace
+    /// every space left by SPRINT's padding with "0".
+    #[test]
+    fn index_and_char_write_zero_pad_a_sprint_date() {
+        let s = string_state(
             "DEF STRING[13] DT\n\
              DT = SPRINT(\"20%2d%2d%2dT%2d%2d\", 24, 5, 29, 13, 31)\n\
              WHILE (INDEX(DT, \" \") > 0)\n  DT[INDEX(DT, \" \")] = \"0\"\nENDWHILE\n",
         );
         assert_eq!(s.string_table["DT"], "20240529T1331");
+    }
 
-        // SUBSTR is 0-based; INDEX/RINDEX are 0-based and return -1 when absent.
-        let s = state(
-            "DEF STRING[13] DT = \"20240529T1331\"\n\
-             R1 = NUMBER(SUBSTR(DT, 2, 2))\n\
-             R2 = NUMBER(SUBSTR(DT, 2, 6))\n\
-             R3 = STRLEN(DT)\n\
-             R4 = INDEX(DT, \"T\")\n\
-             R5 = INDEX(DT, \"Q\")\n\
-             R6 = RINDEX(DT, \"3\")\n",
-        );
+    /// SUBSTR(<string>, <index>, <length>) is 0-based (manual 4.1.4.7); NUMBER
+    /// converts the extracted digits back to a REAL.
+    #[test]
+    fn substr_and_number_extract_a_date_field() {
+        let s = string_state("DEF STRING[13] DT = \"20240529T1331\"\nR1 = NUMBER(SUBSTR(DT, 2, 2))\n");
         assert_eq!(s.symbol_table["R1"], 24.0);
+        let s = string_state("DEF STRING[13] DT = \"20240529T1331\"\nR2 = NUMBER(SUBSTR(DT, 2, 6))\n");
         assert_eq!(s.symbol_table["R2"], 240529.0);
-        assert_eq!(s.symbol_table["R3"], 13.0);
-        assert_eq!(s.symbol_table["R4"], 8.0);
-        assert_eq!(s.symbol_table["R5"], -1.0);
-        assert_eq!(s.symbol_table["R6"], 11.0);
+    }
 
-        // `<<` joins strings, STRING variables and numbers. An INT converts to
-        // plain form; a REAL keeps up to 10 decimals with trailing zeros
-        // trimmed (manual 4.1.4.1) - distinct from SPRINT `%F`'s fixed 6.
-        let s = state(
+    #[test]
+    fn strlen_counts_characters() {
+        let s = string_state("DEF STRING[13] DT = \"20240529T1331\"\nR3 = STRLEN(DT)\n");
+        assert_eq!(s.symbol_table["R3"], 13.0);
+    }
+
+    #[test]
+    fn index_returns_zero_based_position() {
+        let s = string_state("DEF STRING[13] DT = \"20240529T1331\"\nR4 = INDEX(DT, \"T\")\n");
+        assert_eq!(s.symbol_table["R4"], 8.0);
+    }
+
+    #[test]
+    fn index_returns_negative_one_when_not_found() {
+        let s = string_state("DEF STRING[13] DT = \"20240529T1331\"\nR5 = INDEX(DT, \"Q\")\n");
+        assert_eq!(s.symbol_table["R5"], -1.0);
+    }
+
+    #[test]
+    fn rindex_searches_from_the_right() {
+        let s = string_state("DEF STRING[13] DT = \"20240529T1331\"\nR6 = RINDEX(DT, \"3\")\n");
+        assert_eq!(s.symbol_table["R6"], 11.0);
+    }
+
+    /// `<<` joins quoted strings and STRING variables into one string.
+    #[test]
+    fn concat_operator_joins_strings_and_variables() {
+        let s = string_state(
             "DEF STRING[13] DT = \"20240529T1331\"\n\
              DEF STRING[100] WF\n\
-             WF = \"//NC:/DIR/CAL_\" << DT << \".TXT\"\n\
-             DEF INT IDX = 2\n\
-             DEF REAL VAL = 9.654\n\
-             DEF STRING[50] MSGS\n\
-             MSGS = \"i:\" << IDX << \"/v:\" << VAL\n",
+             WF = \"//NC:/DIR/CAL_\" << DT << \".TXT\"\n",
         );
         assert_eq!(s.string_table["WF"], "//NC:/DIR/CAL_20240529T1331.TXT");
-        assert_eq!(s.string_table["MSGS"], "i:2/v:9.654");
+    }
 
-        // SPRINT width/precision on %f and %s, and %<m>d space padding.
-        let s = state("DEF STRING[60] STR\nSTR = SPRINT(\"a=%f b=%.2f c=%s d=[%4d]\", 3.5, 3.14159, \"XY\", 7)\n");
-        assert_eq!(s.string_table["STR"], "a=3.500000 b=3.14 c=XY d=[   7]");
-
-        // SUBSTR edge cases: two-arg form runs to the end; a start past the end
-        // yields ""; an over-long length clamps (manual 4.1.4.7). ISNUMBER
-        // guards NUMBER.
-        let s = state(
-            "DEF STRING[8] STR = \"abc\"\n\
-             DEF STRING[8] TAIL = SUBSTR(STR, 1)\n\
-             DEF STRING[8] OOB = SUBSTR(STR, 9)\n\
-             DEF STRING[8] LONG = SUBSTR(STR, 1, 99)\n\
-             R7 = ISNUMBER(\"12.5\")\n\
-             R8 = ISNUMBER(\"x9\")\n",
+    /// `<<` converts an INT to plain form and a REAL to up to 10 decimals with
+    /// trailing zeros trimmed (manual 4.1.4.1) - distinct from SPRINT `%F`'s
+    /// fixed six decimals.
+    #[test]
+    fn concat_operator_formats_numbers() {
+        let s = string_state(
+            "DEF INT IDX = 2\nDEF REAL VAL = 9.654\nDEF STRING[50] MSGS\nMSGS = \"i:\" << IDX << \"/v:\" << VAL\n",
         );
+        assert_eq!(s.string_table["MSGS"], "i:2/v:9.654");
+    }
+
+    /// SPRINT's `%f`/`%.<n>f` decimal precision and `%s` string insertion.
+    #[test]
+    fn sprint_supports_precision_and_string_specifiers() {
+        let s = string_state("DEF STRING[60] STR\nSTR = SPRINT(\"a=%f b=%.2f c=%s\", 3.5, 3.14159, \"XY\")\n");
+        assert_eq!(s.string_table["STR"], "a=3.500000 b=3.14 c=XY");
+    }
+
+    /// SUBSTR's two-argument form runs to the end of the string.
+    #[test]
+    fn substr_two_arg_form_runs_to_the_end() {
+        let s = string_state("DEF STRING[8] STR = \"abc\"\nDEF STRING[8] TAIL = SUBSTR(STR, 1)\n");
         assert_eq!(s.string_table["TAIL"], "bc");
+    }
+
+    /// A start position past the end of the string yields "" (manual 4.1.4.7).
+    #[test]
+    fn substr_start_past_end_yields_empty_string() {
+        let s = string_state("DEF STRING[8] STR = \"abc\"\nDEF STRING[8] OOB = SUBSTR(STR, 9)\n");
         assert_eq!(s.string_table["OOB"], "");
+    }
+
+    /// An over-long length clamps to the end of the string (manual 4.1.4.7).
+    #[test]
+    fn substr_clamps_an_overlong_length() {
+        let s = string_state("DEF STRING[8] STR = \"abc\"\nDEF STRING[8] LONG = SUBSTR(STR, 1, 99)\n");
         assert_eq!(s.string_table["LONG"], "bc");
+    }
+
+    #[test]
+    fn isnumber_is_a_predicate_for_number() {
+        let s = string_state("R7 = ISNUMBER(\"12.5\")\nR8 = ISNUMBER(\"x9\")\n");
         assert_eq!(s.symbol_table["R7"], 1.0);
         assert_eq!(s.symbol_table["R8"], 0.0);
+    }
 
-        // Regression: a quoted string that is only whitespace keeps its content.
-        // The WHITESPACE rule used to eat it, so INDEX(x, " ") never matched -
-        // exactly the space this family of programs searches for.
-        let s = state("DEF STRING[8] STR = \" X\"\nR9 = INDEX(STR, \" \")\nR10 = STRLEN(STR)\n");
+    /// Regression: a quoted string that is only whitespace keeps its content.
+    /// The implicit WHITESPACE rule used to eat it, so INDEX(x, " ") never
+    /// matched - exactly the space the date-zeroing idiom searches for.
+    #[test]
+    fn whitespace_only_string_literal_keeps_its_content() {
+        let s = string_state("DEF STRING[8] STR = \" X\"\nR9 = INDEX(STR, \" \")\nR10 = STRLEN(STR)\n");
         assert_eq!(s.symbol_table["R9"], 0.0);
         assert_eq!(s.symbol_table["R10"], 2.0);
     }
 
-    /// String operations fail loudly, never silently: an unconvertible NUMBER,
-    /// an unsupported SPRINT conversion, too few SPRINT arguments, and using a
-    /// string-returning function where a number is required.
     #[test]
-    fn string_operations_error_loudly() {
-        let run = |src: &str| nc_to_table(src, None, None, None, 10000, false, None, false, None);
-        let err = run("R1 = NUMBER(\"abc\")\n").unwrap_err();
-        assert!(format!("{err}").contains("not a valid number"), "got: {err}");
-        let err = run("DEF STRING[8] STRV\nSTRV = SPRINT(\"%g\", 1.5)\n").unwrap_err();
-        assert!(format!("{err}").contains("not supported"), "got: {err}");
-        let err = run("DEF STRING[8] STRV\nSTRV = SPRINT(\"%d%d\", 1)\n").unwrap_err();
-        assert!(
-            format!("{err}").contains("more conversions than arguments"),
-            "got: {err}"
-        );
-        let err = run("R1 = 1 + SUBSTR(\"abc\", 0)\n").unwrap_err();
-        assert!(format!("{err}").contains("returns a string"), "got: {err}");
+    fn number_on_non_numeric_string_errors_loudly() {
+        let err = string_err("R1 = NUMBER(\"abc\")\n");
+        assert!(err.contains("not a valid number"), "got: {err}");
+    }
+
+    #[test]
+    fn sprint_rejects_an_unsupported_conversion() {
+        let err = string_err("DEF STRING[8] STRV\nSTRV = SPRINT(\"%g\", 1.5)\n");
+        assert!(err.contains("not supported"), "got: {err}");
+    }
+
+    #[test]
+    fn sprint_rejects_too_few_arguments() {
+        let err = string_err("DEF STRING[8] STRV\nSTRV = SPRINT(\"%d%d\", 1)\n");
+        assert!(err.contains("more conversions than arguments"), "got: {err}");
+    }
+
+    #[test]
+    fn string_returning_function_rejected_in_numeric_context() {
+        let err = string_err("R1 = 1 + SUBSTR(\"abc\", 0)\n");
+        assert!(err.contains("returns a string"), "got: {err}");
     }
 
     /// User-variable identifiers are case-insensitive (manual 3.3.2: "No
