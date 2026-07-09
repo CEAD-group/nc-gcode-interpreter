@@ -978,6 +978,22 @@ mod tests {
         assert_eq!(s.string_table["WF"], "//NC:/DIR/CAL_20240529T1331.TXT");
     }
 
+    /// A parenthesized string operand in a `<<` chain - `(DT)` or a
+    /// parenthesized function call - must still be recognized as a string, not
+    /// misrouted down the numeric path (`primary` allows `"(" ~ expression ~
+    /// ")"`, so a variable/function can arrive wrapped in one or more pairs of
+    /// parens).
+    #[test]
+    fn concat_operator_handles_parenthesized_string_operand() {
+        let s = string_state(
+            "DEF STRING[13] DT = \"20240529T1331\"\nDEF STRING[100] WF\nWF = \"pre_\" << (DT) << \"_post\"\n",
+        );
+        assert_eq!(s.string_table["WF"], "pre_20240529T1331_post");
+
+        let s = string_state("DEF STRING[100] WF\nWF = \"n=\" << (SUBSTR(\"abcde\", 1, 2))\n");
+        assert_eq!(s.string_table["WF"], "n=bc");
+    }
+
     /// `<<` converts an INT to plain form and a REAL to up to 10 decimals with
     /// trailing zeros trimmed (manual 4.1.4.1) - distinct from SPRINT `%F`'s
     /// fixed six decimals.

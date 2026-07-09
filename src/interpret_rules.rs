@@ -1033,6 +1033,10 @@ fn expression_is_string(expression: &Pair<Rule>, state: &State) -> bool {
             let name = prim.into_inner().next().map(|n| n.as_str().to_uppercase());
             matches!(name.as_deref(), Some("SPRINT") | Some("SUBSTR"))
         }
+        // Parenthesized: `primary = { ... | "(" ~ expression ~ ")" }` wraps a
+        // nested expression whose own operator count decides string-ness, e.g.
+        // `(DT)` or `(SPRINT(...))`.
+        Rule::expression => expression_is_string(&prim, state),
         _ => false,
     }
 }
@@ -1074,7 +1078,12 @@ fn evaluate_string(pair: Pair<Rule>, state: &mut State) -> Result<String, Parsin
                         Ok(state.string_table.get(&key).cloned().unwrap_or_default())
                     }
                     Rule::arith_fun => evaluate_string_function(prim, state),
-                    _ => unreachable!("expression_is_string guarantees a string variable or function"),
+                    // Parenthesized: recurse into the wrapped expression (mirrors
+                    // the recursive case in expression_is_string above).
+                    Rule::expression => evaluate_string(prim, state),
+                    _ => unreachable!(
+                        "expression_is_string guarantees a string variable, function, or parenthesized expression"
+                    ),
                 }
             } else {
                 // A number joined by << (manual 4.1.4.1): plain integer, or a
