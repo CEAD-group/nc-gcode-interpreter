@@ -4,6 +4,36 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- String operations (manual 4.1.4), so real CAM programs that build a
+  timestamped protocol-file name now parse and run end to end:
+  - Single-character writes into a STRING variable, `STRING[<index>] = "<char>"`
+    (manual 4.1.4.8), 0-based; only user-defined variables, never system
+    variables. The right-hand side must be exactly one character and the index
+    in range, both enforced loudly.
+  - The `<<` concatenation operator, joining quoted strings, STRING variables,
+    string functions and numbers (INT in plain form, REAL with up to 10 decimals
+    and trailing zeros trimmed, per manual 4.1.4.1).
+  - String functions: `SPRINT` (printf-style: `%d %f %s %x %b %c` with field
+    width and precision; unsupported conversions error loudly), `SUBSTR`,
+    `INDEX`, `RINDEX`, `NUMBER`, `STRLEN`, `ISNUMBER`. All string indices are
+    0-based; the search family returns `-1` when not found; `NUMBER` on a
+    non-numeric string is a hard error.
+
+### Fixed
+
+- A quoted string that is only whitespace (e.g. `" "`) no longer loses its
+  content: the implicit `WHITESPACE` rule used to eat it, so `INDEX(x, " ")`
+  found nothing — exactly the space that date-formatting code searches for.
+  Quoted-string bodies are now taken verbatim (leading/trailing spaces too).
+- Declaring a variable whose name collides with a reserved axis letter *with*
+  an initializer (e.g. `DEF STRING[13] S = "..."`) now reports the name
+  collision ("conflicts with an axis name") instead of a confusing downstream
+  "cannot assign a string" error.
+
 ## [v0.2.5] - 2026-07-08
 
 ### Changed

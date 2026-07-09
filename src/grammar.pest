@@ -145,16 +145,34 @@ assignment     = {
 
   | (variable ~ "=" ~ axis_increment) // variable must be an axis, and may be a normal variable. Sort it out after parsing
 
+  // A string concatenation (`<<`) must be tried before `expression`/`string_value`:
+  // those would each match only the first operand and leave `<< ...` dangling.
+  | (variable ~ "=" ~ string_expression) // string variable built with << (manual 4.1.4)
+
   | (variable ~ "=" ~ expression) // variable may be an axis, and may be a normal variable. Sort it out after parsing
 
   | (variable ~ "=" ~ string_value) // string variable (DEF STRING or reassignment); never an axis
 
+  | (variable_array ~ "=" ~ string_expression) // string-valued array element (never an axis)
+
   | (variable_array ~ "=" ~ expression) // variable may not be an axis
+
+  | (variable_array ~ "=" ~ string_value) // single-character write into a STRING variable: STRING[<index>] = "<char>" (manual 4.1.4.8)
 }
 axis_increment = { ^"IC" ~ "(" ~ expression ~ ")" }
-// A quoted string as assignment RHS. Non-silent (unlike quoted_string) so an
-// empty "" still yields a pair to interpret.
-string_value   = { QUOTE ~ string? ~ QUOTE }
+// A quoted string. Compound-atomic ($): no implicit WHITESPACE is skipped
+// between the quotes, so a string that is only spaces (e.g. " ", searched for
+// by INDEX in real date-formatting code) keeps its content instead of being
+// eaten by the WHITESPACE rule. The inner `string` pair still surfaces.
+string_value   = ${ QUOTE ~ string ~ QUOTE }
+// String concatenation with the link operator `<<` (manual 4.1.4): joins
+// quoted strings, STRING variables, string functions (SPRINT/SUBSTR) and
+// numbers (converted to text) into one string. Requires at least one `<<` so
+// a lone string or expression still matches the simpler rules. Each operand is
+// a quoted string or a full (numeric or string-returning) expression; `<<` is
+// not an expression operator, so `expression` stops at the next `<<`.
+string_expression = { concat_operand ~ ("<<" ~ concat_operand)+ }
+concat_operand    = { string_value | expression }
 
 assignment_multi =  { variable_array ~ "=" ~ (value_array | value_repeating) }
 value_array      =  { "SET" ~ "(" ~ (expression | value_none) ~ ("," ~ (expression | value_none))* ~ ")" }
@@ -203,7 +221,7 @@ integer          = @{ "-"? ~ ASCII_DIGIT+ ~ !ASCII_ALPHA } // Ensure integers ar
 arith_fun        = { arith_fun_name ~ "(" ~ function_arguments ~ ")" }
 arith_fun_name   = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 
-tool_selection = { ^"T" ~ "=" ~ quoted_string }
+tool_selection = { ^"T" ~ "=" ~ string_value }
 
 // Frame instructions. A single rule captures the whole family (with any
 // number of axis assignments, including none: a bare substituting frame
@@ -216,9 +234,11 @@ frame_kw = @{
 
 // function call parser
 non_returning_function_call =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }
-function_arguments          =  { ((expression | quoted_string)? ~ ",")* ~ (expression | quoted_string) }
-quoted_string               = _{ QUOTE ~ (string)* ~ QUOTE }
-string                      =  { (!"\"" ~ ANY)+ }
+function_arguments          =  { ((expression | string_value)? ~ ",")* ~ (expression | string_value) }
+// Atomic body: a maximal run of non-quote characters, taken verbatim with no
+// WHITESPACE skipping (may be empty for ""). Its quote wrapper (string_value)
+// is compound-atomic, so leading/trailing/only-whitespace content survives.
+string                      = @{ (!"\"" ~ ANY)* }
 
 // builtins, globally available names
 nc_variable = { "$" ~ identifier }

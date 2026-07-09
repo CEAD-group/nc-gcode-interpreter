@@ -81,3 +81,34 @@ fn without_flag_curves_pass_through() {
     assert!(motions.contains(&"G2".to_string()));
     assert!(motions.contains(&"BSPLINE".to_string()));
 }
+
+/// Real CAM programs that build a timestamped protocol-file name with the full
+/// string-operations family - SPRINT, INDEX, single-character writes, `<<`
+/// concatenation, SUBSTR and NUMBER - must parse and run end to end. These are
+/// the programs that motivated the string support; `$A_YEAR` and friends are
+/// real-time-clock system variables the interpreter does not model, so the run
+/// uses `--allow-undefined-variables` (they default to 0). The assertion is
+/// simply that the whole file interprets without error.
+#[test]
+fn real_world_string_programs_run() {
+    for name in ["control-flow_spindle-ped.mpf", "control-flow_move-grid-a45.mpf"] {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test-data/real-world")
+            .join(name);
+        let dir = std::env::temp_dir().join(format!("nc-cli-real-{name}"));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let input = dir.join("program.mpf");
+        std::fs::copy(&src, &input).expect("copy fixture");
+
+        let status = Command::new(env!("CARGO_BIN_EXE_nc-gcode-interpreter"))
+            .arg(&input)
+            .arg("--allow-undefined-variables")
+            .status()
+            .expect("binary should run");
+        assert!(status.success(), "{name} exited with {status}");
+
+        // A CSV is produced, with at least a header and one interpreted row.
+        let csv = std::fs::read_to_string(dir.join("program.csv")).expect("CSV output should exist");
+        assert!(csv.lines().count() >= 2, "{name} produced no rows");
+    }
+}

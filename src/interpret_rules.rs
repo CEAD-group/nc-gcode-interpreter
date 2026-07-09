@@ -305,11 +305,35 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
         message: "Missing function arguments".to_string(),
     })?;
 
-    // Parse arguments
+    // Raw argument pairs, preserving order and rule. String functions consume
+    // some arguments as text, so they are dispatched from the raw pairs before
+    // the numeric arguments below are evaluated (a string argument evaluated as
+    // a number would error).
+    let raw_args: Vec<Pair<Rule>> = args_pair.into_inner().collect();
+    let func_upper = func_name.as_str().to_uppercase();
+    match func_upper.as_str() {
+        // Number-returning string functions (manual 4.1.4): evaluate their
+        // string argument as text, not as a numeric expression.
+        "INDEX" | "RINDEX" | "NUMBER" | "STRLEN" | "ISNUMBER" => {
+            return evaluate_string_query_function(&func_upper, &raw_args, state, line_no, &preview);
+        }
+        // String-returning functions have no meaning where a number is wanted.
+        "SPRINT" | "SUBSTR" => {
+            return Err(ParsingError::with_context(
+                line_no,
+                preview,
+                "expression".to_string(),
+                format!("'{func_upper}' returns a string; it cannot be used where a number is required"),
+            ));
+        }
+        _ => {}
+    }
+
+    // Numeric arguments (quoted-string arguments cannot appear for these).
     let mut args = Vec::new();
-    for arg in args_pair.into_inner() {
+    for arg in &raw_args {
         if arg.as_rule() == Rule::expression {
-            args.push(evaluate_expression(arg, state)?);
+            args.push(evaluate_expression(arg.clone(), state)?);
         }
     }
 
@@ -699,13 +723,18 @@ fn interpret_tool_selection(
     // Get the last HashMap from the output vector to insert the tool selection.
     let last = output.last_mut().expect("Output vector should not be empty");
 
-    // Since `tool_selection` = { ^"T" ~ "=" ~ quoted_string }
-    // and `quoted_string` is silent, the `tool_selection` pair will directly contain the `string` pairs.
+    // `tool_selection` = { ^"T" ~ "=" ~ string_value }; string_value wraps the
+    // inner `string`, so descend one level to read the tool name.
     let mut tool_name = String::new();
 
     // Iterate over the inner pairs to collect the strings.
     for pair in tool_selection.into_inner() {
         match pair.as_rule() {
+            Rule::string_value => {
+                if let Some(inner) = pair.into_inner().next() {
+                    tool_name.push_str(inner.as_str());
+                }
+            }
             Rule::string => {
                 tool_name.push_str(pair.as_str());
             }
@@ -765,7 +794,18 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
         .next()
         .ok_or_else(|| ParsingError::InvalidElementCount { expected: 2, actual: 1 })?;
 
-    if expression_pair.as_rule() == Rule::string_value {
+    // A string-valued right-hand side: a quoted literal, a `<<` concatenation,
+    // or an expression that yields a string (a STRING variable read or a
+    // string-returning function such as SPRINT/SUBSTR). All are stored as text.
+    let rhs_is_string = matches!(expression_pair.as_rule(), Rule::string_value | Rule::string_expression)
+        || (expression_pair.as_rule() == Rule::expression && expression_is_string(&expression_pair, state));
+    if rhs_is_string {
+        let text = evaluate_string(expression_pair.clone(), state)?;
+        // STRING[<index>] = <one char>: write a single character into a string
+        // variable (manual 4.1.4.8), as opposed to reassigning the whole string.
+        if variable_pair.as_rule() == Rule::variable_array {
+            return interpret_string_char_write(variable_pair, text, state);
+        }
         let key = normalize_reserved_case(interpret_variable(variable_pair.clone(), state)?, state);
         if state.is_axis(&key) || state.is_block_address(&key) {
             return Err(annotate_error(
@@ -783,11 +823,6 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
                 state,
             ));
         }
-        let text = expression_pair
-            .into_inner()
-            .next()
-            .map(|s| s.as_str().to_string())
-            .unwrap_or_default();
         state.string_table.insert(key.clone(), text);
         return Ok((key, None));
     }
@@ -866,6 +901,527 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
 
     Ok((key, Some(local_value)))
 }
+
+/// Write a single character into a STRING variable: `STRING[<index>] = "<char>"`
+/// (manual 4.1.4.8 "Reading and writing of individual characters"). The index
+/// is 0-based; the right-hand side is one character (type CHAR). Returns the
+/// base variable name and `None` (strings never enter the numeric pipeline),
+/// mirroring the whole-string assignment path.
+fn interpret_string_char_write(
+    variable_pair: Pair<Rule>,
+    text: String,
+    state: &mut State,
+) -> Result<(String, Option<f64>), ParsingError> {
+    // variable_array = { (nc_variable | identifier) ~ "[" ~ indices ~ "]" }
+    let (line_no, preview) = get_error_context(&variable_pair, state);
+    let mut inner = variable_pair.into_inner();
+    let name_pair = inner.next().expect("variable_array always has a name");
+
+    // Single-character access is only allowed for user-defined variables, not
+    // system variables (manual 4.1.4.8; a real control raises alarm 12620).
+    if name_pair.as_rule() == Rule::nc_variable {
+        return Err(ParsingError::with_context(
+            line_no,
+            preview,
+            "single-character string write".to_string(),
+            format!(
+                "'{}' is a system variable; single-character write is only allowed for user-defined variables",
+                name_pair.as_str().to_uppercase()
+            ),
+        ));
+    }
+    let key = normalize_reserved_case(interpret_identifier(name_pair)?, state);
+
+    // The target must be a declared STRING variable; a numeric array element
+    // cannot take a string (keep every name in exactly one type).
+    if !state.string_table.contains_key(&key) {
+        return Err(ParsingError::with_context(
+            line_no,
+            preview,
+            "single-character string write".to_string(),
+            format!(
+                "'{key}' is not a STRING variable; only strings support single-character (STRING[i] = \"c\") writes"
+            ),
+        ));
+    }
+
+    // A string is one-dimensional: exactly one index (interpret_indices already
+    // guarantees each index is a non-negative integer).
+    let indices_pair = inner.next().expect("variable_array always has indices");
+    let indices = interpret_indices(indices_pair, state)?;
+    let index = match indices.as_slice() {
+        [i] => *i as usize,
+        _ => {
+            return Err(ParsingError::with_context(
+                line_no,
+                preview,
+                "single-character string write".to_string(),
+                format!("single-character write into '{key}' requires exactly one index"),
+            ))
+        }
+    };
+
+    // The right-hand side is one character (type CHAR).
+    let mut rhs_chars = text.chars();
+    let (new_char, extra) = (rhs_chars.next(), rhs_chars.next());
+    let new_char = match (new_char, extra) {
+        (Some(c), None) => c,
+        _ => {
+            return Err(ParsingError::with_context(
+                line_no,
+                preview,
+                "single-character string write".to_string(),
+                format!(
+                    "single-character write into '{key}' expects exactly one character on the right-hand side, got \"{text}\""
+                ),
+            ))
+        }
+    };
+
+    // Replace the character in place. Index range is 0..(current length - 1).
+    let current = state.string_table.get_mut(&key).expect("checked above");
+    let mut chars: Vec<char> = current.chars().collect();
+    if index >= chars.len() {
+        return Err(ParsingError::with_context(
+            line_no,
+            preview,
+            "single-character string write".to_string(),
+            format!(
+                "index {index} is out of range for '{key}' (length {}); valid range is 0..{}",
+                chars.len(),
+                chars.len().saturating_sub(1)
+            ),
+        ));
+    }
+    chars[index] = new_char;
+    *current = chars.into_iter().collect();
+
+    Ok((key, None))
+}
+
+// ---------------------------------------------------------------------------
+// String-valued expressions (manual 4.1.4 "String operations")
+//
+// The numeric evaluator stays f64-only; string handling is a parallel path that
+// meets the numeric one at two seams: string-returning functions (SPRINT,
+// SUBSTR) evaluate here, and number-returning string functions (INDEX, RINDEX,
+// NUMBER, STRLEN, ISNUMBER) are dispatched from `evaluate_arithmetic_function`
+// through `evaluate_string_query_function`.
+// ---------------------------------------------------------------------------
+
+/// True when a `Rule::expression` right-hand side actually yields a string: a
+/// bare STRING-variable read, or a string-returning function (SPRINT/SUBSTR).
+/// Anything with an operator, or the number-returning string functions, is
+/// false - those stay on the numeric path.
+fn expression_is_string(expression: &Pair<Rule>, state: &State) -> bool {
+    let mut inner = expression.clone().into_inner();
+    // More than one child means an operator is present => numeric.
+    let (Some(first), None) = (inner.next(), inner.next()) else {
+        return false;
+    };
+    if first.as_rule() != Rule::primary {
+        return false;
+    }
+    let Some(prim) = first.into_inner().next() else {
+        return false;
+    };
+    match prim.as_rule() {
+        Rule::variable => interpret_variable(prim.clone(), state)
+            .map(|k| state.string_table.contains_key(&normalize_reserved_case(k, state)))
+            .unwrap_or(false),
+        Rule::arith_fun => {
+            let name = prim.into_inner().next().map(|n| n.as_str().to_uppercase());
+            matches!(name.as_deref(), Some("SPRINT") | Some("SUBSTR"))
+        }
+        _ => false,
+    }
+}
+
+/// Evaluate a string-valued construct to its text: a quoted literal, a `<<`
+/// concatenation, a string function, a STRING variable, or a number (which the
+/// `<<` operator converts to text).
+fn evaluate_string(pair: Pair<Rule>, state: &mut State) -> Result<String, ParsingError> {
+    match pair.as_rule() {
+        // "..." (string_value wraps an optional inner `string`; "" is empty).
+        Rule::string_value => Ok(pair
+            .into_inner()
+            .next()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_default()),
+        // Bare literal token, as it appears among function arguments (the
+        // `quoted_string` rule is silent, so its inner `string` surfaces here).
+        Rule::string => Ok(pair.as_str().to_string()),
+        // << chain: concatenate every operand's text.
+        Rule::string_expression => {
+            let mut out = String::new();
+            for operand in pair.into_inner() {
+                out.push_str(&evaluate_string(operand, state)?);
+            }
+            Ok(out)
+        }
+        Rule::concat_operand => evaluate_string(pair.into_inner().next().expect("concat_operand has one child"), state),
+        Rule::arith_fun => evaluate_string_function(pair, state),
+        Rule::expression => {
+            if expression_is_string(&pair, state) {
+                let prim = pair
+                    .into_inner()
+                    .next()
+                    .and_then(|p| p.into_inner().next())
+                    .expect("string expression has a primary operand");
+                match prim.as_rule() {
+                    Rule::variable => {
+                        let key = normalize_reserved_case(interpret_variable(prim, state)?, state);
+                        Ok(state.string_table.get(&key).cloned().unwrap_or_default())
+                    }
+                    Rule::arith_fun => evaluate_string_function(prim, state),
+                    _ => unreachable!("expression_is_string guarantees a string variable or function"),
+                }
+            } else {
+                // A number joined by << (manual 4.1.4.1): plain integer, or a
+                // real with up to 10 decimals, trailing zeros trimmed.
+                Ok(format_nc_concat_number(evaluate_expression(pair, state)?))
+            }
+        }
+        other => {
+            let (line_no, preview) = get_error_context(&pair, state);
+            Err(ParsingError::UnexpectedRule {
+                rule: other,
+                context: "evaluate_string".to_string(),
+                line_no,
+                preview,
+                message: format!("cannot evaluate {other:?} as a string"),
+            })
+        }
+    }
+}
+
+/// Render a number as text for the `<<` operator (manual 4.1.4.1): integers in
+/// plain form, reals with up to 10 decimal places and trailing zeros trimmed.
+/// (This differs from SPRINT `%F`, which forces exactly six decimals.)
+fn format_nc_concat_number(n: f64) -> String {
+    if n.is_finite() && n.fract() == 0.0 && n.abs() < 9.007_199_254_740_992e15 {
+        format!("{}", n as i64)
+    } else {
+        let s = format!("{n:.10}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+/// Parse a string as a number the way NUMBER/ISNUMBER do. SINUMERIK writes the
+/// exponent with the marker `EX` (manual 4.1.4.2, e.g. `1234.9876EX-7`); Rust's
+/// float parser wants `E`.
+fn parse_nc_number(s: &str) -> Option<f64> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    t.to_uppercase().replace("EX", "E").parse::<f64>().ok()
+}
+
+/// String-returning functions (manual 4.1.4): SPRINT and SUBSTR.
+fn evaluate_string_function(arith_fun: Pair<Rule>, state: &mut State) -> Result<String, ParsingError> {
+    let (line_no, preview) = get_error_context(&arith_fun, state);
+    let mut pairs = arith_fun.into_inner();
+    let name = pairs.next().map(|n| n.as_str().to_uppercase()).unwrap_or_default();
+    let raw_args: Vec<Pair<Rule>> = pairs.next().map(|a| a.into_inner().collect()).unwrap_or_default();
+    match name.as_str() {
+        "SPRINT" => evaluate_sprint(&raw_args, state, line_no, &preview),
+        "SUBSTR" => evaluate_substr(&raw_args, state, line_no, &preview),
+        other => Err(ParsingError::with_context(
+            line_no,
+            preview,
+            "string function".to_string(),
+            format!("'{other}' is not a string-valued function"),
+        )),
+    }
+}
+
+/// Number-returning string functions dispatched from the numeric evaluator:
+/// INDEX, RINDEX, NUMBER, STRLEN, ISNUMBER (manual 4.1.4). All string indices
+/// are 0-based; the search family returns -1 when the character is not found.
+fn evaluate_string_query_function(
+    name: &str,
+    raw_args: &[Pair<Rule>],
+    state: &mut State,
+    line_no: usize,
+    preview: &str,
+) -> Result<f64, ParsingError> {
+    let arity = |expected: usize| ParsingError::InvalidFunctionArity {
+        line_no,
+        preview: preview.to_string(),
+        name: name.to_string(),
+        expected,
+        actual: raw_args.len(),
+    };
+    match name {
+        "INDEX" | "RINDEX" => {
+            if raw_args.len() != 2 {
+                return Err(arity(2));
+            }
+            let haystack = evaluate_string(raw_args[0].clone(), state)?;
+            let needle = evaluate_string(raw_args[1].clone(), state)?;
+            let Some(target) = needle.chars().next() else {
+                return Err(ParsingError::with_context(
+                    line_no,
+                    preview.to_string(),
+                    name.to_string(),
+                    format!("{name} needs a non-empty search character"),
+                ));
+            };
+            let chars: Vec<char> = haystack.chars().collect();
+            let pos = if name == "INDEX" {
+                chars.iter().position(|&c| c == target)
+            } else {
+                chars.iter().rposition(|&c| c == target)
+            };
+            Ok(pos.map(|p| p as f64).unwrap_or(-1.0))
+        }
+        "NUMBER" => {
+            if raw_args.len() != 1 {
+                return Err(arity(1));
+            }
+            let s = evaluate_string(raw_args[0].clone(), state)?;
+            parse_nc_number(&s).ok_or_else(|| {
+                ParsingError::with_context(
+                    line_no,
+                    preview.to_string(),
+                    "NUMBER".to_string(),
+                    format!("NUMBER(\"{s}\"): the string is not a valid number"),
+                )
+            })
+        }
+        "STRLEN" => {
+            if raw_args.len() != 1 {
+                return Err(arity(1));
+            }
+            let s = evaluate_string(raw_args[0].clone(), state)?;
+            // The internal 0 character terminates a string (manual 4.1.4).
+            Ok(s.chars().take_while(|&c| c != '\0').count() as f64)
+        }
+        "ISNUMBER" => {
+            if raw_args.len() != 1 {
+                return Err(arity(1));
+            }
+            let s = evaluate_string(raw_args[0].clone(), state)?;
+            Ok(parse_nc_number(&s).is_some() as u8 as f64)
+        }
+        _ => unreachable!("caller restricts the name set"),
+    }
+}
+
+/// SUBSTR(<string>, <index>[, <length>]) (manual 4.1.4.7). The index is 0-based;
+/// a start past the end yields an empty string, and an over-long length is
+/// clamped to the end of the string.
+fn evaluate_substr(
+    raw_args: &[Pair<Rule>],
+    state: &mut State,
+    line_no: usize,
+    preview: &str,
+) -> Result<String, ParsingError> {
+    if raw_args.len() != 2 && raw_args.len() != 3 {
+        return Err(ParsingError::InvalidFunctionArity {
+            line_no,
+            preview: preview.to_string(),
+            name: "SUBSTR".to_string(),
+            expected: 2,
+            actual: raw_args.len(),
+        });
+    }
+    let chars: Vec<char> = evaluate_string(raw_args[0].clone(), state)?.chars().collect();
+    let start = eval_index_arg(&raw_args[1], state, line_no, preview)?.min(chars.len());
+    let end = match raw_args.get(2) {
+        Some(len_arg) => (start + eval_index_arg(len_arg, state, line_no, preview)?).min(chars.len()),
+        None => chars.len(),
+    };
+    Ok(chars[start..end].iter().collect())
+}
+
+/// SPRINT(<format>, <value>...) (manual 4.1.4.9): a printf-style formatter. Each
+/// `%` consumes the next value; `%%` is a literal percent. Field width pads with
+/// spaces (right-justified); there are no flags.
+fn evaluate_sprint(
+    raw_args: &[Pair<Rule>],
+    state: &mut State,
+    line_no: usize,
+    preview: &str,
+) -> Result<String, ParsingError> {
+    let Some((fmt_arg, value_args)) = raw_args.split_first() else {
+        return Err(sprint_err(line_no, preview, "SPRINT needs a format string".to_string()));
+    };
+    let fmt = evaluate_string(fmt_arg.clone(), state)?;
+    let mut values = value_args.iter();
+    let mut out = String::new();
+    let mut chars = fmt.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        if chars.peek() == Some(&'%') {
+            chars.next();
+            out.push('%');
+            continue;
+        }
+        // "[width][.precision]" - digits and an optional dot; no flags.
+        let mut spec = String::new();
+        while let Some(&pc) = chars.peek() {
+            if pc.is_ascii_digit() || pc == '.' {
+                spec.push(pc);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        let conv = chars
+            .next()
+            .ok_or_else(|| sprint_err(line_no, preview, "dangling '%' at end of SPRINT format".to_string()))?;
+        let arg = values.next().ok_or_else(|| {
+            sprint_err(
+                line_no,
+                preview,
+                "SPRINT format has more conversions than arguments".to_string(),
+            )
+        })?;
+        format_sprint_spec(&mut out, &spec, conv, arg, state, line_no, preview)?;
+    }
+    Ok(out)
+}
+
+fn sprint_err(line_no: usize, preview: &str, message: String) -> ParsingError {
+    ParsingError::with_context(line_no, preview.to_string(), "SPRINT".to_string(), message)
+}
+
+/// Format one SPRINT conversion. `spec` is the "[width][.precision]" text
+/// between `%` and the (case-insensitive) conversion letter.
+fn format_sprint_spec(
+    out: &mut String,
+    spec: &str,
+    conv: char,
+    arg: &Pair<Rule>,
+    state: &mut State,
+    line_no: usize,
+    preview: &str,
+) -> Result<(), ParsingError> {
+    let (width_str, prec_str) = match spec.split_once('.') {
+        Some((w, p)) => (w, Some(p)),
+        None => (spec, None),
+    };
+    let width: usize = if width_str.is_empty() {
+        0
+    } else {
+        width_str
+            .parse()
+            .map_err(|_| sprint_err(line_no, preview, format!("invalid SPRINT field width '{width_str}'")))?
+    };
+    let prec: Option<usize> = match prec_str {
+        Some(p) => Some(
+            p.parse()
+                .map_err(|_| sprint_err(line_no, preview, format!("invalid SPRINT precision '{p}'")))?,
+        ),
+        None => None,
+    };
+
+    let body = match conv.to_ascii_uppercase() {
+        'D' => format!("{}", eval_number_arg(arg, state, line_no, preview)?.round() as i64),
+        'F' => format!(
+            "{:.*}",
+            prec.unwrap_or(6),
+            eval_number_arg(arg, state, line_no, preview)?
+        ),
+        'X' => format!("{:X}", eval_number_arg(arg, state, line_no, preview)?.round() as i64),
+        'S' => {
+            let s = evaluate_string(arg.clone(), state)?;
+            match prec {
+                Some(p) => s.chars().take(p).collect(),
+                None => s,
+            }
+        }
+        'B' => {
+            let truthy = if arg_is_string(arg, state) {
+                !evaluate_string(arg.clone(), state)?.is_empty()
+            } else {
+                eval_number_arg(arg, state, line_no, preview)? != 0.0
+            };
+            (if truthy { "TRUE" } else { "FALSE" }).to_string()
+        }
+        'C' => {
+            if arg_is_string(arg, state) {
+                evaluate_string(arg.clone(), state)?
+                    .chars()
+                    .next()
+                    .map(String::from)
+                    .unwrap_or_default()
+            } else {
+                let code = eval_number_arg(arg, state, line_no, preview)?.round();
+                if !(0.0..=255.0).contains(&code) {
+                    return Err(sprint_err(
+                        line_no,
+                        preview,
+                        format!("%c character code {code} is outside 0..255"),
+                    ));
+                }
+                ((code as u8) as char).to_string()
+            }
+        }
+        other => {
+            return Err(sprint_err(
+                line_no,
+                preview,
+                format!("SPRINT conversion '%{other}' is not supported (supported: %d %f %s %x %b %c)"),
+            ))
+        }
+    };
+
+    // Field width: pad with spaces so the value is right-justified (manual
+    // 4.1.4.9: missing positions "are filled with spaces").
+    let len = body.chars().count();
+    if len < width {
+        out.extend(std::iter::repeat_n(' ', width - len));
+    }
+    out.push_str(&body);
+    Ok(())
+}
+
+/// True when a function argument evaluates to a string rather than a number.
+fn arg_is_string(arg: &Pair<Rule>, state: &State) -> bool {
+    match arg.as_rule() {
+        Rule::string | Rule::string_value | Rule::string_expression => true,
+        Rule::expression => expression_is_string(arg, state),
+        _ => false,
+    }
+}
+
+/// Evaluate a function argument that must be numeric; a quoted-string argument
+/// is a loud type error rather than a silent 0.
+fn eval_number_arg(arg: &Pair<Rule>, state: &mut State, line_no: usize, preview: &str) -> Result<f64, ParsingError> {
+    if matches!(
+        arg.as_rule(),
+        Rule::string | Rule::string_value | Rule::string_expression
+    ) {
+        return Err(ParsingError::with_context(
+            line_no,
+            preview.to_string(),
+            "function argument".to_string(),
+            format!("expected a number but got the string {}", arg.as_str()),
+        ));
+    }
+    evaluate_expression(arg.clone(), state)
+}
+
+/// Evaluate a 0-based, non-negative integer index argument (for SUBSTR).
+fn eval_index_arg(arg: &Pair<Rule>, state: &mut State, line_no: usize, preview: &str) -> Result<usize, ParsingError> {
+    let n = eval_number_arg(arg, state, line_no, preview)?;
+    if n < 0.0 || n.fract() != 0.0 {
+        return Err(ParsingError::with_context(
+            line_no,
+            preview.to_string(),
+            "string index".to_string(),
+            format!("expected a non-negative integer index, got {n}"),
+        ));
+    }
+    Ok(n as usize)
+}
+
 fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) -> Result<f64, ParsingError> {
     // axis_increment = { "IC" ~ "(" ~ expression ~ ")" }
     // Returns the new LOCAL coordinate. Since axes now store local coordinates,
@@ -1162,6 +1718,20 @@ fn interpret_identifier(pair: Pair<Rule>) -> Result<String, ParsingError> {
         })
     }
 }
+/// The declared variable name on the left of a DEF initializer (`DEF <type>
+/// <name> = <value>`), for the reserved-name collision check. Returns `None`
+/// when the left-hand side has an unexpected shape - the downstream
+/// interpreter then surfaces any real problem.
+fn definition_target_name(assignment: &Pair<Rule>, state: &State) -> Option<String> {
+    let lhs = assignment.clone().into_inner().next()?;
+    let name = match lhs.as_rule() {
+        Rule::variable_single_char => lhs.as_str().to_uppercase(),
+        Rule::variable => interpret_variable(lhs, state).ok()?,
+        Rule::variable_array => interpret_identifier(lhs.into_inner().next()?).ok()?,
+        _ => return None,
+    };
+    Some(normalize_reserved_case(name, state))
+}
 fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
     let pairs = element.into_inner();
     // Whether this DEF declares STRING[n] variables (the data_type pair
@@ -1171,6 +1741,18 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
         match pair.as_rule() {
             Rule::assignment => {
                 let (line_no, preview) = get_error_context(&pair, state);
+                // A DEF must not declare a name that collides with a reserved
+                // axis letter or block address (a real control rejects e.g.
+                // `DEF STRING[13] S`, S being the spindle). Check the declared
+                // name before interpreting the initializer, so the collision -
+                // not a downstream type error on the value - is what surfaces.
+                if let Some(name) = definition_target_name(&pair, state) {
+                    if state.is_axis(&name) {
+                        return Err(ParsingError::AxisUsedAsVariable { name, line_no, preview });
+                    } else if state.is_block_address(&name) {
+                        return Err(ParsingError::ReservedNameUsedAsVariable { name, line_no, preview });
+                    }
+                }
                 let res = interpret_assignment(pair, state)?;
                 if state.is_axis(res.0.as_str()) {
                     return Err(ParsingError::AxisUsedAsVariable {
