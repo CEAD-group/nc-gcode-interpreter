@@ -30,6 +30,26 @@ cargo build --release
 maturin develop --release --uv
 ```
 
+### Versioning
+
+`Cargo.toml` holds the placeholder version `0.0.0-dev`; the release workflow
+rewrites it from the git tag before building the wheels, so the released
+version always comes from the tag and never from a committed number.
+
+Local builds get a version too. `build_backend/nc_build_backend.py` is an
+in-tree PEP 517 backend that wraps maturin: when it sees the placeholder and
+finds a git checkout with tags, it stamps
+`git describe --tags --long --dirty` onto the `Cargo.toml` version as
+`0.2.6-dev.3+g<sha>` (maturin normalises that to the PEP 440
+`0.2.6.dev3+<sha>`), builds, then restores `Cargo.toml` and `Cargo.lock`. So an
+editable `uv sync` reports the commit it was built from rather than
+`0.0.0.dev0` - which is what lets a downstream consumer notice it is running a
+local edit of the interpreter rather than a release.
+
+Any non-placeholder version in `Cargo.toml` is left alone, so the CI release
+path is unaffected. Without git (an unpacked sdist, say) the placeholder
+stands.
+
 ### Release profile
 
 `[profile.release]` currently sets no `strip`/`lto` overrides. `strip = true` was

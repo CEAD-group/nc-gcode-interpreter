@@ -1,6 +1,10 @@
 [build-system]
 requires = ["maturin>=1.7,<2.0"]
-build-backend = "maturin"
+# In-tree shim around maturin: stamps a `git describe` version onto the
+# Cargo.toml placeholder so local/editable builds report e.g.
+# 0.2.6.dev3+g1234abc instead of 0.0.0.dev0. See build_backend/.
+build-backend = "nc_build_backend"
+backend-path = ["build_backend"]
 
 [project]
 name = "nc-gcode-interpreter"
