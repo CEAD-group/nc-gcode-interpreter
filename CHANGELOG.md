@@ -4,6 +4,18 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Changed
+
+- Ruff's implicit default rule set widened in 0.16 and turned the lint job red
+  on 64 findings in untouched code. Pin the rule selection in `pyproject.toml`
+  and the ruff version in CI, so a linter upgrade adds rules only when asked,
+  and fix the findings. Mostly mechanical (`X | None`, `list`/`dict` builtins,
+  import sorting, explicit `zip(strict=)`); `FLY002` is ignored because
+  collapsing a joined list of NC lines into one f-string literal makes the test
+  programs unreadable.
+
 ## [v0.2.6] - 2026-07-09
 
 ### Added

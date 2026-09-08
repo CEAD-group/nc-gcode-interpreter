@@ -103,12 +103,12 @@ def test_loop_left_with_jump():
 
 
 def test_loop_without_jump_hits_iteration_limit():
-    with pytest.raises(ValueError, match="[Ll]oop limit"):
+    with pytest.raises(ValueError, match=r"[Ll]oop limit"):
         nc_to_dataframe("LOOP\nX1\nENDLOOP", iteration_limit=10)
 
 
 def test_backward_jump_cycle_hits_iteration_limit():
-    with pytest.raises(ValueError, match="[Ll]oop limit"):
+    with pytest.raises(ValueError, match=r"[Ll]oop limit"):
         nc_to_dataframe("AGAIN: X1\nGOTOB AGAIN", iteration_limit=10)
 
 

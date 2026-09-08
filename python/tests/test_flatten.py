@@ -39,7 +39,9 @@ def test_arc_flattening_dataframe():
     assert ((radii - 50.0).abs() < 1e-9).all()
     # Chord sagitta stays within the tolerance.
     xs, ys = df["X"].to_list(), df["Y"].to_list()
-    for (x0, y0), (x1, y1) in zip(zip(xs, ys), zip(xs[1:], ys[1:])):
+    for (x0, y0), (x1, y1) in zip(
+        zip(xs, ys, strict=True), zip(xs[1:], ys[1:], strict=True), strict=False
+    ):
         mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
         if max(x0, x1) <= 100.0:  # arc portion
             sagitta = 50.0 - math.hypot(mx - 50.0, my)
@@ -131,7 +133,11 @@ def test_flattening_example_csvs_are_current():
 
 def test_viz_toolpath_arrays():
     np = pytest.importorskip("numpy")
-    from nc_gcode_interpreter.viz import FLATTENED_COLOR, PROGRAMMED_COLOR, toolpath_arrays
+    from nc_gcode_interpreter.viz import (
+        FLATTENED_COLOR,
+        PROGRAMMED_COLOR,
+        toolpath_arrays,
+    )
 
     df, _ = nc_to_dataframe(ARC_PROGRAM, flatten_tolerance=0.5)
     data, colors = toolpath_arrays(df, bead_width=4.0)

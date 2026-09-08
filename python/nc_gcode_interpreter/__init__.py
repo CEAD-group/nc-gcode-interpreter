@@ -1,14 +1,17 @@
-from typing import Protocol, Iterator
-import os
-import polars as pl
-from ._internal import nc_to_rows as _nc_to_rows
-from ._internal import nc_to_batches as _nc_to_batches
-from ._internal import NcError
-from ._internal import __doc__  # noqa: F401
 import json
+import os
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TypedDict, TypeVar, Any, Generic
-from collections.abc import Callable
+from typing import Any, Protocol, TypedDict
+
+import polars as pl
+
+from ._internal import (
+    NcError,
+    __doc__,  # noqa: F401
+)
+from ._internal import nc_to_batches as _nc_to_batches
+from ._internal import nc_to_rows as _nc_to_rows
 
 
 # Define TextFileLike Protocol
@@ -17,12 +20,12 @@ class TextFileLike(Protocol):
 
 
 __all__ = [
+    "NcError",
+    "dataframe_to_nc",
+    "nc_to_batches",
     "nc_to_dataframe",
     "nc_to_rows",
-    "nc_to_batches",
     "sanitize_dataframe",
-    "dataframe_to_nc",
-    "NcError",
 ]
 
 # Batch size nc_to_dataframe uses internally when draining the batch stream it
@@ -171,14 +174,11 @@ def nc_to_dataframe(
     return pl.concat(frames, how="diagonal").select(frames[-1].columns), state
 
 
-_T = TypeVar("_T")
-
-
-class _classproperty(Generic[_T]):
-    def __init__(self, fget: Callable[[Any], _T]) -> None:
+class _classproperty[T]:
+    def __init__(self, fget: Callable[[Any], T]) -> None:
         self.fget = fget
 
-    def __get__(self, instance: Any, owner: type[Any]) -> _T:
+    def __get__(self, instance: Any, owner: type[Any]) -> T:
         return self.fget(owner)
 
 
@@ -295,10 +295,16 @@ def sanitize_dataframe(
     # Canonical column order.
     order: list[str] = []
     for name in (
-        ["N"] + modal + non_modal + known_axes
-        + sorted(c for c in value_columns if c not in known_axes and c not in block_addresses)
-        + block_addresses
-        + ["T", "M", "non_returning_function_call", "comment"]
+        "N",
+        *modal,
+        *non_modal,
+        *known_axes,
+        *sorted(c for c in value_columns if c not in known_axes and c not in block_addresses),
+        *block_addresses,
+        "T",
+        "M",
+        "non_returning_function_call",
+        "comment",
     ):
         if name in df.columns and name not in order:
             order.append(name)

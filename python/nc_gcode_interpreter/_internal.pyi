@@ -1,4 +1,5 @@
-from typing import Any, Iterator, Optional, List, Dict, Tuple
+from collections.abc import Iterator
+from typing import Any
 
 # Type stubs for the compiled Rust extension `nc_gcode_interpreter._internal`.
 # mypy cannot introspect the pyo3 module, so the public entry points the Python
@@ -13,39 +14,38 @@ class NcError(ValueError):
     #: ``"unexpected_axis"``, ``"undefined_variable"``), for branching without
     #: matching the formatted message.
     kind: str
-    line: Optional[int]
-    column: Optional[int]
-    context: Optional[str]
-    line_text: Optional[str]
+    line: int | None
+    column: int | None
+    context: str | None
+    line_text: str | None
 
 def nc_to_rows(
     input: str,
-    initial_state: Optional[str] = None,
-    axis_identifiers: Optional[List[str]] = None,
-    extra_axes: Optional[List[str]] = None,
+    initial_state: str | None = None,
+    axis_identifiers: list[str] | None = None,
+    extra_axes: list[str] | None = None,
     iteration_limit: int = 10000,
     forward_fill: bool = True,
     include_variables: bool = False,
-    axis_index_map: Optional[Dict[str, int]] = None,
+    axis_index_map: dict[str, int] | None = None,
     allow_undefined_variables: bool = False,
     input_is_path: bool = False,
-    flatten_tolerance: Optional[float] = None,
-) -> Iterator[Tuple[Any, ...]]:
+    flatten_tolerance: float | None = None,
+) -> Iterator[tuple[Any, ...]]:
     """Interpret an NC program lazily into ``(line_no, row[, variables])`` tuples."""
-    ...
 
 def nc_to_batches(
     input: str,
     batch_size: int = 500_000,
-    initial_state: Optional[str] = None,
-    axis_identifiers: Optional[List[str]] = None,
-    extra_axes: Optional[List[str]] = None,
+    initial_state: str | None = None,
+    axis_identifiers: list[str] | None = None,
+    extra_axes: list[str] | None = None,
     iteration_limit: int = 10000,
     disable_forward_fill: bool = False,
-    axis_index_map: Optional[Dict[str, int]] = None,
+    axis_index_map: dict[str, int] | None = None,
     allow_undefined_variables: bool = False,
     input_is_path: bool = False,
-    flatten_tolerance: Optional[float] = None,
+    flatten_tolerance: float | None = None,
     include_line_numbers: bool = False,
     include_variables: bool = False,
 ) -> Any:
@@ -56,6 +56,5 @@ def nc_to_batches(
     - when ``include_variables`` is set - ``variable_events`` (an Arrow batch of
     ``row_idx`` / ``name_id`` / ``value``) and ``variable_names`` (list[str]).
     """
-    ...
 
-__all__ = ["nc_to_rows", "nc_to_batches"]
+__all__ = ["nc_to_batches", "nc_to_rows"]

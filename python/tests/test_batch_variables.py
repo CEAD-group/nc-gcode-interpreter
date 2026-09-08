@@ -9,7 +9,6 @@ variables round-trip into the returned state dict.
 """
 
 import polars as pl
-
 from nc_gcode_interpreter import nc_to_batches, nc_to_dataframe, nc_to_rows
 
 
@@ -28,7 +27,7 @@ def _batch_sequence(it) -> list[tuple[str, float]]:
     names = it.variable_names
     return [
         (names[name_id], value)
-        for name_id, value in zip(events["name_id"], events["value"])
+        for name_id, value in zip(events["name_id"], events["value"], strict=True)
     ]
 
 
@@ -114,7 +113,7 @@ def test_batch_variable_events_row_idx_aligns_with_output_rows():
     decoded = [
         (row_idx, names[name_id], value)
         for row_idx, name_id, value in zip(
-            events["row_idx"], events["name_id"], events["value"]
+            events["row_idx"], events["name_id"], events["value"], strict=True
         )
     ]
     assert decoded == [(0, "R1", 0.0), (1, "R1", 1.0)]
@@ -200,6 +199,7 @@ def test_line_numbers_and_variables_compose_on_the_batch_path():
             it.variable_events["row_idx"],
             it.variable_events["name_id"],
             it.variable_events["value"],
+            strict=True,
         )
     ]
     assert decoded == [(0, "R1", 0.0), (1, "R1", 1.0), (2, "R1", 2.0), (3, "R1", 3.0)]

@@ -6,13 +6,13 @@
 #
 # Run from the repository root or this directory:
 #   python ggroups/generate_g_commands.py
-from pathlib import Path
 import json
+from pathlib import Path
 
 json_file = Path(__file__).parent.parent / "python/nc_gcode_interpreter/ggroups.json"
 out_file = Path(__file__).parent.parent / "src/modal_groups.rs"
 
-with open(json_file, "r") as file:
+with open(json_file) as file:
     g_groups = json.load(file)
 
 modal = [g["short_name"] for g in g_groups if g["effectiveness"] == "modal"]
