@@ -23,7 +23,7 @@ use std::path::PathBuf;
 fn main() -> io::Result<()> {
     // Define and interpret the command-line arguments using `clap`
     let matches = Command::new("nc-gcode-interpreter")
-        .version("1.0")
+        .version(env!("NC_GCODE_INTERPRETER_VERSION"))
         .about("A G-code interpreter")
         .arg(
             Arg::new("input")

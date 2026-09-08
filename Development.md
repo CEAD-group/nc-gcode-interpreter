@@ -50,6 +50,13 @@ Any non-placeholder version in `Cargo.toml` is left alone, so the CI release
 path is unaffected. Without git (an unpacked sdist, say) the placeholder
 stands.
 
+A plain `cargo build` doesn't go through that shim, so `build.rs` derives the
+same version independently and exposes it as `NC_GCODE_INTERPRETER_VERSION`,
+which is what the CLI's `--version` reports. It applies the same rules: an
+already-stamped `Cargo.toml` version wins, and without git the placeholder
+stands. The CLI therefore shows cargo's semver spelling
+(`0.2.6-dev.1+ge5f2306`), not maturin's PEP 440 normalisation of it.
+
 ### Release profile
 
 `[profile.release]` currently sets no `strip`/`lto` overrides. `strip = true` was

@@ -16,6 +16,12 @@ released to PyPI.
   already writes the tag version into `Cargo.toml`, is untouched. Downstream
   consumers installing this package editable now get a real version to pin
   against and a signal that they are running a local edit (#65).
+- `nc-gcode-interpreter --version` now reports the actual build version. It was
+  a hard-coded `1.0` string literal that had never matched any release; a
+  `build.rs` now derives the same `git describe` version for plain `cargo`
+  builds (which don't go through the PEP 517 shim) and the CLI reads it, so a
+  dev build prints e.g. `0.2.6-dev.1+ge5f2306` and a release build prints the
+  tag.
 - Ruff's implicit default rule set widened in 0.16 and turned the lint job red
   on 64 findings in untouched code. Pin the rule selection in `pyproject.toml`
   and the ruff version in CI, so a linter upgrade adds rules only when asked,
