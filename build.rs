@@ -14,7 +14,12 @@ use std::process::Command;
 const PLACEHOLDER: &str = "0.0.0-dev";
 
 fn main() {
+    // Re-derive when the checkout moves: HEAD (branch switch), the index
+    // (commits, staging) and the tags. A bare unstaged edit won't retrigger
+    // the build script, so a stale `.dirty` suffix is possible; it clears on
+    // the next `cargo build` that recompiles anything.
     println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/index");
     println!("cargo:rerun-if-changed=.git/refs/tags");
 
     let cargo_version = env!("CARGO_PKG_VERSION");
