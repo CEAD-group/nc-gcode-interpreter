@@ -12,9 +12,10 @@ released to PyPI.
   on 64 findings in untouched code. Pin the rule selection in `pyproject.toml`
   and the ruff version in CI, so a linter upgrade adds rules only when asked,
   and fix the findings. Mostly mechanical (`X | None`, `list`/`dict` builtins,
-  import sorting, explicit `zip(strict=)`); `FLY002` is ignored because
-  collapsing a joined list of NC lines into one f-string literal makes the test
-  programs unreadable.
+  import sorting, explicit `zip(strict=)`). The rule set carries no `ignore`
+  list: the one rule that would have needed an exception, `FLY002`, is instead
+  satisfied by an `nc_lines(*blocks)` test helper, which keeps the NC test
+  programs one block per line with their explanatory comments intact.
 
 ## [v0.2.6] - 2026-07-09
 

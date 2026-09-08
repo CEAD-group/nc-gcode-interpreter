@@ -67,11 +67,7 @@ select = [
     "C4",                  # comprehensions
     "PIE",
     "RUF",
-]
-ignore = [
-    # Collapsing a joined list of NC lines into one f-string literal makes the
-    # test programs unreadable - the point of the list is one NC block per line.
-    "FLY002",
+    "FLY",
 ]
 
 [tool.mypy]
