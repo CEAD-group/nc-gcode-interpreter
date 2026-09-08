@@ -8,6 +8,7 @@ import pathlib
 import polars as pl
 import pytest
 from nc_gcode_interpreter import nc_to_dataframe, nc_to_rows
+from nc_source import nc_lines
 from polars.testing import assert_frame_equal
 
 
@@ -45,15 +46,13 @@ def test_stream_matches_batch(program):
 
 
 def test_line_numbers_follow_execution_order():
-    program = "\n".join(
-        [
-            "R1=0",          # line 1
-            "WHILE R1<2",    # line 2
-            "X=R1",          # line 3
-            "R1=R1+1",       # line 4
-            "ENDWHILE",      # line 5
-            "X9",            # line 6
-        ]
+    program = nc_lines(
+        "R1=0",          # line 1
+        "WHILE R1<2",    # line 2
+        "X=R1",          # line 3
+        "R1=R1+1",       # line 4
+        "ENDWHILE",      # line 5
+        "X9",            # line 6
     )
     rows = list(nc_to_rows(program))
     lines = [line for line, _row in rows]
@@ -109,16 +108,14 @@ def test_initial_state_rows_are_not_streamed():
 
 
 def test_include_variables_exposes_assignments():
-    program = "\n".join(
-        [
-            "DEF REAL Q=2.5",  # line 1: definition, no output cells
-            "R1=0",            # line 2: variable-only
-            "WHILE R1<2",      # line 3
-            "X=R1",            # line 4: output row, no variable change
-            "R1=R1+1",         # line 5: variable-only, twice
-            "ENDWHILE",        # line 6
-            "X=Q",             # line 7
-        ]
+    program = nc_lines(
+        "DEF REAL Q=2.5",  # line 1: definition, no output cells
+        "R1=0",            # line 2: variable-only
+        "WHILE R1<2",      # line 3
+        "X=R1",            # line 4: output row, no variable change
+        "R1=R1+1",         # line 5: variable-only, twice
+        "ENDWHILE",        # line 6
+        "X=Q",             # line 7
     )
     rows = list(nc_to_rows(program, include_variables=True))
     assert [(line, vars) for line, _row, vars in rows] == [
@@ -138,14 +135,12 @@ def test_include_variables_exposes_assignments():
 
 
 def test_include_variables_covers_def_multi_and_for_counter():
-    program = "\n".join(
-        [
-            "DEF REAL QA, QB[2]",           # bare defs initialize to 0
-            "DEF REAL QC[3]=SET(1,,3)",     # gap: QC[1] stays untouched
-            "FOR R7=1 TO 2",
-            "X=R7",
-            "ENDFOR",
-        ]
+    program = nc_lines(
+        "DEF REAL QA, QB[2]",           # bare defs initialize to 0
+        "DEF REAL QC[3]=SET(1,,3)",     # gap: QC[1] stays untouched
+        "FOR R7=1 TO 2",
+        "X=R7",
+        "ENDFOR",
     )
     rows = list(nc_to_rows(program, include_variables=True))
     variables = [(line, vars) for line, _row, vars in rows]
@@ -161,15 +156,13 @@ def test_include_variables_covers_def_multi_and_for_counter():
 
 
 def test_accumulated_variables_match_final_state():
-    program = "\n".join(
-        [
-            "DEF REAL Q=1",
-            "R1=0",
-            "WHILE R1<3",
-            "X=R1 Q=Q*2",
-            "R1=R1+1",
-            "ENDWHILE",
-        ]
+    program = nc_lines(
+        "DEF REAL Q=1",
+        "R1=0",
+        "WHILE R1<3",
+        "X=R1 Q=Q*2",
+        "R1=R1+1",
+        "ENDWHILE",
     )
     iterator = nc_to_rows(program, include_variables=True)
     accumulated = {}

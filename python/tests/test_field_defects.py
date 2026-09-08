@@ -14,7 +14,6 @@ import os
 import pytest
 from nc_gcode_interpreter import nc_to_dataframe
 
-
 # --- Defect 1: leading-underscore identifiers ------------------------------
 
 

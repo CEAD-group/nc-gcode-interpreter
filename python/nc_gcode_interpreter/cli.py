@@ -128,8 +128,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:
-        from .viz import view_toolpath
         import threejs_viewer  # noqa: F401  - fail here, before interpreting
+
+        from .viz import view_toolpath
     except ImportError:
         print(
             "nc-view needs the viz extra: pip install 'nc-gcode-interpreter[viz]'",

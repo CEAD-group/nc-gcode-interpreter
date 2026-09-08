@@ -9,8 +9,8 @@ variables round-trip into the returned state dict.
 """
 
 import polars as pl
-
 from nc_gcode_interpreter import nc_to_batches, nc_to_dataframe, nc_to_rows
+from nc_source import nc_lines
 
 
 def _stream_sequence(program: str) -> list[tuple[str, float]]:
@@ -28,18 +28,16 @@ def _batch_sequence(it) -> list[tuple[str, float]]:
     names = it.variable_names
     return [
         (names[name_id], value)
-        for name_id, value in zip(events["name_id"], events["value"])
+        for name_id, value in zip(events["name_id"], events["value"], strict=True)
     ]
 
 
 def test_batch_variable_events_match_stream_simple():
-    program = "\n".join(
-        [
-            "DEF REAL Q=2.5",  # variable-only
-            "R1=0",            # variable-only
-            "X=R1",            # output row, no change
-            "X=Q",             # output row, no change
-        ]
+    program = nc_lines(
+        "DEF REAL Q=2.5",  # variable-only
+        "R1=0",            # variable-only
+        "X=R1",            # output row, no change
+        "X=Q",             # output row, no change
     )
     it = nc_to_batches(program, include_variables=True)
     list(it)  # exhaust to populate variable_events / state
@@ -50,16 +48,14 @@ def test_batch_variable_events_match_stream_while_loop():
     # A WHILE loop where R1 changes once per iteration: the per-iteration
     # counter events must appear on the batch path exactly as they do on the
     # stream, in the same order.
-    program = "\n".join(
-        [
-            "DEF REAL Q=2.5",
-            "R1=0",
-            "WHILE R1<3",
-            "X=R1 Q=Q*2",  # output row that ALSO assigns a variable
-            "R1=R1+1",     # variable-only, per iteration
-            "ENDWHILE",
-            "X=Q",
-        ]
+    program = nc_lines(
+        "DEF REAL Q=2.5",
+        "R1=0",
+        "WHILE R1<3",
+        "X=R1 Q=Q*2",  # output row that ALSO assigns a variable
+        "R1=R1+1",     # variable-only, per iteration
+        "ENDWHILE",
+        "X=Q",
     )
     it = nc_to_batches(program, include_variables=True)
     list(it)
@@ -69,15 +65,13 @@ def test_batch_variable_events_match_stream_while_loop():
 def test_batch_variable_events_row_idx_reconstructs_symbol_table():
     # Replaying every event reconstructs the final symbol table (minus the
     # built-in TRUE/FALSE), mirroring the streaming accumulation invariant.
-    program = "\n".join(
-        [
-            "DEF REAL Q=1",
-            "R1=0",
-            "WHILE R1<3",
-            "X=R1 Q=Q*2",
-            "R1=R1+1",
-            "ENDWHILE",
-        ]
+    program = nc_lines(
+        "DEF REAL Q=1",
+        "R1=0",
+        "WHILE R1<3",
+        "X=R1 Q=Q*2",
+        "R1=R1+1",
+        "ENDWHILE",
     )
     it = nc_to_batches(program, include_variables=True)
     list(it)
@@ -99,13 +93,11 @@ def test_batch_variable_events_row_idx_reconstructs_symbol_table():
 def test_batch_variable_events_row_idx_aligns_with_output_rows():
     # A change on a variable-only block is attributed to the NEXT output row;
     # a change on an output row gets that row's own index.
-    program = "\n".join(
-        [
-            "R1=0",   # variable-only, before output row 0
-            "X=R1",   # output row 0
-            "R1=1",   # variable-only, before output row 1
-            "X=R1",   # output row 1
-        ]
+    program = nc_lines(
+        "R1=0",   # variable-only, before output row 0
+        "X=R1",   # output row 0
+        "R1=1",   # variable-only, before output row 1
+        "X=R1",   # output row 1
     )
     it = nc_to_batches(program, include_variables=True)
     list(it)
@@ -114,7 +106,7 @@ def test_batch_variable_events_row_idx_aligns_with_output_rows():
     decoded = [
         (row_idx, names[name_id], value)
         for row_idx, name_id, value in zip(
-            events["row_idx"], events["name_id"], events["value"]
+            events["row_idx"], events["name_id"], events["value"], strict=True
         )
     ]
     assert decoded == [(0, "R1", 0.0), (1, "R1", 1.0)]
@@ -136,14 +128,12 @@ def test_batch_variable_events_empty_when_no_assignments():
 
 
 def test_string_table_round_trips_through_state_dict():
-    program = "\n".join(
-        [
-            "DEF STRING[16] MSG",
-            'MSG="HELLO WORLD"',
-            "DEF STRING[8] TAG",
-            'TAG="ABC"',
-            "G1 X1",
-        ]
+    program = nc_lines(
+        "DEF STRING[16] MSG",
+        'MSG="HELLO WORLD"',
+        "DEF STRING[8] TAG",
+        'TAG="ABC"',
+        "G1 X1",
     )
     _df, state = nc_to_dataframe(program)
     assert state["string_table"] == {"MSG": "HELLO WORLD", "TAG": "ABC"}
@@ -169,15 +159,13 @@ def test_line_numbers_and_variables_compose_on_the_batch_path():
     # path and were merged independently; requesting both at once must give the
     # leading `line_no` column AND the sparse variable-event side-table, with
     # `row_idx` still aligned to the emitted (line_no-carrying) output rows.
-    program = "\n".join(
-        [
-            "R1=0",          # variable-only, before output row 0
-            "WHILE R1<3",
-            "X=R1",          # output row (loop body, source line 3)
-            "R1=R1+1",       # variable-only
-            "ENDWHILE",
-            "X9",            # output row, source line 6
-        ]
+    program = nc_lines(
+        "R1=0",          # variable-only, before output row 0
+        "WHILE R1<3",
+        "X=R1",          # output row (loop body, source line 3)
+        "R1=R1+1",       # variable-only
+        "ENDWHILE",
+        "X9",            # output row, source line 6
     )
     it = nc_to_batches(
         program,
@@ -200,6 +188,7 @@ def test_line_numbers_and_variables_compose_on_the_batch_path():
             it.variable_events["row_idx"],
             it.variable_events["name_id"],
             it.variable_events["value"],
+            strict=True,
         )
     ]
     assert decoded == [(0, "R1", 0.0), (1, "R1", 1.0), (2, "R1", 2.0), (3, "R1", 3.0)]

@@ -1,7 +1,8 @@
 import pathlib
-import pytest
-from nc_gcode_interpreter import nc_to_dataframe, dataframe_to_nc
+
 import polars as pl
+import pytest
+from nc_gcode_interpreter import dataframe_to_nc, nc_to_dataframe
 from polars.testing import assert_frame_equal
 
 

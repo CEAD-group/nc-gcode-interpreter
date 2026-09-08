@@ -3,6 +3,7 @@ IF ... GOTO, CASE ... OF ... DEFAULT (NC programming manual 4.1.5)."""
 
 import pytest
 from nc_gcode_interpreter import nc_to_dataframe
+from nc_source import nc_lines
 
 
 def test_gotof_skips_to_forward_label():
@@ -12,14 +13,12 @@ def test_gotof_skips_to_forward_label():
 
 def test_gotob_jumps_backward():
     """Manual 4.1.5.2 example 4: a conditional backward jump forms a loop."""
-    program = "\n".join(
-        [
-            "N40 R1=30 R2=10 R4=3",
-            "N41 LA1: X=R1",
-            "N42 R1=R1+R2 R4=R4-1",
-            "N43 IF R4>0 GOTOB LA1",
-            "N44 M30",
-        ]
+    program = nc_lines(
+        "N40 R1=30 R2=10 R4=3",
+        "N41 LA1: X=R1",
+        "N42 R1=R1+R2 R4=R4-1",
+        "N43 IF R4>0 GOTOB LA1",
+        "N44 M30",
     )
     df, _state = nc_to_dataframe(program)
     assert df["X"].drop_nulls().unique(maintain_order=True).to_list() == [30.0, 40.0, 50.0]
@@ -71,15 +70,13 @@ def test_jump_into_control_structure_raises():
 
 
 def test_jump_out_of_if_body():
-    program = "\n".join(
-        [
-            "R1=1",
-            "IF R1==1",
-            "GOTOF DONE",
-            "ENDIF",
-            "X999",
-            "DONE: X1",
-        ]
+    program = nc_lines(
+        "R1=1",
+        "IF R1==1",
+        "GOTOF DONE",
+        "ENDIF",
+        "X999",
+        "DONE: X1",
     )
     df, _state = nc_to_dataframe(program)
     assert df["X"].drop_nulls().to_list() == [1.0]
@@ -87,28 +84,26 @@ def test_jump_out_of_if_body():
 
 def test_loop_left_with_jump():
     """LOOP ... ENDLOOP is an endless loop left via a jump (manual 4.1.7.2)."""
-    program = "\n".join(
-        [
-            "R1=0",
-            "LOOP",
-            "X=R1",
-            "R1=R1+1",
-            "IF R1>=3 GOTOF DONE",
-            "ENDLOOP",
-            "DONE: M30",
-        ]
+    program = nc_lines(
+        "R1=0",
+        "LOOP",
+        "X=R1",
+        "R1=R1+1",
+        "IF R1>=3 GOTOF DONE",
+        "ENDLOOP",
+        "DONE: M30",
     )
     df, _state = nc_to_dataframe(program)
     assert df["X"].drop_nulls().unique(maintain_order=True).to_list() == [0.0, 1.0, 2.0]
 
 
 def test_loop_without_jump_hits_iteration_limit():
-    with pytest.raises(ValueError, match="[Ll]oop limit"):
+    with pytest.raises(ValueError, match=r"[Ll]oop limit"):
         nc_to_dataframe("LOOP\nX1\nENDLOOP", iteration_limit=10)
 
 
 def test_backward_jump_cycle_hits_iteration_limit():
-    with pytest.raises(ValueError, match="[Ll]oop limit"):
+    with pytest.raises(ValueError, match=r"[Ll]oop limit"):
         nc_to_dataframe("AGAIN: X1\nGOTOB AGAIN", iteration_limit=10)
 
 
@@ -125,15 +120,13 @@ def test_forward_jumps_do_not_count_against_iteration_limit():
 
 def test_multiple_conditional_jumps_in_one_block():
     """Several jump statements with conditions may share a block (4.1.5.2)."""
-    program = "\n".join(
-        [
-            "R1=2",
-            "IF R1==1 GOTOF ONE IF R1==2 GOTOF TWO",
-            "ONE: X1",
-            "GOTOF ENDE",
-            "TWO: X2",
-            "ENDE: M30",
-        ]
+    program = nc_lines(
+        "R1=2",
+        "IF R1==1 GOTOF ONE IF R1==2 GOTOF TWO",
+        "ONE: X1",
+        "GOTOF ENDE",
+        "TWO: X2",
+        "ENDE: M30",
     )
     df, _state = nc_to_dataframe(program)
     assert df["X"].drop_nulls().to_list() == [2.0, 2.0]
@@ -160,19 +153,17 @@ def test_m2_ends_program_but_finishes_its_block():
 
 
 def test_case_of_default():
-    program = "\n".join(
-        [
-            "DEF INT VAR1 = 4",
-            "DEF INT VAR2 = 6",
-            "DEF INT VAR3 = 3",
-            "N30 CASE(VAR1+VAR2-VAR3) OF 7 GOTOF LABEL_1 9 GOTOF LABEL_2 DEFAULT GOTOF LABEL_3",
-            "N40 LABEL_1: X1",
-            "N45 GOTOF ENDE",
-            "N50 LABEL_2: X2",
-            "N55 GOTOF ENDE",
-            "N60 LABEL_3: X3",
-            "N70 ENDE: M30",
-        ]
+    program = nc_lines(
+        "DEF INT VAR1 = 4",
+        "DEF INT VAR2 = 6",
+        "DEF INT VAR3 = 3",
+        "N30 CASE(VAR1+VAR2-VAR3) OF 7 GOTOF LABEL_1 9 GOTOF LABEL_2 DEFAULT GOTOF LABEL_3",
+        "N40 LABEL_1: X1",
+        "N45 GOTOF ENDE",
+        "N50 LABEL_2: X2",
+        "N55 GOTOF ENDE",
+        "N60 LABEL_3: X3",
+        "N70 ENDE: M30",
     )
     df, _state = nc_to_dataframe(program)
     assert df["X"].drop_nulls().to_list() == [1.0, 1.0, 1.0]

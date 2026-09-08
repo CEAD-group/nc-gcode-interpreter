@@ -25,7 +25,7 @@ def test_axis_word_typo_warns_but_keeps_call_semantics(capfd):
 
 
 def test_call_with_arguments_does_not_warn(capfd):
-    df, _state = nc_to_dataframe("SETAL(67037)\nX5")
+    _df, _state = nc_to_dataframe("SETAL(67037)\nX5")
     assert "Warning" not in capfd.readouterr().err
 
 

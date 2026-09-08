@@ -68,11 +68,11 @@ def test_block_addresses_appearing_in_a_later_batch():
 
 def test_extra_axes_and_ic_match_dataframe():
     program = "G1 X0 Y0 A0 B0 C0 ELX=100 F1000\nX1 ELX=101\nX2 E=IC(1)\nX3\n"
-    kwargs = dict(
-        extra_axes=["ELX"],
-        axis_index_map={"E": 4, "ELX": 5},
-        allow_undefined_variables=True,
-    )
+    kwargs = {
+        "extra_axes": ["ELX"],
+        "axis_index_map": {"E": 4, "ELX": 5},
+        "allow_undefined_variables": True,
+    }
     for batch_size in (1, 2, 3):
         assert_batches_match_dataframe(program, batch_size, **kwargs)
 

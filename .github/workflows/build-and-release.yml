@@ -35,7 +35,9 @@ jobs:
         with:
           python-version: 3.13
       - name: Install Python linter
-        run: pip install ruff
+        # Pinned: an unpinned ruff silently widens its rule set on upgrade and
+        # turns the job red on code nobody touched. Bump deliberately.
+        run: pip install ruff==0.16.6
       - name: Lint Python code with ruff
         run: ruff check .
 

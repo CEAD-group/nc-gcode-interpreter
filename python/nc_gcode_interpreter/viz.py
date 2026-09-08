@@ -84,7 +84,7 @@ def toolpath_arrays(
     bead_width: float | None = None,
     bead_height: float | None = None,
     default_feed: float = 1000.0,
-) -> "tuple[np.ndarray, np.ndarray | None]":
+) -> tuple[np.ndarray, np.ndarray | None]:
     """Convert an interpreter DataFrame to threejs-viewer toolpath arrays.
 
     Returns ``(data, colors)``: ``data`` is the ``(N, 6)`` float64

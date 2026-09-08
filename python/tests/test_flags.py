@@ -7,7 +7,7 @@ def test_undefined_variables(capsys):
     Test that undefined variables are handled correctly based on allow_undefined_variables setting.
     """
     # Test with allow_undefined_variables=False (default)
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         nc_to_dataframe("G1 X=AA")  # AA is undefined
     
     # Test with allow_undefined_variables=True
