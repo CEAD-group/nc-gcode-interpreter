@@ -20,12 +20,23 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 
-from maturin import *  # noqa: F401,F403  (re-export maturin's PEP 517 hooks)
 from maturin import build_editable as _maturin_build_editable
 from maturin import build_sdist as _maturin_build_sdist
 from maturin import build_wheel as _maturin_build_wheel
-from maturin import prepare_metadata_for_build_editable as _maturin_prepare_metadata_for_build_editable
-from maturin import prepare_metadata_for_build_wheel as _maturin_prepare_metadata_for_build_wheel
+
+# The hooks this module does not wrap are re-exported unchanged; the rest are
+# imported under an alias and overridden below.
+from maturin import (  # noqa: F401
+    get_requires_for_build_editable,
+    get_requires_for_build_sdist,
+    get_requires_for_build_wheel,
+)
+from maturin import (
+    prepare_metadata_for_build_editable as _maturin_prepare_metadata_for_build_editable,
+)
+from maturin import (
+    prepare_metadata_for_build_wheel as _maturin_prepare_metadata_for_build_wheel,
+)
 
 PLACEHOLDER = "0.0.0-dev"
 _VERSION_LINE = re.compile(r'^version = ".*"$', re.MULTILINE)
