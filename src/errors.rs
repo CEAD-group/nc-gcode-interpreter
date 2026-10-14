@@ -23,12 +23,15 @@ Details: {message}
     },
     #[error(
         r#"
-Parse error in array indexing on line {line_no}
+Parse error in array element read on line {line_no}
 ----------------------------------------
 Line: {preview}
 
-Details: Invalid array index '{variable}'.
-This error occurs when using a variable as an array index, but the variable is not defined.
+Details: Undefined array element '{variable}'.
+This error occurs when an array element or an indexed system variable is
+read before any value was assigned to it. Define it before use, for example
+in an initial state file, or set the `allow_undefined_variables` flag to
+true (this will initialize undefined variables to 0.0).
 "#
     )]
     UnknownVariable {

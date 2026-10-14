@@ -34,7 +34,10 @@
 //! * `BSPLINE` — the programmed positions are control points of a clamped
 //!   uniform B-spline; `PW` weights (rational), `SD` degree (default 3).
 //!   A constant `PL` only rescales the parameter and never changes the
-//!   curve shape, so its value is ignored.
+//!   curve shape, so its value is ignored. The control points are not on
+//!   the curve, so the samples are attributed to control-point blocks by
+//!   Greville abscissa: each block owns the stretch of the curve up to the
+//!   parameter where its control point has the most influence.
 //! * All splines start at the current position (the first point / control
 //!   point) and are modal until deselected by another motion command.
 //!
@@ -569,7 +572,8 @@ impl Flattener {
 
         // The buffer index of the last point-bearing block: for a B-spline,
         // only its final sample (the curve end == last control point) is a
-        // programmed position.
+        // programmed position; the runs of the other control-point blocks
+        // are generated samples throughout.
         let last_point_index = point_rows.iter().rev().find_map(|source| *source);
 
         let mut first_motion_pending = true;
@@ -584,7 +588,8 @@ impl Flattener {
                         // interpolating spline that means a degenerate
                         // (duplicate / single-point) spline: keep the block as
                         // a plain move to its programmed point. A B-spline
-                        // control point is not on the curve, so its block
+                        // control point is not on the curve, so when a coarse
+                        // tolerance leaves no sample in its stretch the block
                         // keeps only its auxiliary cells (coordinates come
                         // from the samples attributed to later blocks).
                         let mut cells = CellMap::default();
@@ -721,8 +726,9 @@ fn deviation(p: &[f64], a: &[f64], b: &[f64], metric: &[usize]) -> f64 {
 }
 
 /// Recursively subdivide `[t0, t1]` until the curve stays within `tol` of
-/// each chord, probing at 1/4, 1/2 and 3/4 of every candidate span. Appends
-/// the accepted samples (excluding the span start) to `out`.
+/// each chord, probing at 1/4, 1/2 and 3/4 of every candidate span. Feeds
+/// the accepted samples (excluding the span start) to `sink` as
+/// `(parameter, point)` pairs in curve order.
 #[allow(clippy::too_many_arguments)]
 fn adaptive_flatten(
     eval: &dyn Fn(f64) -> Vec<f64>,
@@ -733,7 +739,7 @@ fn adaptive_flatten(
     tol: f64,
     metric: &[usize],
     depth: u32,
-    out: &mut Vec<Vec<f64>>,
+    sink: &mut dyn FnMut(f64, &[f64]),
 ) {
     let tm = 0.5 * (t0 + t1);
     let pm = eval(tm);
@@ -741,10 +747,10 @@ fn adaptive_flatten(
     let ok = depth >= MAX_SUBDIV_DEPTH
         || (within(&pm) && within(&eval(t0 + 0.25 * (t1 - t0))) && within(&eval(t0 + 0.75 * (t1 - t0))));
     if ok {
-        out.push(p1.to_vec());
+        sink(t1, p1);
     } else {
-        adaptive_flatten(eval, t0, p0, tm, &pm, tol, metric, depth + 1, out);
-        adaptive_flatten(eval, tm, &pm, t1, p1, tol, metric, depth + 1, out);
+        adaptive_flatten(eval, t0, p0, tm, &pm, tol, metric, depth + 1, sink);
+        adaptive_flatten(eval, tm, &pm, t1, p1, tol, metric, depth + 1, sink);
     }
 }
 
@@ -851,7 +857,7 @@ fn interpolating_spline_runs(
                 tol,
                 metric,
                 0,
-                &mut run,
+                &mut |_, p| run.push(p.to_vec()),
             );
             runs.push(run);
         }
@@ -939,48 +945,60 @@ fn natural_cubic_slopes(ts: &[f64], ys: &[f64]) -> Vec<f64> {
         .collect()
 }
 
-/// Flatten a clamped uniform (rational) B-spline whose control points are
-/// `points` with weights `weights`. Returns one run of samples per control
-/// point after the first (span j is attributed to control point
-/// `min(j + degree, n - 1)`, the last point whose block influences it), so
-/// every source block owns a contiguous stretch of the curve.
-fn bspline_runs(
-    points: &[Vec<f64>],
-    weights: &[f64],
-    degree: usize,
-    metric: &[usize],
-    tol: f64,
-) -> Option<Vec<Vec<Vec<f64>>>> {
-    let n = points.len();
-    let p = degree.min(n - 1).max(1);
-    let channels = points[0].len();
+/// A clamped uniform (rational) B-spline: the effective degree, its knot
+/// vector on `[0, spans]` and the control points in homogeneous
+/// coordinates `(channel * w, ..., w)`.
+struct BSpline {
+    /// The programmed degree, capped by the control point count: `n`
+    /// control points support at most degree `n - 1`.
+    p: usize,
+    spans: usize,
+    knots: Vec<f64>,
+    ctrl: Vec<Vec<f64>>,
+    channels: usize,
+}
 
-    // Clamped uniform knot vector on [0, n - p].
-    let spans = n - p;
-    let mut knots = Vec::with_capacity(n + p + 1);
-    knots.extend(std::iter::repeat_n(0.0, p + 1));
-    for i in 1..spans {
-        knots.push(i as f64);
+impl BSpline {
+    fn new(points: &[Vec<f64>], weights: &[f64], degree: usize) -> Self {
+        let n = points.len();
+        let p = degree.min(n - 1).max(1);
+        let spans = n - p;
+        let mut knots = Vec::with_capacity(n + p + 1);
+        knots.extend(std::iter::repeat_n(0.0, p + 1));
+        for i in 1..spans {
+            knots.push(i as f64);
+        }
+        knots.extend(std::iter::repeat_n(spans as f64, p + 1));
+        let ctrl = points
+            .iter()
+            .zip(weights)
+            .map(|(pt, &w)| {
+                let mut h: Vec<f64> = pt.iter().map(|v| v * w).collect();
+                h.push(w);
+                h
+            })
+            .collect();
+        BSpline {
+            p,
+            spans,
+            knots,
+            ctrl,
+            channels: points[0].len(),
+        }
     }
-    knots.extend(std::iter::repeat_n(spans as f64, p + 1));
 
-    // Homogeneous control points (channel * w, ..., w).
-    let ctrl: Vec<Vec<f64>> = points
-        .iter()
-        .zip(weights)
-        .map(|(pt, &w)| {
-            let mut h: Vec<f64> = pt.iter().map(|v| v * w).collect();
-            h.push(w);
-            h
-        })
-        .collect();
-
-    let eval = move |t: f64| -> Vec<f64> {
-        let t = t.clamp(0.0, spans as f64);
+    /// The curve point at parameter `t` (de Boor on the homogeneous
+    /// coordinates).
+    fn eval(&self, t: f64) -> Vec<f64> {
+        let (p, channels, knots) = (self.p, self.channels, &self.knots);
+        let t = t.clamp(0.0, self.spans as f64);
         // Knot span index k with knots[k] <= t < knots[k+1].
-        let k = if t >= spans as f64 { n - 1 } else { p + t as usize };
-        // de Boor on the homogeneous coordinates.
-        let mut d: Vec<Vec<f64>> = (0..=p).map(|j| ctrl[j + k - p].clone()).collect();
+        let k = if t >= self.spans as f64 {
+            self.ctrl.len() - 1
+        } else {
+            p + t as usize
+        };
+        let mut d: Vec<Vec<f64>> = (0..=p).map(|j| self.ctrl[j + k - p].clone()).collect();
         for r in 1..=p {
             for j in (r..=p).rev() {
                 let i = j + k - p;
@@ -1001,24 +1019,63 @@ fn bspline_runs(
         }
         let w = d[p][channels];
         d[p][..channels].iter().map(|v| v / w).collect()
-    };
-
-    // Flatten span by span; a span's samples belong to the last control
-    // point influencing it.
-    let mut runs: Vec<Vec<Vec<f64>>> = vec![Vec::new(); n - 1];
-    let mut prev_t = 0.0;
-    let mut prev_p = eval(0.0);
-    for j in 0..spans {
-        let t1 = (j + 1) as f64;
-        let p1 = eval(t1);
-        let owner = (j + p).min(n - 1) - 1;
-        adaptive_flatten(&eval, prev_t, &prev_p, t1, &p1, tol, metric, 0, &mut runs[owner]);
-        prev_t = t1;
-        prev_p = p1;
     }
-    // Guarantee the curve endpoint is owned by the last block.
-    if runs[n - 2].is_empty() {
-        runs[n - 2].push(points[n - 1].clone());
+
+    /// Greville abscissa of control point `i`, the mean of the `p` knots
+    /// after knot `i`: the parameter where that control point has the most
+    /// influence on the curve. Strictly increasing in `i` for this knot
+    /// vector, from 0 (first point) to `spans` (last point).
+    fn greville(&self, i: usize) -> f64 {
+        self.knots[i + 1..=i + self.p].iter().sum::<f64>() / self.p as f64
+    }
+
+    /// Adaptively flatten the whole curve, knot span by knot span: the
+    /// accepted `(parameter, point)` samples in curve order, start point
+    /// excluded. The last sample is the curve end, the last control point.
+    fn samples(&self, metric: &[usize], tol: f64) -> Vec<(f64, Vec<f64>)> {
+        let eval = |t: f64| self.eval(t);
+        let mut out = Vec::new();
+        let mut prev_t = 0.0;
+        let mut prev_p = self.eval(0.0);
+        for j in 0..self.spans {
+            let t1 = (j + 1) as f64;
+            let p1 = self.eval(t1);
+            adaptive_flatten(&eval, prev_t, &prev_p, t1, &p1, tol, metric, 0, &mut |t, p| {
+                out.push((t, p.to_vec()))
+            });
+            prev_t = t1;
+            prev_p = p1;
+        }
+        out
+    }
+}
+
+/// Flatten a clamped uniform (rational) B-spline whose control points are
+/// `points` with weights `weights`. Returns one run of samples per control
+/// point after the first. The runs concatenate to the whole-curve sampling:
+/// a sample at parameter `u` belongs to the first control point `i >= 1`
+/// whose Greville abscissa is `>= u`, the last control point taking the
+/// remainder. Between Greville abscissae a control point is the dominant
+/// one, and for degree 1 the rule reduces to the polyline segment ending at
+/// each programmed point, matching how interpolating splines attribute.
+fn bspline_runs(
+    points: &[Vec<f64>],
+    weights: &[f64],
+    degree: usize,
+    metric: &[usize],
+    tol: f64,
+) -> Option<Vec<Vec<Vec<f64>>>> {
+    let curve = BSpline::new(points, weights, degree);
+    let last = points.len() - 1;
+    let mut runs: Vec<Vec<Vec<f64>>> = vec![Vec::new(); last];
+    let mut owner = 1;
+    for (t, point) in curve.samples(metric, tol) {
+        // Greville abscissae increase with the index, so the owner only ever
+        // advances along the curve.
+        while owner < last && curve.greville(owner) < t {
+            owner += 1;
+        }
+        runs[owner - 1].push(point);
     }
     Some(runs)
 }
@@ -1713,6 +1770,110 @@ mod tests {
             .filter_map(|r| cell_float(r, "Y"))
             .fold(f64::MIN, f64::max);
         assert!((apex - 5.0).abs() < 0.01, "quadratic apex should be ~5, got {apex}");
+    }
+
+    /// The samples of a flattened B-spline track the control-point lines
+    /// (issue #62): each block owns a contiguous stretch of the curve, in
+    /// program order, and only the curve end is a programmed position.
+    #[test]
+    fn bspline_samples_track_control_point_lines() {
+        let marked = |r: &Row| r.cells.get(FLATTENED_COLUMN).is_some();
+        let mut fl = flattener(0.5);
+        let rows = vec![
+            row(1, &[("gg01_motion", s("G1")), ("X", f(0.0)), ("Y", f(0.0))]),
+            row(2, &[("gg01_motion", s("BSPLINE"))]),
+            row(3, &[("X", f(10.0)), ("Y", f(10.0))]),
+            row(4, &[("X", f(20.0)), ("Y", f(0.0)), ("F", f(500.0))]),
+            row(5, &[("X", f(30.0)), ("Y", f(10.0))]),
+            row(6, &[("gg01_motion", s("G1")), ("X", f(40.0)), ("Y", f(0.0))]),
+        ];
+        let out = run(&mut fl, rows);
+        let spline_rows: Vec<&Row> = out.iter().filter(|r| (3..=5).contains(&r.line_no)).collect();
+        // No aux-only placeholder rows: every control-point block got samples.
+        assert!(spline_rows.iter().all(|r| r.cells.get("X").is_some()));
+        let lines: Vec<usize> = spline_rows.iter().map(|r| r.line_no).collect();
+        let mut owners = lines.clone();
+        owners.dedup();
+        assert_eq!(
+            owners,
+            vec![3, 4, 5],
+            "samples must walk through the control-point lines: {lines:?}"
+        );
+        let unmarked: Vec<(usize, (f64, f64))> = spline_rows
+            .iter()
+            .filter(|r| !marked(r))
+            .map(|r| (r.line_no, xy(r)))
+            .collect();
+        assert_eq!(
+            unmarked,
+            vec![(5, (30.0, 10.0))],
+            "only the curve end is a programmed position"
+        );
+        // Auxiliary cells ride on the first sample of their own block, like
+        // for an interpolating spline: the motion rewrite on the first block,
+        // the feed on the block that programmed it.
+        let first_of = |line: usize| spline_rows.iter().find(|r| r.line_no == line).unwrap();
+        assert!(matches!(first_of(3).cells.get("gg01_motion"), Some(Value::Str(m)) if m == "G1"));
+        assert_eq!(cell_float(first_of(4), "F"), Some(500.0));
+        assert_eq!(spline_rows.iter().filter(|r| r.cells.get("F").is_some()).count(), 1);
+    }
+
+    /// Splitting the B-spline samples into per-control-point runs must not
+    /// change the sampled geometry: the runs concatenate to the whole-curve
+    /// sampling, sample for sample, and every sample lies in its owner's
+    /// Greville interval. Covers degree 1 to 3, weights and fewer control
+    /// points than degree + 1.
+    #[test]
+    fn bspline_runs_partition_whole_curve_sampling() {
+        let zigzag = |n: usize| -> Vec<Vec<f64>> {
+            (0..n)
+                .map(|i| vec![10.0 * i as f64, if i % 2 == 0 { 0.0 } else { 20.0 }])
+                .collect()
+        };
+        let cases: Vec<(Vec<Vec<f64>>, Vec<f64>, usize)> = vec![
+            (zigzag(2), vec![1.0; 2], 3),
+            (zigzag(3), vec![1.0; 3], 3),
+            (zigzag(4), vec![1.0; 4], 3),
+            (zigzag(6), vec![1.0; 6], 3),
+            (zigzag(6), vec![1.0, 2.0, 0.5, 3.0, 1.0, 1.0], 3),
+            (zigzag(5), vec![1.0; 5], 2),
+            (zigzag(5), vec![1.0; 5], 1),
+        ];
+        let tol = 0.01;
+        let close = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9);
+        for (points, weights, degree) in cases {
+            let n = points.len();
+            let label = format!("n={n} degree={degree} weights={weights:?}");
+            let curve = BSpline::new(&points, &weights, degree);
+            let samples = curve.samples(&[0, 1], tol);
+            let runs = bspline_runs(&points, &weights, degree, &[0, 1], tol).unwrap();
+            assert_eq!(runs.len(), n - 1, "{label}");
+            assert!(runs.iter().all(|r| !r.is_empty()), "{label}: empty run");
+            let joined: Vec<&Vec<f64>> = runs.iter().flatten().collect();
+            let whole: Vec<&Vec<f64>> = samples.iter().map(|(_, p)| p).collect();
+            assert_eq!(joined, whole, "{label}: runs must partition the samples in order");
+            assert!(close(runs[n - 2].last().unwrap(), &points[n - 1]), "{label}: curve end");
+            let mut si = 0;
+            for (ri, run) in runs.iter().enumerate() {
+                let owner = ri + 1;
+                if degree == 1 {
+                    // The control polygon: every run ends on its own point.
+                    assert!(close(run.last().unwrap(), &points[owner]), "{label}: run {ri}");
+                }
+                for _ in run {
+                    let t = samples[si].0;
+                    assert!(
+                        owner == 1 || t > curve.greville(owner - 1),
+                        "{label}: t={t} in run {ri}"
+                    );
+                    assert!(
+                        owner == n - 1 || t <= curve.greville(owner),
+                        "{label}: t={t} in run {ri}"
+                    );
+                    si += 1;
+                }
+            }
+        }
     }
 
     /// Extra channels (here E) ride along with the spline samples.

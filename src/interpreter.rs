@@ -234,16 +234,12 @@ fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Re
 
     // Stage-1 fast path: structure-free programs (all CAM output) are
     // interpreted line by line - trivial lines through the byte decoder,
-    // the rest through per-line pest parses. NC_STAGE1=0 disables it.
+    // the rest through one sparse pest parse. NC_STAGE1=0 disables it.
     if !shape.has_block_structures && crate::line_driver::stage1_enabled() {
-        let mut padded_lines = Vec::new();
-        // None: the line driver declined (padding budget); fall through to
-        // the whole-file parse below.
-        match crate::line_driver::interpret_lines(input, &mut padded_lines, output, state)? {
-            Some(BlockFlow::Continue) | Some(BlockFlow::EndProgram) => return Ok(()),
-            Some(BlockFlow::Jump(request)) => return Err(request.into_not_found_error(state)),
-            None => {}
-        }
+        return match crate::line_driver::interpret_lines(input, output, state)? {
+            BlockFlow::Continue | BlockFlow::EndProgram => Ok(()),
+            BlockFlow::Jump(request) => Err(request.into_not_found_error(state)),
+        };
     }
 
     let file = NCParser::parse(Rule::file, input)
@@ -293,9 +289,18 @@ pub(crate) fn describe_parse_error(error: &pest::error::Error<Rule>) -> String {
     use pest::error::ErrorVariant;
     match &error.variant {
         ErrorVariant::ParsingError { positives, .. } if !positives.is_empty() => {
+            if let Some(message) = describe_trailing_text(error, positives) {
+                return message;
+            }
             let mut expected: Vec<&'static str> = Vec::new();
-            for rule in positives {
-                let description = describe_rule(*rule);
+            // concat_operand wraps `string_value | expression`; list its parts
+            // so the message names what may actually appear there.
+            let rules = positives.iter().flat_map(|rule| match rule {
+                Rule::concat_operand => vec![Rule::expression, Rule::string_value],
+                other => vec![*other],
+            });
+            for rule in rules {
+                let description = describe_rule(rule);
                 if !expected.contains(&description) {
                     expected.push(description);
                 }
@@ -304,6 +309,37 @@ pub(crate) fn describe_parse_error(error: &pest::error::Error<Rule>) -> String {
         }
         _ => format!("{}", error),
     }
+}
+
+/// A block parsed completely but more text follows on the same line, where
+/// only a comment or the line end is allowed. In real programs this is a
+/// second statement glued onto the first (two DEFs on one line, #58); naming
+/// the trailing text makes that visible, where "expected the end of the
+/// program" did not.
+fn describe_trailing_text(error: &pest::error::Error<Rule>, positives: &[Rule]) -> Option<String> {
+    let only_block_terminators = positives
+        .iter()
+        .all(|rule| matches!(rule, Rule::EOI | Rule::comment | Rule::newline));
+    if !only_block_terminators {
+        return None;
+    }
+    let column = match error.line_col {
+        pest::error::LineColLocation::Pos((_, col)) | pest::error::LineColLocation::Span((_, col), _) => col,
+    };
+    let rest: String = error.line().chars().skip(column.saturating_sub(1)).collect();
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    let shown: String = rest.chars().take(40).collect();
+    let ellipsis = if shown.chars().count() < rest.chars().count() {
+        "..."
+    } else {
+        ""
+    };
+    Some(format!(
+        "unexpected text '{shown}{ellipsis}' after a complete block: only a comment (;...) or the end of the line may follow here. If this is a second statement, put it on its own line"
+    ))
 }
 
 fn describe_rule(rule: Rule) -> &'static str {
@@ -1077,6 +1113,102 @@ mod tests {
         let s = string_state("DEF STRING[8] STR = \" X\"\nR9 = INDEX(STR, \" \")\nR10 = STRLEN(STR)\n");
         assert_eq!(s.symbol_table["R9"], 0.0);
         assert_eq!(s.symbol_table["R10"], 2.0);
+    }
+
+    /// MATCH searches for a string in a string (manual 4.1.4.6): 0-based
+    /// position of the first occurrence, -1 when absent (also when the search
+    /// string is longer than the string searched).
+    #[test]
+    fn match_finds_a_substring_or_returns_minus_one() {
+        let s =
+            string_state("R1 = MATCH(\"XXAB\", \"AB\")\nR2 = MATCH(\"XXAB\", \"Q\")\nR3 = MATCH(\"AB\", \"ABC\")\n");
+        assert_eq!(s.symbol_table["R1"], 2.0);
+        assert_eq!(s.symbol_table["R2"], -1.0);
+        assert_eq!(s.symbol_table["R3"], -1.0);
+    }
+
+    /// MINDEX takes a list of characters and returns the position of the
+    /// first character of the string that is in the list; the values are the
+    /// manual's own example (4.1.4.6).
+    #[test]
+    fn mindex_returns_the_first_character_from_the_list() {
+        let s = string_state(
+            "DEF STRING[30] INP = \"/_N_MPF_DIR/_N_EXECUTE_MPF\"\nR1 = MINDEX(INP, \"M,N,O,P\")\nR2 = MINDEX(INP, \"QWZ\")\n",
+        );
+        assert_eq!(s.symbol_table["R1"], 2.0);
+        assert_eq!(s.symbol_table["R2"], -1.0);
+    }
+
+    /// `<<` with no left operand is the implicit conversion to STRING (manual
+    /// 4.1.4.1); it and full concatenations are accepted in argument position
+    /// (#64).
+    #[test]
+    fn concat_prefix_form_is_accepted_in_function_arguments() {
+        let s = string_state(
+            "DEF STRING[8] EXP = \"AB\"\nDEF STRING[8] STR\nR1 = MATCH(\"XXAB\", <<EXP)\nR2 = STRLEN(\"A\" << \"BC\")\nSTR = <<5\n",
+        );
+        assert_eq!(s.symbol_table["R1"], 2.0);
+        assert_eq!(s.symbol_table["R2"], 3.0);
+        assert_eq!(s.string_table["STR"], "5");
+    }
+
+    /// Regression (#78): every function argument is parsed once. Trying a
+    /// `<<` chain before a plain expression, and the argument list re-parsing
+    /// its last element, made nested calls cost 4^n; this 24-level call would
+    /// not finish. It must evaluate instantly.
+    #[test]
+    fn deeply_nested_function_calls_parse_in_linear_time() {
+        let program = format!("R1 = {}0{}\n", "SIN(".repeat(24), ")".repeat(24));
+        let s = string_state(&program);
+        assert_eq!(s.symbol_table["R1"], 0.0);
+    }
+
+    /// There is no machine-data model: reading an unknown `$`-variable in a
+    /// string argument errors with the variable name and the line instead of
+    /// silently becoming an empty string.
+    #[test]
+    fn unknown_system_variable_in_string_argument_names_variable_and_line() {
+        let err = string_err("DEF STRING[8] EXP = \"AB\"\nR1 = MATCH($MN_AXCONF_MACHAX_NAME_TAB[0], <<EXP)\n");
+        assert!(err.contains("$MN_AXCONF_MACHAX_NAME_TAB[0]"), "got: {err}");
+        assert!(err.contains("line 2"), "got: {err}");
+    }
+
+    /// A string argument to a numeric function is a type error, not a
+    /// silently dropped operand.
+    #[test]
+    fn string_argument_to_numeric_function_is_a_type_error() {
+        let err = string_err("R1 = SIN(\"abc\")\n");
+        assert!(err.contains("expected a number"), "got: {err}");
+    }
+
+    /// Two statements glued on one line (#58) are rejected with the column
+    /// where the second one starts and its text, on both the line and the
+    /// whole-file parse paths.
+    #[test]
+    fn glued_statements_report_where_the_second_one_starts() {
+        let line = "DEF REAL POSE[6] = SET(0,-20,-110,0,0,0)DEF INT COUNT = 8";
+        let expected_column = line.find(")DEF").expect("fixture") + 2;
+        for program in [
+            format!("G1 X1\n{line}\nG1 X2\n"),
+            format!("G1 X1\n{line}\nIF COUNT == 8\nG1 X2\nENDIF\n"),
+        ] {
+            let err = nc_to_table(&program, None, None, None, 10000, false, None, false, None).unwrap_err();
+            let ParsingError::ParsingContext {
+                line_no,
+                column,
+                message,
+                ..
+            } = &err
+            else {
+                panic!("expected a parse error, got {err}");
+            };
+            assert_eq!((*line_no, *column), (2, Some(expected_column)));
+            assert!(
+                message.contains("unexpected text 'DEF INT COUNT = 8'"),
+                "got: {message}"
+            );
+            assert!(message.contains("own line"), "got: {message}");
+        }
     }
 
     #[test]
