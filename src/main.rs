@@ -22,6 +22,9 @@ mod types;
 mod ast;
 #[allow(dead_code)]
 mod decode_ast;
+mod drive;
+#[allow(dead_code)]
+mod exec;
 #[allow(dead_code)]
 mod lower;
 

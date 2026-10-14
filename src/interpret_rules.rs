@@ -30,12 +30,12 @@ pub enum BlockFlow {
 #[derive(Debug, Clone)]
 pub struct JumpRequest {
     /// Canonical target key, comparable against `scan_jump_targets` keys.
-    key: String,
+    pub(crate) key: String,
     /// The destination as written in the program, for error messages.
-    display: String,
-    direction: JumpDirection,
-    line_no: usize,
-    preview: String,
+    pub(crate) display: String,
+    pub(crate) direction: JumpDirection,
+    pub(crate) line_no: usize,
+    pub(crate) preview: String,
 }
 
 impl JumpRequest {
@@ -111,7 +111,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JumpDirection {
+pub(crate) enum JumpDirection {
     /// GOTOB: toward the beginning of the program.
     Backward,
     /// GOTOF: toward the end of the program.
@@ -778,7 +778,7 @@ fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (&'static
 /// of the case used in the program (`x=10` must hit the same axis, column and
 /// translation as `X=10`; the bare word form `X10` is uppercase-only in the
 /// grammar).
-fn normalize_reserved_case(key: String, state: &State) -> String {
+pub(crate) fn normalize_reserved_case(key: String, state: &State) -> String {
     if state.is_axis(&key) || state.is_block_address(&key) {
         key.to_uppercase()
     } else {
@@ -1132,7 +1132,7 @@ fn evaluate_string(pair: Pair<Rule>, state: &mut State) -> Result<String, Parsin
 /// Render a number as text for the `<<` operator (manual 4.1.4.1): integers in
 /// plain form, reals with up to 10 decimal places and trailing zeros trimmed.
 /// (This differs from SPRINT `%F`, which forces exactly six decimals.)
-fn format_nc_concat_number(n: f64) -> String {
+pub(crate) fn format_nc_concat_number(n: f64) -> String {
     if n.is_finite() && n.fract() == 0.0 && n.abs() < 9.007_199_254_740_992e15 {
         format!("{}", n as i64)
     } else {
@@ -1144,7 +1144,7 @@ fn format_nc_concat_number(n: f64) -> String {
 /// Parse a string as a number the way NUMBER/ISNUMBER do. SINUMERIK writes the
 /// exponent with the marker `EX` (manual 4.1.4.2, e.g. `1234.9876EX-7`); Rust's
 /// float parser wants `E`.
-fn parse_nc_number(s: &str) -> Option<f64> {
+pub(crate) fn parse_nc_number(s: &str) -> Option<f64> {
     let t = s.trim();
     if t.is_empty() {
         return None;

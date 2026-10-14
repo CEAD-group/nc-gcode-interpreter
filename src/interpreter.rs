@@ -225,6 +225,11 @@ pub fn nc_to_batch_stream_with_line_numbers(
 
 /// Interpret a file, pushing rows into `output`.
 fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
+    // Experimental statement-AST path; it sets the input and scans the structure itself.
+    if std::env::var("NC_EXEC").is_ok_and(|v| v == "ast") {
+        return crate::drive::interpret_ast(input, state, output);
+    }
+
     // Store input for error messages
     state.set_input(input);
 

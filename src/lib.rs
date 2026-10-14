@@ -20,6 +20,9 @@ mod structure_scan;
 mod ast;
 #[allow(dead_code)]
 mod decode_ast;
+mod drive;
+#[allow(dead_code)]
+mod exec;
 #[allow(dead_code)]
 mod lower;
 
