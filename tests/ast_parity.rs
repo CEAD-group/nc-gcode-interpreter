@@ -94,6 +94,8 @@ fn sorted<V: Clone>(map: impl IntoIterator<Item = (String, V)>) -> Vec<(String, 
 struct Failure {
     kind: String,
     line: Option<usize>,
+    column: Option<usize>,
+    context: Option<String>,
     /// The Display text; `None` for parse errors, which differ per entry rule.
     message: Option<String>,
 }
@@ -140,14 +142,23 @@ fn mask_suggestion(message: &str) -> String {
     }
 }
 
-fn failure_of(error: &impl std::fmt::Debug, display: String, line: Option<usize>, context: Option<String>) -> Failure {
-    let debug = format!("{error:?}");
+/// `debug` and `display` are the error's Debug and Display text, the rest
+/// its `location()` (the error type is not exported, so callers unpack it).
+fn failure_of(
+    debug: &str,
+    display: &str,
+    line: Option<usize>,
+    column: Option<usize>,
+    context: Option<String>,
+) -> Failure {
     let kind: String = debug.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
-    let parse = kind == "ParsingContext" && context.is_some_and(|context| context.ends_with("parsing"));
+    let parse = kind == "ParsingContext" && context.as_deref().is_some_and(|context| context.ends_with("parsing"));
     Failure {
         kind: if parse { "parse error".to_string() } else { kind },
         line,
-        message: (!parse).then(|| mask_suggestion(&display)),
+        column,
+        context,
+        message: (!parse).then(|| mask_suggestion(display)),
     }
 }
 
@@ -214,9 +225,10 @@ fn run_both_apis(program: &str, options: &Options) -> Outcome {
         (Err(error), (Err(streamed), _)) => {
             let location = error.location();
             let failure = failure_of(
-                &error,
-                error.to_string(),
+                &format!("{error:?}"),
+                &error.to_string(),
                 location.as_ref().map(|l| l.line),
+                location.as_ref().and_then(|l| l.column),
                 location.and_then(|l| l.context),
             );
             assert_eq!(
@@ -978,6 +990,20 @@ fn parse_errors_at_known_lines() {
     assert_fails_at(&parity("X1\nM30\nX=\n"), "parse error", 3);
     // A parse error wins over an earlier runtime error.
     assert_fails_at(&parity("X=UNDEFINED\nX=\n"), "parse error", 2);
+    // The context names the up-front parse as the default path does for the program's shape.
+    let glued = "DEF REAL POSE[6] = SET(0,-20,-110,0,0,0)DEF INT COUNT = 8";
+    for (program, context) in [
+        (format!("G1 X1\n{glued}\nG1 X2\n"), "line parsing"),
+        (
+            format!("G1 X1\n{glued}\nIF COUNT == 8\nG1 X2\nENDIF\n"),
+            "initial file parsing",
+        ),
+    ] {
+        let outcome = parity(&program);
+        assert_fails_at(&outcome, "parse error", 2);
+        assert_eq!(outcome.failure().column, Some(41), "{outcome:?}");
+        assert_eq!(outcome.failure().context.as_deref(), Some(context), "{outcome:?}");
+    }
     assert_fails_at(
         &parity("R1=0\nWHILE R1<2\nR1=R1+1\nENDWHILE\nIF 1\nX=(\nENDIF\n"),
         "parse error",

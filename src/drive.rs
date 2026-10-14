@@ -43,8 +43,14 @@ use std::collections::{HashMap, HashSet};
 /// every line.
 pub(crate) fn interpret_ast(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
     state.set_input(input);
-    let (_, table) = scan_structure_table(input)?;
-    let program = Program::index(input, table, state)?;
+    let (shape, table) = scan_structure_table(input)?;
+    let program = Program::index(input, table, state).map_err(|error| {
+        if shape.has_block_structures {
+            initial_parse_context(error)
+        } else {
+            error
+        }
+    })?;
     Driver {
         program,
         arena: Vec::new(),
@@ -106,6 +112,27 @@ fn block_number_key(digits: &str) -> String {
 
 fn label_key(label: &str) -> String {
     format!("LABEL:{label}")
+}
+
+/// The pre-pass is the up-front parse of the whole file; a structured program
+/// names it as the whole-file parse does, a structure-free one as the fast path.
+fn initial_parse_context(error: ParsingError) -> ParsingError {
+    match error {
+        ParsingError::ParsingContext {
+            line_no,
+            column,
+            preview,
+            context,
+            message,
+        } if context == "line parsing" => ParsingError::ParsingContext {
+            line_no,
+            column,
+            preview,
+            context: "initial file parsing".to_string(),
+            message,
+        },
+        other => other,
+    }
 }
 
 fn preview(state: &State, line_no: usize) -> String {
