@@ -4,6 +4,36 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- `MATCH` and `MINDEX` string search functions (manual 4.1.4.6), next to
+  `INDEX`/`RINDEX`: `MATCH` returns the 0-based position of a substring,
+  `MINDEX` that of the first character found in a character list; both return
+  `-1` when nothing matches (#64).
+- The `<<` operator is accepted in function-argument position, including the
+  prefix form with no left operand, which is the implicit conversion to STRING
+  (manual 4.1.4.1). Real programs write `MATCH(<machine data>, <<NAME)` in an
+  IF condition; that line used to be a parse error (#64).
+
+### Fixed
+
+- Two statements glued onto one line with no separator (`... = SET(...)DEF INT
+  ...`, a copy-paste defect seen in a real program) are still rejected, but
+  the error now names the trailing text and points at the column where the
+  second statement starts, instead of "expected the end of the program". The
+  INDEX-based single-character write from the same report has worked since
+  v0.2.6 and is now pinned by a test (#58).
+- Reading an array element or indexed system variable that was never assigned
+  reported "Invalid array index ... used as an array index"; the message now
+  says the element is undefined and how to supply it. It still names the
+  variable and the line, so an unknown string-typed machine data in a string
+  argument is a loud error rather than a silent empty string (#64).
+- A quoted string passed to a numeric function (`SIN("abc")`) was silently
+  dropped from the argument list and surfaced as an arity error; it is now a
+  type error naming the string.
+
 ## [v0.2.7] - 2026-09-08
 
 ### Changed

@@ -171,7 +171,9 @@ string_value   = ${ QUOTE ~ string ~ QUOTE }
 // a lone string or expression still matches the simpler rules. Each operand is
 // a quoted string or a full (numeric or string-returning) expression; `<<` is
 // not an expression operator, so `expression` stops at the next `<<`.
-string_expression = { concat_operand ~ ("<<" ~ concat_operand)+ }
+// The left operand is optional: a lone `<< <any_type>` is the implicit
+// conversion to STRING (manual 4.1.4.1), as in `MATCH(STR, <<NAME)`.
+string_expression = { concat_operand? ~ ("<<" ~ concat_operand)+ }
 concat_operand    = { string_value | expression }
 
 assignment_multi =  { variable_array ~ "=" ~ (value_array | value_repeating) }
@@ -234,7 +236,10 @@ frame_kw = @{
 
 // function call parser
 non_returning_function_call =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }
-function_arguments          =  { ((expression | string_value)? ~ ",")* ~ (expression | string_value) }
+// An argument is a `<<` concatenation, an expression or a quoted string. The
+// concatenation is tried first: a plain expression stops at the first `<<`.
+function_arguments          =  { (function_argument? ~ ",")* ~ function_argument }
+function_argument           = _{ string_expression | expression | string_value }
 // Atomic body: a maximal run of non-quote characters, taken verbatim with no
 // WHITESPACE skipping (may be empty for ""). Its quote wrapper (string_value)
 // is compound-atomic, so leading/trailing/only-whitespace content survives.
