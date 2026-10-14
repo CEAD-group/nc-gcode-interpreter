@@ -17,6 +17,11 @@ mod output;
 mod state;
 mod structure_scan;
 mod types;
+// Experimental statement-AST path (NC_EXEC=ast); parts stay unused until its driver lands.
+#[allow(dead_code)]
+mod ast;
+#[allow(dead_code)]
+mod lower;
 
 use interpreter::nc_to_table;
 use std::path::PathBuf;

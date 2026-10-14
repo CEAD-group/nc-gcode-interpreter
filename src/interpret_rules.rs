@@ -1940,7 +1940,7 @@ fn evaluate_condition(condition: Pair<Rule>, state: &mut State) -> Result<bool, 
 /// from < and >.
 const REAL_EQUALITY_RELATIVE_TOLERANCE: f64 = 1e-12;
 
-fn reals_equal(lhs: f64, rhs: f64) -> bool {
+pub(crate) fn reals_equal(lhs: f64, rhs: f64) -> bool {
     lhs == rhs || (lhs - rhs).abs() <= REAL_EQUALITY_RELATIVE_TOLERANCE * lhs.abs().max(rhs.abs())
 }
 
