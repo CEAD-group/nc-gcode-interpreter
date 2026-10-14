@@ -424,22 +424,13 @@ fn eval_string_query(
     }
     let found = |pos: Option<usize>| pos.map(|p| p as f64).unwrap_or(-1.0);
     match query {
-        StringQuery::Index | StringQuery::RIndex => {
-            let haystack = arg_text(args[0], state, line_no)?;
-            let needle = arg_text(args[1], state, line_no)?;
-            let Some(target) = needle.chars().next() else {
-                return Err(context_error(
-                    state,
-                    line_no,
-                    name,
-                    format!("{name} needs a non-empty search character"),
-                ));
-            };
-            let chars: Vec<char> = haystack.chars().collect();
-            Ok(found(match query {
-                StringQuery::Index => chars.iter().position(|&c| c == target),
-                _ => chars.iter().rposition(|&c| c == target),
-            }))
+        StringQuery::Index => {
+            let (chars, target) = search_char_args(name, args, state, line_no)?;
+            Ok(found(chars.iter().position(|&c| c == target)))
+        }
+        StringQuery::RIndex => {
+            let (chars, target) = search_char_args(name, args, state, line_no)?;
+            Ok(found(chars.iter().rposition(|&c| c == target)))
         }
         // The list is taken character by character, commas included (manual 4.1.4.6).
         StringQuery::MIndex => {
@@ -480,6 +471,26 @@ fn eval_string_query(
             Ok(parse_nc_number(&s).is_some() as u8 as f64)
         }
     }
+}
+
+/// INDEX/RINDEX arguments: the string's characters and the first character of the search string.
+fn search_char_args(
+    name: &str,
+    args: &[ArgRef],
+    state: &mut State,
+    line_no: usize,
+) -> Result<(Vec<char>, char), ParsingError> {
+    let haystack = arg_text(args[0], state, line_no)?;
+    let needle = arg_text(args[1], state, line_no)?;
+    let Some(target) = needle.chars().next() else {
+        return Err(context_error(
+            state,
+            line_no,
+            name,
+            format!("{name} needs a non-empty search character"),
+        ));
+    };
+    Ok((haystack.chars().collect(), target))
 }
 
 /// A string expression: a literal or a `<<` chain (`evaluate_string`).
