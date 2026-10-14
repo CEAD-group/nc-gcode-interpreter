@@ -5,8 +5,9 @@
 //! expressions, no definitions, no control flow. Parsing such a line with
 //! the full grammar costs microseconds and ~40 parse-tree pairs; a byte
 //! scanner decodes it in nanoseconds. This module claims exactly those
-//! trivial lines and hands every other line to pest individually, so the
-//! full grammar still owns everything structurally interesting.
+//! trivial lines and hands every other line to pest in one sparse parse
+//! (`sparse_source`), so the full grammar still owns everything
+//! structurally interesting.
 //!
 //! Scope: only programs without multi-line control structures
 //! (IF/WHILE/FOR/LOOP/REPEAT blocks) take this path — the structure scan
@@ -107,9 +108,8 @@ enum LineExec<'a, 'i> {
     /// A decoded trivial line plus the index of the chunk arena its `words`
     /// range indexes into.
     Decoded(DecodedLine<'a>, usize),
-    /// A pest-parsed block. The line was parsed with `line_entry` padded
-    /// with leading newlines so that all positions (and therefore error
-    /// messages) are correct in whole-file coordinates.
+    /// A pest-parsed block, borrowed from the sparse copy of the program
+    /// (`sparse_source`), so its positions are whole-file coordinates.
     Parsed(Pair<'i, Rule>),
     Blank,
 }
@@ -134,14 +134,9 @@ fn reject_string_variable(key: &str, state: &State, line_no: usize) -> Result<()
 /// line index; an unresolved jump propagates to the caller.
 ///
 /// Returns `Ok(None)` - before touching `output` or `state` - when the
-/// program does not suit the fast path after all (see the padding budget
+/// program does not suit the fast path after all (see the ratio guard
 /// below); the caller then runs the whole-file parse instead.
-pub fn interpret_lines(
-    input: &str,
-    padded_lines: &mut Vec<String>,
-    output: &mut Output,
-    state: &mut State,
-) -> Result<Option<BlockFlow>, ParsingError> {
+pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> Result<Option<BlockFlow>, ParsingError> {
     // Pass 1: decode every line. Words borrow `&str` spans of `input` and are
     // appended to per-chunk arenas; each decoded line only records its
     // half-open range into its chunk's arena, so pass 1 does no per-line/
@@ -153,15 +148,14 @@ pub fn interpret_lines(
     let lines: Vec<&str> = input.lines().collect();
     let (chunk_arenas, decode_results) = decode_all_lines(&lines, input.len());
 
-    // Low-trivial-ratio guard. Every grammar-bound line costs a per-line pest
-    // parse (plus its byte-decode probe and newline padding), which is strictly
-    // more work than the same line in one whole-file parse; the fast path only
-    // wins when the trivial lines it decodes cheaply dominate. Empirically the
-    // wall-time crossover on assignment-heavy CAM output sits well under 50%
-    // grammar-bound lines, so declining above 50% only sheds clear losers while
-    // leaving trivial-heavy programs (>99% trivial in practice) untouched.
-    // Sample a warm-up prefix before judging so a few early oddball lines can't
-    // trip it.
+    // Low-trivial-ratio guard. Every grammar-bound line costs a pest parse
+    // (plus its byte-decode probe), which is strictly more work than the same
+    // line in one whole-file parse; the fast path only wins when the trivial
+    // lines it decodes cheaply dominate. Empirically the wall-time crossover
+    // on assignment-heavy CAM output sits well under 50% grammar-bound lines,
+    // so declining above 50% only sheds clear losers while leaving
+    // trivial-heavy programs (>99% trivial in practice) untouched. Sample a
+    // warm-up prefix before judging so a few early oddball lines can't trip it.
     //
     // Applied here over the ordered results (a cheap counting scan) rather than
     // inside the decode loop: the parallel decode has no single ordered loop to
@@ -172,11 +166,9 @@ pub fn interpret_lines(
     // are rare (grammar-heavy) and fall back to the whole-file parse anyway.
     let mut non_blank: usize = 0;
     let mut needs_grammar: usize = 0;
-    let mut padding_bytes: usize = 0;
-    for (index, result) in decode_results.iter().flatten().enumerate() {
+    for result in decode_results.iter().flatten() {
         match result {
             DecodeResult::NeedsGrammar => {
-                padding_bytes += index;
                 needs_grammar += 1;
                 non_blank += 1;
             }
@@ -204,31 +196,22 @@ pub fn interpret_lines(
         );
     }
 
-    // The newline padding gives pest whole-file positions, but costs
-    // O(line_no) bytes per grammar-parsed line. A program where many late
-    // lines need the grammar would degenerate to O(n²) memory; decline and
-    // let the whole-file parse handle it (it parses everything once anyway).
-    // Real CAM output is >99.9% trivial lines, so it never comes close.
-    if padding_bytes > input.len().max(1 << 22) {
-        return Ok(None);
-    }
+    // Pass 2a: parse every grammar-bound line in one pest run over a sparse
+    // copy of the program, in which only those lines keep their text and every
+    // other line is reduced to its newline. Positions, and therefore the line
+    // and column numbers in errors and output, come out in whole-file
+    // coordinates exactly as in the whole-file parse, at O(input) bytes however
+    // many lines need the grammar and wherever they sit. (Padding each grammar
+    // line with its own newline prefix, the previous scheme, cost O(line index)
+    // bytes per line and declined whole programs once a few hundred late lines
+    // needed the grammar: #69.) `sparse` must outlive `execs`, which borrows it.
+    let (sparse, has_jumps) = sparse_source(&lines, &decode_results, input.len());
+    let mut blocks = parse_grammar_lines(&sparse, state)?;
 
-    // Prepare the newline-padded copies for the lines that need the grammar.
-    for (index, result) in decode_results.iter().flatten().enumerate() {
-        padded_lines.push(match result {
-            DecodeResult::NeedsGrammar => {
-                // Pad with newlines so pest reports whole-file positions.
-                let mut padded = "\n".repeat(index);
-                padded.push_str(lines[index]);
-                padded
-            }
-            _ => String::new(),
-        });
-    }
-
-    // Pass 2: parse the non-trivial lines, build the jump-target index and
-    // the executable list. padded_lines is only read from here on, so the
-    // parsed pairs may borrow from it.
+    // Pass 2b: build the jump-target index and the executable list. The index
+    // is only consulted by jumps, and only a grammar-bound line can carry one
+    // (the decoder never claims a GOTO), so a program whose grammar lines
+    // contain no GOTO skips allocating one `N:` key per block number.
     let mut targets: HashMap<String, Vec<usize>> = HashMap::new();
     let mut execs: Vec<LineExec> = Vec::with_capacity(lines.len());
     // Iterate chunk by chunk so each decoded line carries the index of the
@@ -239,22 +222,34 @@ pub fn interpret_lines(
         for result in chunk {
             match result {
                 DecodeResult::Trivial(decoded, label) => {
-                    if let Some(n) = decoded.n {
-                        targets
-                            .entry(format!("N:{}", canonical_block_number(n)))
-                            .or_default()
-                            .push(index);
-                    }
-                    if let Some(label) = label {
-                        targets.entry(format!("LABEL:{}", label)).or_default().push(index);
+                    if has_jumps {
+                        if let Some(n) = decoded.n {
+                            targets
+                                .entry(format!("N:{}", canonical_block_number(n)))
+                                .or_default()
+                                .push(index);
+                        }
+                        if let Some(label) = label {
+                            targets.entry(format!("LABEL:{}", label)).or_default().push(index);
+                        }
                     }
                     execs.push(LineExec::Decoded(decoded, chunk_idx));
                 }
                 DecodeResult::Blank => execs.push(LineExec::Blank),
                 DecodeResult::NeedsGrammar => {
-                    let block = parse_single_line(&padded_lines[index], index + 1, state)?;
-                    for key in scan_jump_targets(std::slice::from_ref(&block)).into_keys() {
-                        targets.entry(key).or_default().push(index);
+                    // The sparse grammar yields exactly one block per grammar-bound
+                    // line, in order; verify the position so a grammar change can
+                    // never silently shift output onto the wrong line.
+                    let block = blocks
+                        .next()
+                        .filter(|block| block.line_col().0 == index + 1)
+                        .ok_or_else(|| ParsingError::ParseError {
+                            message: format!("Line {} produced no block in the sparse parse", index + 1),
+                        })?;
+                    if has_jumps {
+                        for key in scan_jump_targets(std::slice::from_ref(&block)).into_keys() {
+                            targets.entry(key).or_default().push(index);
+                        }
                     }
                     execs.push(LineExec::Parsed(block));
                 }
@@ -520,16 +515,40 @@ fn execute_decoded(
     Ok(flow)
 }
 
-fn parse_single_line<'i>(padded: &'i str, line_no: usize, state: &State) -> Result<Pair<'i, Rule>, ParsingError> {
-    let parsed = NCParser::parse(Rule::line_entry, padded).map_err(|e| {
+/// The sparse copy of the program handed to the grammar: grammar-bound lines
+/// verbatim at their original line, every other line empty. `str::lines`
+/// strips a `\r`, so a CRLF program comes out LF-only with unchanged columns.
+/// Also reports whether any grammar-bound line mentions GOTO (conservative:
+/// a GOTO inside a comment merely builds an unused jump index).
+fn sparse_source(lines: &[&str], decode_results: &[Vec<DecodeResult>], input_bytes: usize) -> (String, bool) {
+    let mut sparse = String::with_capacity(input_bytes);
+    let mut has_jumps = false;
+    for (line, result) in lines.iter().zip(decode_results.iter().flatten()) {
+        if matches!(result, DecodeResult::NeedsGrammar) {
+            sparse.push_str(line);
+            has_jumps |= line
+                .as_bytes()
+                .windows(4)
+                .any(|word| word.eq_ignore_ascii_case(b"GOTO"));
+        }
+        sparse.push('\n');
+    }
+    (sparse, has_jumps)
+}
+
+/// Parse the sparse program and return its blocks, one per grammar-bound
+/// line in order. A parse error is reported at its whole-file line and
+/// column, with the original line as preview.
+fn parse_grammar_lines<'i>(sparse: &'i str, state: &State) -> Result<pest::iterators::Pairs<'i, Rule>, ParsingError> {
+    let mut parsed = NCParser::parse(Rule::sparse_lines, sparse).map_err(|e| {
+        let (line_no, col) = match &e.line_col {
+            pest::error::LineColLocation::Pos(pos) => *pos,
+            pest::error::LineColLocation::Span(start, _) => *start,
+        };
         let preview = state
             .get_line(line_no)
             .unwrap_or("(could not retrieve line)")
             .to_string();
-        let col = match &e.line_col {
-            pest::error::LineColLocation::Pos(pos) => pos.1,
-            pest::error::LineColLocation::Span(start, _) => start.1,
-        };
         ParsingError::ParsingContext {
             line_no,
             column: Some(col),
@@ -538,12 +557,12 @@ fn parse_single_line<'i>(padded: &'i str, line_no: usize, state: &State) -> Resu
             message: crate::interpreter::describe_parse_error(&e),
         }
     })?;
-    parsed
-        .flatten()
-        .find(|p| p.as_rule() == Rule::block)
+    Ok(parsed
+        .next()
         .ok_or_else(|| ParsingError::ParseError {
-            message: format!("Line {} produced no block", line_no),
-        })
+            message: "The sparse parse produced no program".to_string(),
+        })?
+        .into_inner())
 }
 
 enum DecodeResult<'a> {
@@ -1099,7 +1118,7 @@ mod tests {
                 // Both error. Interpretation errors (undefined variable,
                 // loop limit, ...) are produced by shared code and match
                 // exactly; pure parse errors are worded per entry rule
-                // (whole-file vs line_entry), so only require the same line.
+                // (whole-file vs sparse_lines), so only require the same line.
                 let full_msg = full_err.to_string();
                 let fast_msg = fast_err.to_string();
                 if full_msg.contains("Parse error") || fast_msg.contains("Parse error") {
@@ -1247,9 +1266,8 @@ M30
         // Confirm the decline: interpret_lines itself must return None.
         let mut state = crate::state::State::new(vec!["X".to_string()], 10_000, None, false);
         state.set_input(&program);
-        let mut padded = Vec::new();
         let mut output = crate::output::OutputRows::collect();
-        let declined = super::interpret_lines(&program, &mut padded, &mut output, &mut state).expect("no error");
+        let declined = super::interpret_lines(&program, &mut output, &mut state).expect("no error");
         assert!(declined.is_none(), "expected the ratio guard to decline");
     }
 
@@ -1266,9 +1284,71 @@ M30
         }
         let mut state = crate::state::State::new(vec!["X".to_string(), "Y".to_string()], 10_000, None, false);
         state.set_input(&program);
-        let mut padded = Vec::new();
         let mut output = crate::output::OutputRows::collect();
-        let claimed = super::interpret_lines(&program, &mut padded, &mut output, &mut state).expect("no error");
+        let claimed = super::interpret_lines(&program, &mut output, &mut state).expect("no error");
         assert!(claimed.is_some(), "expected the fast path to claim the program");
+    }
+    #[test]
+    fn scattered_grammar_lines_stay_on_the_fast_path() {
+        // A few hundred grammar-bound lines spread through a long program used
+        // to exhaust the newline-padding budget and decline the whole program
+        // (#69); the sparse parse costs O(input) however they are spread.
+        let mut program = String::new();
+        for index in 0..100_000 {
+            if index % 1000 == 999 {
+                program.push_str("X=SIN(30) Y=COS(60)\n");
+            } else {
+                program.push_str("G1 X1 Y2\n");
+            }
+        }
+        let mut state = crate::state::State::new(vec!["X".to_string(), "Y".to_string()], 200_000, None, false);
+        state.set_input(&program);
+        let mut output = crate::output::OutputRows::collect();
+        let claimed = super::interpret_lines(&program, &mut output, &mut state).expect("no error");
+        assert!(claimed.is_some(), "scattered grammar lines must stay on the fast path");
+        assert_paths_agree(&program, false);
+    }
+
+    #[test]
+    fn sparse_parse_keeps_whole_file_positions() {
+        // Errors and rows from grammar-bound lines must report their
+        // whole-file line and column, including after CRLF line endings,
+        // leading whitespace and a last line without a newline.
+        for program in [
+            "X1\r\nX=SIN(30)\r\nX2\r\n",
+            "X1\n   X=SIN(30)\nX2",
+            "X1\n\n\nX=SIN(30)\n\nX=COS(60)",
+            "; comment only\nX=SIN(30)\n; another\n",
+        ] {
+            assert_paths_agree(program, false);
+        }
+        let _guard = env_lock();
+        let error = run("X1\r\nX2\r\n  X=\r\nX3", true, false).expect_err("parse error");
+        let message = error.to_string();
+        assert!(message.contains("on line 3"), "{message}");
+        assert!(message.contains("Line:   X="), "{message}");
+        let error = run("X1\nX=SIN(30)\nX2 junk(\nX3", true, false).expect_err("parse error");
+        let message = error.to_string();
+        assert!(message.contains("on line 3"), "{message}");
+        assert!(message.contains("Line: X2 junk("), "{message}");
+    }
+
+    #[test]
+    fn jump_index_is_skipped_without_goto_and_kept_with_it() {
+        // Without a GOTO the jump index is never consulted, so it is not
+        // built; every jump form must still resolve, in both directions,
+        // with block numbers and labels, and a GOTO in a comment is harmless.
+        for program in [
+            "N10 X1\nN20 X2\nM30",
+            "; goto in a comment\nN10 X1\nN20 X2",
+            "GOTOF SKIP\nX999\nSKIP: X2",
+            "N10 R1=0\nN20 X=R1\nR1=R1+1\nIF R1<3 GOTOB N20\nM30",
+            "gotof N30\nX999\nN30 X2",
+            "N10 X1\nGOTOF N10",
+            "GOTOC MISSING\nX2",
+            "N10 X1\nGOTO TYPO",
+        ] {
+            assert_paths_agree(program, false);
+        }
     }
 }
