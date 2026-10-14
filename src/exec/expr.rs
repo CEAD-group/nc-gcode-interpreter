@@ -1352,6 +1352,51 @@ mod tests {
         assert!(!state.symbol_table.contains_key("$AA_IW[Y]"));
     }
 
+    /// A linear congruential step: a value below `n` from the seed.
+    fn next(seed: &mut u64, n: u64) -> u64 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (*seed >> 33) % n
+    }
+
+    /// A seeded random expression over every operator tier, prefixes, parentheses and functions.
+    fn random_expr(seed: &mut u64, depth: u32) -> String {
+        const OPS: [&str; 18] = [
+            "+", "-", "*", "/", " DIV ", " MOD ", " B_AND ", " B_XOR ", " B_OR ", " AND ", " XOR ", " OR ", "<", ">",
+            "<=", ">=", "==", "<>",
+        ];
+        const ATOMS: [&str; 8] = ["0", "1", "2", "3", "2.5", "7", "0.1", "TRUE"];
+        if depth == 0 || next(seed, 3) == 0 {
+            return ATOMS[next(seed, ATOMS.len() as u64) as usize].to_string();
+        }
+        match next(seed, 6) {
+            0 => format!("({})", random_expr(seed, depth - 1)),
+            1 => format!("-{}", random_expr(seed, depth - 1)),
+            2 => format!("NOT {}", random_expr(seed, depth - 1)),
+            3 => {
+                let function = ["ABS", "TRUNC", "SIN", "ROUND"][next(seed, 4) as usize];
+                format!("{function}({})", random_expr(seed, depth - 1))
+            }
+            _ => {
+                let mut expr = random_expr(seed, depth - 1);
+                for _ in 0..=next(seed, 3) {
+                    let op = OPS[next(seed, OPS.len() as u64) as usize];
+                    let rhs = random_expr(seed, depth - 1);
+                    expr = format!("{expr}{op}{rhs}");
+                }
+                expr
+            }
+        }
+    }
+
+    #[test]
+    fn random_expressions_match_the_walker() {
+        let mut seed = 0x5eed_u64;
+        for _ in 0..400 {
+            let expr = random_expr(&mut seed, 4);
+            parity(&format!("R1={expr}"));
+        }
+    }
+
     fn index(text: &str) -> Index {
         Index {
             expr: Expr::Number(text.parse().expect("a number")),
