@@ -19,16 +19,15 @@
 //! separate calls the driver makes at the matching events: `begin_body`,
 //! `eval_condition`, `for_continues`, `for_step` and `leave_structure`.
 
-#![allow(unused_variables)] // structure-line entry points are still todo!()
-
 use crate::ast::{
-    AssignMulti, Assignment, Block, Body, Call, DataType, DefItem, Definition, ElementRhs, Expr, FrameKind, FrameOp,
-    Index, MultiValues, Rhs, Statement,
+    AssignMulti, Assignment, Block, Body, Call, Control, DataType, DefItem, Definition, ElementRhs, Expr, FrameKind,
+    FrameOp, Goto, GotoKind, Index, MultiValues, Rhs, Statement,
 };
 use crate::errors::ParsingError;
 use crate::frame::{self, Matrix3};
 use crate::interpret_rules::{
-    insert_m_key, is_end_of_program_m_code, looks_like_axis_word_typo, JumpRequest, FRAME_KEYWORDS,
+    canonical_jump_target, insert_m_key, is_end_of_program_m_code, looks_like_axis_word_typo, reals_equal,
+    JumpDirection, JumpRequest, FRAME_KEYWORDS,
 };
 use crate::output::{CellMap, OutputRows};
 use crate::state::{emit_warning, ColKind, State};
@@ -83,7 +82,7 @@ pub(crate) fn exec_block(block: &Block, state: &mut State, output: &mut OutputRo
             state.finish_block_frame(row(output), line_no)?;
             return Ok(if ends_program { Flow::EndProgram } else { Flow::Continue });
         }
-        Body::Control(_) => todo!("phase 2: control statements"),
+        Body::Control(control) => return exec_control(control, block, state, output),
     }
     insert_comment(block, output);
     Ok(Flow::Continue)
@@ -93,32 +92,72 @@ pub(crate) fn exec_block(block: &Block, state: &mut State, output: &mut OutputRo
 /// or ELSE line is the body's first block, so this starts a row on that line
 /// and inserts the comment (an empty row when there is none).
 pub(crate) fn begin_body(head: &Block, output: &mut OutputRows) -> Result<(), ParsingError> {
-    todo!("phase 2")
+    output.start_row(head.line_no)?;
+    insert_comment(head, output);
+    Ok(())
 }
 
 /// Evaluate the condition of a WhileHead (each re-test after ENDWHILE) or an
 /// UntilTail (after the driver's loop-limit check), without starting a row.
 pub(crate) fn eval_condition(block: &Block, state: &mut State) -> Result<bool, ParsingError> {
-    todo!("phase 2")
+    let condition = match &block.body {
+        Body::Control(Control::WhileHead(condition) | Control::UntilTail(condition)) => condition,
+        Body::Control(
+            Control::GotoS
+            | Control::Goto(_)
+            | Control::IfGoto(_)
+            | Control::Case { .. }
+            | Control::IfHead(_)
+            | Control::Else
+            | Control::EndIf
+            | Control::EndWhile
+            | Control::ForHead { .. }
+            | Control::EndFor
+            | Control::RepeatHead
+            | Control::LoopHead
+            | Control::EndLoop,
+        )
+        | Body::Empty
+        | Body::Definition(_)
+        | Body::FrameOp(_)
+        | Body::Statements(_) => {
+            return Err(context_error(
+                state,
+                block.line_no,
+                "statement-AST executor",
+                "eval_condition needs a WHILE or UNTIL line".to_string(),
+            ))
+        }
+    };
+    Ok(expr::eval_expr(condition, state, block.line_no)? != 0.0)
 }
 
 /// The FOR test: `var` is in the symbol table and not greater than `to` (an
 /// axis counter is not, so its body never runs, as in the tree walker).
 pub(crate) fn for_continues(var: &str, to: f64, state: &State) -> bool {
-    todo!("phase 2")
+    // Written as "not greater" so a NaN counter keeps looping, as `current > end` breaks in the walker.
+    matches!(state.symbol_table.get(var), Some(value) if value.partial_cmp(&to) != Some(std::cmp::Ordering::Greater))
 }
 
 /// The ENDFOR increment: the counter plus one, recorded on the current row
 /// (the closer line's, which `exec_block` started).
 pub(crate) fn for_step(var: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
-    todo!("phase 2")
+    let Some(counter) = state.symbol_table.get_mut(var) else {
+        return Err(ParsingError::ParseError {
+            message: format!("statement-AST executor: FOR counter '{var}' is not in the symbol table"),
+        });
+    };
+    *counter += 1.0;
+    let value = *counter;
+    output.record_variable_change(var, value);
+    Ok(())
 }
 
 /// A structure was left by falling out of it, a jump out of its body, or an
 /// end of program inside it (never on error): the comment of its closer line
 /// goes into the current row, innermost structure first.
 pub(crate) fn leave_structure(closer: &Block, output: &mut OutputRows) {
-    todo!("phase 2")
+    insert_comment(closer, output);
 }
 
 /// The row being filled; `OutputRows` always has one.
@@ -768,10 +807,130 @@ fn element_text(name: &str, indices: &[Index]) -> String {
     format!("{name}[{}]", indices.join(","))
 }
 
+// ---------------------------------------------------------------------------
+// Control statements (interpret_control, interpret_goto, interpret_case) and
+// the line-level parts of the multi-line structures
+// ---------------------------------------------------------------------------
+
+fn exec_control(
+    control: &Control,
+    block: &Block,
+    state: &mut State,
+    output: &mut OutputRows,
+) -> Result<Flow, ParsingError> {
+    let line_no = block.line_no;
+    let flow = match control {
+        Control::GotoS => {
+            // The restart needs the PLC signal enableGoToStart, which an offline interpreter never has.
+            emit_warning(format_args!(
+                "Warning: GOTOS ignored (line {}): the program restart depends on the PLC signal enableGoToStart; continuing with the next block",
+                line_no
+            ));
+            Flow::Continue
+        }
+        Control::Goto(goto) => jump(goto, state, line_no),
+        Control::IfGoto(jumps) => {
+            // The first satisfied jump wins; a suppressed GOTOC lets the next one try.
+            let mut flow = Flow::Continue;
+            for (condition, goto) in jumps {
+                if expr::eval_expr(condition, state, line_no)? != 0.0 {
+                    flow = jump(goto, state, line_no);
+                    if !matches!(flow, Flow::Continue) {
+                        break;
+                    }
+                }
+            }
+            flow
+        }
+        Control::Case {
+            selector,
+            arms,
+            default,
+        } => {
+            let value = expr::eval_expr(selector, state, line_no)?;
+            match arms.iter().find(|(constant, _)| reals_equal(value, *constant)) {
+                Some((_, goto)) => jump(goto, state, line_no),
+                None => default
+                    .as_ref()
+                    .map_or(Flow::Continue, |goto| jump(goto, state, line_no)),
+            }
+        }
+        // The IF line's comment is the IF statement's own, written before the test.
+        Control::IfHead(condition) => {
+            insert_comment(block, output);
+            return Ok(Flow::Branch(expr::eval_expr(condition, state, line_no)? != 0.0));
+        }
+        // A loop head's comment opens each pass (begin_body), not this row.
+        Control::WhileHead(condition) => return Ok(Flow::Branch(expr::eval_expr(condition, state, line_no)? != 0.0)),
+        Control::ForHead { assignment, to } => return for_init(assignment, to, state, output, line_no),
+        Control::LoopHead => return Ok(Flow::LoopStart),
+        Control::RepeatHead => return Ok(Flow::Repeat),
+        // The comment of an ELSE line opens the false branch, a closer's goes to leave_structure.
+        Control::Else
+        | Control::EndIf
+        | Control::EndWhile
+        | Control::EndFor
+        | Control::UntilTail(_)
+        | Control::EndLoop => return Ok(Flow::ScopeEnd),
+    };
+    insert_comment(block, output);
+    Ok(flow)
+}
+
+/// A jump request for the driver; GOTOC to a target on no active scope warns
+/// and continues instead (manual 4.1.5.2).
+fn jump(goto: &Goto, state: &State, line_no: usize) -> Flow {
+    let key = canonical_jump_target(&goto.target);
+    let direction = match goto.kind {
+        GotoKind::GotoB => JumpDirection::Backward,
+        GotoKind::GotoF => JumpDirection::Forward,
+        GotoKind::Goto | GotoKind::GotoC => JumpDirection::BothForwardFirst,
+    };
+    if goto.kind == GotoKind::GotoC && !state.jump_target_visible(&key) {
+        emit_warning(format_args!(
+            "Warning: GOTOC destination '{}' not found; alarm suppressed, continuing with the next block (line {})",
+            goto.target, line_no
+        ));
+        return Flow::Continue;
+    }
+    Flow::Jump(JumpRequest {
+        key,
+        display: goto.target.clone(),
+        direction,
+        line_no,
+        preview: preview(state, line_no),
+    })
+}
+
+/// The FOR head (interpret_statement_for up to its loop): the counter
+/// assignment, recorded on the head row, then the TO value, evaluated once.
+fn for_init(
+    assignment: &Assignment,
+    to: &Expr,
+    state: &mut State,
+    output: &mut OutputRows,
+    line_no: usize,
+) -> Result<Flow, ParsingError> {
+    let assigned = assign(assignment, state, line_no)?;
+    let Some(initial) = assigned.value else {
+        return Err(context_error(
+            state,
+            line_no,
+            "FOR statement",
+            format!("FOR counter '{}' cannot be initialized with a string", assigned.key),
+        ));
+    };
+    output.record_variable_change(&assigned.key, initial);
+    let to = expr::eval_expr(to, state, line_no)?;
+    Ok(Flow::ForInit {
+        var: assigned.key.into_owned(),
+        to,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Control;
     use crate::interpret_rules::{canonical_block_number, interpret_blocks, resolve_jump, BlockFlow};
     use crate::output::{Row, Table};
     use crate::types::NCParser;
@@ -1317,5 +1476,187 @@ mod tests {
             assert_error_parity(&format!("{keyword} X2\n"));
             assert_parity(&format!("X1\nTRANS X5\nROT Z90\nX1\n{keyword}\nX1 Y1\n"));
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Control flow
+    // -----------------------------------------------------------------------
+
+    /// The Flow of the single line `text` on a state whose input is `program`.
+    fn flow_of(program: &str, text: &str) -> Result<Flow, ParsingError> {
+        let mut state = new_state(program, OPTS);
+        let mut output = OutputRows::collect();
+        for (index, line) in program.lines().enumerate() {
+            let block = crate::lower::parse_line(line, index + 1, &state)?;
+            let flow = exec_block(&block, &mut state, &mut output)?;
+            if line == text {
+                return Ok(flow);
+            }
+        }
+        panic!("{text:?} is not a line of the program")
+    }
+
+    fn jump_of(flow: Result<Flow, ParsingError>) -> (String, String, JumpDirection, usize) {
+        match flow {
+            Ok(Flow::Jump(request)) => (request.key, request.display, request.direction, request.line_no),
+            other => panic!("not a jump: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn goto_flows() {
+        let program = "GOTOF LBL_A\nGOTOB N020\ngoto lbl_b\nGOTOC N5\nLBL_A: X1\nN5 X2\n";
+        assert_eq!(
+            jump_of(flow_of(program, "GOTOF LBL_A")),
+            ("LABEL:LBL_A".into(), "LBL_A".into(), JumpDirection::Forward, 1)
+        );
+        assert_eq!(
+            jump_of(flow_of(program, "GOTOB N020")),
+            ("N:20".into(), "N020".into(), JumpDirection::Backward, 2)
+        );
+        assert_eq!(
+            jump_of(flow_of(program, "goto lbl_b")),
+            ("LABEL:LBL_B".into(), "lbl_b".into(), JumpDirection::BothForwardFirst, 3)
+        );
+        // flow_of pushes no jump scope, so GOTOC finds nothing and continues.
+        assert!(matches!(flow_of(program, "GOTOC N5"), Ok(Flow::Continue)));
+        assert!(matches!(flow_of("GOTOS\n", "GOTOS"), Ok(Flow::Continue)));
+    }
+
+    #[test]
+    fn conditional_jump_flows() {
+        let program = "R1=2\nIF R1==1 GOTOF A1 IF R1==2 GOTOF A2\nIF R1==3 GOTOF A3\nCASE(R1) OF 1 GOTOF A1 2 GOTOB A2 DEFAULT GOTOF A3\nCASE(R1+5) OF 1 GOTOF A1 DEFAULT GOTO A3\nCASE(R1) OF 5 GOTOF A1\n";
+        assert_eq!(
+            jump_of(flow_of(program, "IF R1==1 GOTOF A1 IF R1==2 GOTOF A2")).0,
+            "LABEL:A2"
+        );
+        assert!(matches!(flow_of(program, "IF R1==3 GOTOF A3"), Ok(Flow::Continue)));
+        let case = jump_of(flow_of(program, "CASE(R1) OF 1 GOTOF A1 2 GOTOB A2 DEFAULT GOTOF A3"));
+        assert_eq!((case.0.as_str(), case.2), ("LABEL:A2", JumpDirection::Backward));
+        assert_eq!(
+            jump_of(flow_of(program, "CASE(R1+5) OF 1 GOTOF A1 DEFAULT GOTO A3")).0,
+            "LABEL:A3"
+        );
+        assert!(matches!(flow_of(program, "CASE(R1) OF 5 GOTOF A1"), Ok(Flow::Continue)));
+    }
+
+    #[test]
+    fn jumps_in_programs() {
+        assert_parity(
+            "R1=0\nLOOP_A: R1=R1+1 X=R1\nIF R1<3 GOTOB LOOP_A\nCASE(R1) OF 3 GOTOF THREE DEFAULT GOTOF OTHER\nOTHER: X100\nTHREE: X3 ;three\nGOTOC NOWHERE\nGOTOC N50\nX99\nN50 M30\n",
+        );
+        assert_parity("GOTO N0030\nX1\nN30 X3\nIF 1 GOTOC MISSING IF 1 GOTOF END_L\nX99\nEND_L: GOTOS ;restart\n");
+        assert_error_parity("GOTOF MISSING\n");
+        assert_error_parity("LBL_A: X1\nGOTOF LBL_A\n");
+        assert_error_parity("LBL_A: X1\nGOTOB LBL_A\n");
+    }
+
+    #[test]
+    fn case_and_line_endings() {
+        assert_parity("n10 g1 x1 y=2\nif 1 gotof lbl_a\nx99\nlbl_a: m30\n");
+        // `M 30` keeps its space, so it is not an end of program.
+        assert_parity("M 30\nX1\n");
+        assert_parity("N10 X1 ;a\r\nN20 Y2\r\nM30");
+    }
+
+    #[test]
+    fn backward_jump_limit() {
+        assert_parity_with("R1=0\nLBL_A: R1=R1+1\nIF R1<5 GOTOB LBL_A\n", Opts { limit: 5, ..OPTS });
+        assert_error_parity("LBL_A: X1\nGOTOB LBL_A\n");
+    }
+
+    // -----------------------------------------------------------------------
+    // Structure lines
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn structure_flows() {
+        let program = "R1=1\nIF R1==1 ;c\nELSE\nENDIF\nWHILE R1>5\nENDWHILE\nFOR R2=1 TO R1+2\nENDFOR\nREPEAT\nUNTIL R1==1\nLOOP\nENDLOOP\n";
+        assert!(matches!(flow_of(program, "IF R1==1 ;c"), Ok(Flow::Branch(true))));
+        assert!(matches!(flow_of(program, "WHILE R1>5"), Ok(Flow::Branch(false))));
+        match flow_of(program, "FOR R2=1 TO R1+2") {
+            Ok(Flow::ForInit { var, to }) => assert_eq!((var.as_str(), to), ("R2", 3.0)),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(flow_of(program, "LOOP"), Ok(Flow::LoopStart)));
+        assert!(matches!(flow_of(program, "REPEAT"), Ok(Flow::Repeat)));
+        for closer in ["ELSE", "ENDIF", "ENDWHILE", "ENDFOR", "UNTIL R1==1", "ENDLOOP"] {
+            assert!(matches!(flow_of(program, closer), Ok(Flow::ScopeEnd)), "{closer}");
+        }
+    }
+
+    #[test]
+    fn eval_condition_and_for_helpers() {
+        let program = "R1=2\nWHILE R1<3\nUNTIL R1>3\nX1\n";
+        let mut state = new_state(program, OPTS);
+        let mut output = OutputRows::collect();
+        let blocks: Vec<Block> = program
+            .lines()
+            .enumerate()
+            .map(|(index, line)| crate::lower::parse_line(line, index + 1, &state).expect("lowers"))
+            .collect();
+        exec_block(&blocks[0], &mut state, &mut output).expect("runs");
+        assert!(eval_condition(&blocks[1], &mut state).expect("WHILE"));
+        assert!(!eval_condition(&blocks[2], &mut state).expect("UNTIL"));
+        let err = eval_condition(&blocks[3], &mut state).expect_err("no condition");
+        assert!(
+            format!("{err}").contains("eval_condition needs a WHILE or UNTIL line"),
+            "{err}"
+        );
+        assert!(for_continues("R1", 2.0, &state));
+        assert!(!for_continues("R1", 1.5, &state));
+        assert!(!for_continues("X", 10.0, &state));
+        for_step("R1", &mut state, &mut output).expect("steps");
+        assert_eq!(state.symbol_table["R1"], 3.0);
+        assert!(for_step("NOT_A_COUNTER", &mut state, &mut output).is_err());
+    }
+
+    #[test]
+    fn if_else_rows_and_comments() {
+        for value in [0, 1] {
+            assert_parity(&format!(
+                "R1={value}\nN10 IF R1==1 ;if\nX1\nN20 ELSE ;else\nX2\nN30 ENDIF ;endif\nX3\n"
+            ));
+            assert_parity(&format!("R1={value}\nIF R1==1\nX1\nELSE\nX2\nENDIF\n"));
+        }
+        // Without an ENDIF comment, the ELSE comment shows it opens the false branch only.
+        assert_parity("R1=1\nIF R1==1\nX1\nN20 ELSE ;else\nX2\nENDIF\n");
+        // A false IF without ELSE: the ENDIF comment overwrites the IF row's.
+        assert_parity("IF 0 ;a\nX1\nENDIF ;b\n");
+        assert_parity("N5 IF 1\nN6 ENDIF\n");
+    }
+
+    #[test]
+    fn loop_rows_and_comments() {
+        assert_parity("R1=0\nN5 WHILE R1<2 ;head\nR1=R1+1\nN6 ENDWHILE ;tail\nX1\n");
+        assert_parity("R1=5\nWHILE R1<2 ;head\nX1\nENDWHILE ;tail\n");
+        assert_parity("N1 FOR R1=1 TO 3 ;for\nX=R1\nN2 ENDFOR ;end\nY1\n");
+        assert_parity("R1=0\nN1 REPEAT ;r\nR1=R1+1 X=R1\nN2 UNTIL R1>=2 ;u\nX9\n");
+        assert_parity("R1=0\nLOOP ;l\nR1=R1+1\nIF R1>=2 GOTOF OUT_L\nENDLOOP ;e\nOUT_L: X1\n");
+        assert_parity("R1=0\nWHILE R1<3\nR1=R1+1\nFOR R2=0 TO 1\nX=R1+R2\nENDFOR ;inner\nENDWHILE ;outer\n");
+    }
+
+    #[test]
+    fn for_counters() {
+        // An axis counter never runs the body; it is set, with no row cell.
+        assert_parity("FOR X=1 TO 3\nY1\nENDFOR\n");
+        assert_parity("FOR R1=IC(1) TO 2\nX=R1\nENDFOR\n");
+        assert_error_parity("FOR NAME=\"a\" TO 3\nX1\nENDFOR\n");
+        assert_error_parity("FOR R1=1 TO UNDEF_V\nX1\nENDFOR\n");
+    }
+
+    #[test]
+    fn end_of_program_inside_structures() {
+        // The closer comment still lands on the current row.
+        assert_parity("WHILE 1\nX1 M30\nENDWHILE ;tail\nX99\n");
+        assert_parity("IF 1\nM2\nENDIF ;done\nX99\n");
+        assert_parity("R1=0\nREPEAT\nR1=R1+1\nIF R1==2 GOTOF STOP_L\nUNTIL R1>5 ;u\nSTOP_L: M30 ;stop\n");
+    }
+
+    #[test]
+    fn errors_inside_structures() {
+        assert_error_parity("IF 1 ;a\nX=UNDEF_V\nENDIF ;b\n");
+        assert_error_parity("WHILE UNDEF_V\nENDWHILE\n");
+        assert_error_parity("R1=0\nREPEAT\nR1=R1+1\nUNTIL UNDEF_V\n");
     }
 }
