@@ -15,9 +15,10 @@
 //! grammar allows them.
 
 use crate::errors::ParsingError;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Structure {
+pub(crate) enum Structure {
     If,
     While,
     For,
@@ -55,11 +56,65 @@ impl Structure {
 pub fn check_structures(input: &str) -> Result<ProgramShape, ParsingError> {
     // A closer after other content (`X1 ENDIF`) is invisible to the
     // first-word scan, which would blame the opener; name the closer instead.
-    scan_structures(input).map_err(|error| misplaced_keyword_error(input).unwrap_or(error))
+    scan(input, None).map_err(|error| misplaced_keyword_error(input).unwrap_or(error))
 }
 
-fn scan_structures(input: &str) -> Result<ProgramShape, ParsingError> {
-    let mut stack: Vec<(Structure, usize, String)> = Vec::new();
+/// `check_structures` plus the structure table the statement-AST driver
+/// navigates by. A second ELSE in one IF is an error here; the grammar
+/// rejects it as well, which is all check_structures relies on.
+#[allow(dead_code)] // the NC_EXEC=ast driver's entry, wired in its next phase
+pub(crate) fn scan_structure_table(input: &str) -> Result<(ProgramShape, StructureTable), ParsingError> {
+    let mut table = StructureTable::default();
+    let shape = scan(input, Some(&mut table)).map_err(|error| misplaced_keyword_error(input).unwrap_or(error))?;
+    Ok((shape, table))
+}
+
+/// The line structure of a program, keyed by 1-based line number; only
+/// structure lines have an entry.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct StructureTable {
+    roles: HashMap<usize, LineRole>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineRole {
+    /// An IF/WHILE/FOR/LOOP/REPEAT head line.
+    Opener {
+        kind: Structure,
+        else_line: Option<usize>,
+        closer_line: usize,
+    },
+    /// The ELSE of the IF on `opener_line`.
+    Else { opener_line: usize },
+    /// The ENDIF/ENDWHILE/ENDFOR/ENDLOOP/UNTIL of the structure on `opener_line`.
+    Closer { kind: Structure, opener_line: usize },
+}
+
+#[allow(dead_code)] // read by the NC_EXEC=ast driver
+impl StructureTable {
+    pub(crate) fn role(&self, line_no: usize) -> Option<LineRole> {
+        self.roles.get(&line_no).copied()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.roles.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.roles.is_empty()
+    }
+}
+
+/// An open structure on the scan stack.
+struct Open {
+    kind: Structure,
+    line_no: usize,
+    preview: String,
+    else_line: Option<usize>,
+}
+
+fn scan(input: &str, mut table: Option<&mut StructureTable>) -> Result<ProgramShape, ParsingError> {
+    let mut stack: Vec<Open> = Vec::new();
     let mut has_block_structures = false;
 
     for (index, raw_line) in input.lines().enumerate() {
@@ -90,32 +145,73 @@ fn scan_structures(input: &str) -> Result<ProgramShape, ParsingError> {
             "IF" => {
                 if !contains_goto_word(line) {
                     has_block_structures = true;
-                    stack.push((Structure::If, line_no, raw_line.to_string()));
+                    stack.push(Open {
+                        kind: Structure::If,
+                        line_no,
+                        preview: raw_line.to_string(),
+                        else_line: None,
+                    });
                 }
             }
             "WHILE" => {
                 has_block_structures = true;
-                stack.push((Structure::While, line_no, raw_line.to_string()));
+                stack.push(Open {
+                    kind: Structure::While,
+                    line_no,
+                    preview: raw_line.to_string(),
+                    else_line: None,
+                });
             }
             "FOR" => {
                 has_block_structures = true;
-                stack.push((Structure::For, line_no, raw_line.to_string()));
+                stack.push(Open {
+                    kind: Structure::For,
+                    line_no,
+                    preview: raw_line.to_string(),
+                    else_line: None,
+                });
             }
             "LOOP" => {
                 has_block_structures = true;
-                stack.push((Structure::Loop, line_no, raw_line.to_string()));
+                stack.push(Open {
+                    kind: Structure::Loop,
+                    line_no,
+                    preview: raw_line.to_string(),
+                    else_line: None,
+                });
             }
             "REPEAT" => {
                 has_block_structures = true;
-                stack.push((Structure::Repeat, line_no, raw_line.to_string()));
+                stack.push(Open {
+                    kind: Structure::Repeat,
+                    line_no,
+                    preview: raw_line.to_string(),
+                    else_line: None,
+                });
             }
-            "ELSE" => match stack.last() {
-                Some((Structure::If, _, _)) => {}
-                Some((open, open_line, _)) => {
+            "ELSE" => match stack.last_mut() {
+                Some(open) if open.kind == Structure::If => {
+                    if let Some(table) = table.as_deref_mut() {
+                        if let Some(first) = open.else_line {
+                            return error(format!(
+                                "IF on line {} already has an ELSE on line {}",
+                                open.line_no, first
+                            ));
+                        }
+                        open.else_line = Some(line_no);
+                        table.roles.insert(
+                            line_no,
+                            LineRole::Else {
+                                opener_line: open.line_no,
+                            },
+                        );
+                    }
+                }
+                Some(open) => {
                     return error(format!(
                         "ELSE does not belong to an IF: the innermost open structure is {} from line {}",
-                        open.opener(),
-                        open_line
+                        open.kind.opener(),
+                        open.line_no
                     ))
                 }
                 None => return error("ELSE without a preceding IF".to_string()),
@@ -129,15 +225,33 @@ fn scan_structures(input: &str) -> Result<ProgramShape, ParsingError> {
                     _ => Structure::Repeat,
                 };
                 match stack.pop() {
-                    Some((open, _, _)) if open == expected => {}
-                    Some((open, open_line, _)) => {
+                    Some(open) if open.kind == expected => {
+                        if let Some(table) = table.as_deref_mut() {
+                            table.roles.insert(
+                                open.line_no,
+                                LineRole::Opener {
+                                    kind: open.kind,
+                                    else_line: open.else_line,
+                                    closer_line: line_no,
+                                },
+                            );
+                            table.roles.insert(
+                                line_no,
+                                LineRole::Closer {
+                                    kind: open.kind,
+                                    opener_line: open.line_no,
+                                },
+                            );
+                        }
+                    }
+                    Some(open) => {
                         return error(format!(
                             "{} closes {}, but the innermost open structure is {} from line {} (expected {})",
                             word,
                             expected.opener(),
-                            open.opener(),
-                            open_line,
-                            open.closer()
+                            open.kind.opener(),
+                            open.line_no,
+                            open.kind.closer()
                         ))
                     }
                     None => return error(format!("{} without a preceding {}", word, expected.opener())),
@@ -147,17 +261,17 @@ fn scan_structures(input: &str) -> Result<ProgramShape, ParsingError> {
         }
     }
 
-    if let Some((open, open_line, open_preview)) = stack.pop() {
+    if let Some(open) = stack.pop() {
         // Report the innermost unclosed structure (the last one opened):
         // with nesting like IF ... WHILE ... <EOF>, the ENDWHILE must come
         // before the ENDIF, so that is the actionable fix.
         return Err(ParsingError::UnmatchedStructure {
-            line_no: open_line,
-            preview: open_preview,
+            line_no: open.line_no,
+            preview: open.preview,
             message: format!(
                 "{} is never closed: no matching {} before the end of the program",
-                open.opener(),
-                open.closer()
+                open.kind.opener(),
+                open.kind.closer()
             ),
         });
     }
@@ -341,7 +455,7 @@ fn misplaced_keyword_error(input: &str) -> Option<ParsingError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{first_structure_word, labelled_structure_keyword, misplaced_structure_keyword};
+    use super::*;
 
     #[test]
     fn keyword_after_content_is_misplaced() {
@@ -413,5 +527,109 @@ mod tests {
         assert_eq!(first_structure_word("UNTIL_X: X1").as_deref(), None);
         assert_eq!(first_structure_word("LB:").as_deref(), None);
         assert_eq!(first_structure_word("X1 ELSE").as_deref(), None);
+    }
+
+    fn table(program: &str) -> StructureTable {
+        let (_, table) = scan_structure_table(program).unwrap_or_else(|e| panic!("{program}\n{e}"));
+        table
+    }
+
+    fn opener(kind: Structure, else_line: Option<usize>, closer_line: usize) -> Option<LineRole> {
+        Some(LineRole::Opener {
+            kind,
+            else_line,
+            closer_line,
+        })
+    }
+
+    fn closer(kind: Structure, opener_line: usize) -> Option<LineRole> {
+        Some(LineRole::Closer { kind, opener_line })
+    }
+
+    #[test]
+    fn nested_if_in_while() {
+        let table = table("R1=0\nWHILE R1<3\n  IF R1==1\n    X1\n  ENDIF\n  R1=R1+1\nENDWHILE\nM30\n");
+        assert_eq!(table.role(2), opener(Structure::While, None, 7));
+        assert_eq!(table.role(3), opener(Structure::If, None, 5));
+        assert_eq!(table.role(5), closer(Structure::If, 3));
+        assert_eq!(table.role(7), closer(Structure::While, 2));
+        for line in [1, 4, 6, 8] {
+            assert_eq!(table.role(line), None, "line {line}");
+        }
+        assert_eq!(table.len(), 4);
+    }
+
+    #[test]
+    fn if_with_else() {
+        let table = table("N10 IF R1>0 ; test\nX1\nN20 else ; other\nX2\nendif\n");
+        assert_eq!(table.role(1), opener(Structure::If, Some(3), 5));
+        assert_eq!(table.role(3), Some(LineRole::Else { opener_line: 1 }));
+        assert_eq!(table.role(5), closer(Structure::If, 1));
+    }
+
+    #[test]
+    fn else_belongs_to_the_innermost_if() {
+        let table = table("IF A\nIF B\nX1\nELSE\nX2\nENDIF\nELSE\nX3\nENDIF\n");
+        assert_eq!(table.role(1), opener(Structure::If, Some(7), 9));
+        assert_eq!(table.role(2), opener(Structure::If, Some(4), 6));
+        assert_eq!(table.role(4), Some(LineRole::Else { opener_line: 2 }));
+        assert_eq!(table.role(7), Some(LineRole::Else { opener_line: 1 }));
+    }
+
+    #[test]
+    fn repeat_until() {
+        let table = table("REPEAT\nX=X+1\nUNTIL X>3\n");
+        assert_eq!(table.role(1), opener(Structure::Repeat, None, 3));
+        assert_eq!(table.role(3), closer(Structure::Repeat, 1));
+    }
+
+    #[test]
+    fn for_loop() {
+        let table = table("FOR I=1 TO 3\nX=I\nENDFOR\n");
+        assert_eq!(table.role(1), opener(Structure::For, None, 3));
+        assert_eq!(table.role(3), closer(Structure::For, 1));
+    }
+
+    #[test]
+    fn loop_with_jump_out() {
+        let table = table("LOOP\nIF R1>3 GOTOF OUT\nR1=R1+1\nENDLOOP\nOUT: X1\n");
+        assert_eq!(table.role(1), opener(Structure::Loop, None, 4));
+        assert_eq!(table.role(2), None);
+        assert_eq!(table.role(4), closer(Structure::Loop, 1));
+    }
+
+    #[test]
+    fn single_line_if_goto_is_not_a_block() {
+        let (shape, table) = scan_structure_table("N10 IF R1>0 GOTOF L1\nX1\nL1: X2\n").expect("valid");
+        assert!(!shape.has_block_structures);
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn a_second_else_is_an_error_for_the_table_only() {
+        let program = "IF A\nX1\nELSE\nX2\nELSE\nX3\nENDIF\n";
+        assert!(
+            check_structures(program).is_ok(),
+            "check_structures leaves this to the parser"
+        );
+        let error = scan_structure_table(program).err().expect("two ELSEs");
+        assert_eq!(error.location().map(|l| l.line), Some(5));
+        assert!(error.to_string().contains("already has an ELSE on line 3"), "{error}");
+    }
+
+    #[test]
+    fn errors_match_check_structures() {
+        for program in [
+            "IF A\nX1\n",
+            "WHILE A\nIF B\nENDWHILE\n",
+            "ENDIF\n",
+            "X1\nELSE\n",
+            "LOOP\nELSE\nENDLOOP\n",
+            "REPEAT\nENDFOR\n",
+        ] {
+            let expected = check_structures(program).err().expect("invalid").to_string();
+            let actual = scan_structure_table(program).err().expect("invalid").to_string();
+            assert_eq!(expected, actual, "{program}");
+        }
     }
 }
