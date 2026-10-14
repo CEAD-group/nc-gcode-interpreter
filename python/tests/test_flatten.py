@@ -108,6 +108,42 @@ def test_flattened_marker_column():
     assert "flattened" not in df_plain.columns
 
 
+def test_bspline_samples_track_control_point_lines():
+    """Flattened B-spline samples carry the line of the control-point block
+    whose Greville stretch they fall in, like A/C spline samples carry their
+    segment's line, so a simulator highlighting the executing line walks
+    through the control-point lines instead of sticking to the last one (#62)."""
+    program = (
+        "N10 G1 X0 Y0 F1000\n"
+        "N20 BSPLINE\n"
+        "N30 X10 Y10\n"
+        "N40 X20 Y0\n"
+        "N50 X30 Y10\n"
+        "N60 G1 X40 Y0\n"
+    )
+
+    def flattened_lines(text):
+        batches = nc_to_batches(
+            text, batch_size=100000, flatten_tolerance=0.5, include_line_numbers=True
+        )
+        df = pl.concat(list(batches), how="diagonal")
+        return df.filter(pl.col("flattened") == 1)["line_no"].to_list()
+
+    bspline = flattened_lines(program)
+    assert sorted(set(bspline)) == [3, 4, 5]
+    # The attribution is monotone along the curve.
+    assert bspline == sorted(bspline)
+    aspline = flattened_lines(program.replace("BSPLINE", "ASPLINE"))
+    assert sorted(set(aspline)) == [3, 4, 5]
+    # Only the curve end (the last control point) is a programmed position.
+    df, _ = nc_to_dataframe(program, flatten_tolerance=0.5, include_line_numbers=True)
+    spline = df.filter(pl.col("line_no").is_in([3, 4, 5]))
+    programmed = spline.filter(pl.col("flattened").is_null())
+    assert programmed["line_no"].to_list() == [5]
+    assert programmed["X"].to_list() == [30.0]
+    assert programmed["Y"].to_list() == [10.0]
+
+
 def test_flattening_example_csvs_are_current():
     """examples/flattening/ holds the reviewable demo pair: the same program
     interpreted raw and with flatten_tolerance=0.1. Keep both CSVs in sync
