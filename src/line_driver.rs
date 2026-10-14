@@ -61,7 +61,7 @@ type Output = crate::output::OutputRows;
 /// Every field is `Copy` (`&str`, `f64`, `bool`), so `Word` is `Copy` and the
 /// parallel decode can concatenate per-chunk arenas with a plain memcpy.
 #[derive(Clone, Copy)]
-enum Word<'a> {
+pub(crate) enum Word<'a> {
     /// `X12.5` or `AXIS=12.5`: routed to axis / block address / variable
     /// exactly like `interpret_assignment` would.
     Assign(&'a str, f64),
@@ -98,13 +98,13 @@ enum Word<'a> {
 /// arena (the chunk is recorded on the `LineExec`), not an owned `Vec`, so a
 /// line adds no heap allocation of its own.
 #[derive(Clone)]
-struct DecodedLine<'a> {
-    line_no: usize,
-    n: Option<&'a str>,
-    comment: Option<&'a str>,
-    words: Range<usize>,
+pub(crate) struct DecodedLine<'a> {
+    pub(crate) line_no: usize,
+    pub(crate) n: Option<&'a str>,
+    pub(crate) comment: Option<&'a str>,
+    pub(crate) words: Range<usize>,
     /// The line defines a jump label (recorded in the target index only).
-    has_content: bool,
+    pub(crate) has_content: bool,
 }
 
 enum LineExec<'a, 'i> {
@@ -727,7 +727,7 @@ fn parse_grammar_lines<'i>(sparse: &'i str, state: &State) -> Result<pest::itera
         .into_inner())
 }
 
-enum DecodeResult<'a> {
+pub(crate) enum DecodeResult<'a> {
     Trivial(DecodedLine<'a>, Option<String>),
     Blank,
     NeedsGrammar,
@@ -959,7 +959,7 @@ fn fold_const_expr(line: &str, i: &mut usize) -> Option<f64> {
 /// `ident=IC(<product>)`, `ident=(<product>)`, `M<d>`, a vocabulary-known
 /// bare keyword, a subprogram call with numeric arguments and a trailing comment
 /// rejects the line to the full grammar.
-fn decode_line<'a>(line: &'a str, line_no: usize, arena: &mut Vec<Word<'a>>) -> DecodeResult<'a> {
+pub(crate) fn decode_line<'a>(line: &'a str, line_no: usize, arena: &mut Vec<Word<'a>>) -> DecodeResult<'a> {
     // Words are appended to the shared arena as they decode. A line that turns
     // out to need the grammar (or is blank) leaves no trace: roll the arena
     // back to where this line started so only claimed trivial lines contribute.

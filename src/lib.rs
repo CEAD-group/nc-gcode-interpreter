@@ -19,6 +19,8 @@ mod structure_scan;
 #[allow(dead_code)]
 mod ast;
 #[allow(dead_code)]
+mod decode_ast;
+#[allow(dead_code)]
 mod lower;
 
 // Unstable research helpers, excluded from normal library/Python builds.

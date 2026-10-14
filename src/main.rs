@@ -21,6 +21,8 @@ mod types;
 #[allow(dead_code)]
 mod ast;
 #[allow(dead_code)]
+mod decode_ast;
+#[allow(dead_code)]
 mod lower;
 
 use interpreter::nc_to_table;
