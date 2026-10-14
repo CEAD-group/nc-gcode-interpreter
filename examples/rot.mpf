@@ -1,0 +1,18 @@
+; Programmable frame rotation (manual 3.12.2.4): machine XYZ = R * local XYZ + t.
+; TRANS sets the offset, AROT RPL=90 turns the workpiece system a quarter turn
+; about Z (G17), so local +X runs along machine +Y. ATRANS after the rotation
+; offsets in the rotated system (3.12.2.1), ROT replaces the whole frame
+; (the TRANS offset included), and a bare ROT deletes it.
+G1 X0 Y0 Z0 F100
+TRANS X10 Y20
+AROT RPL=90
+G1 X1 Y0 ; local (1, 0) -> machine (10, 21)
+G1 X1 Y2 ; local (1, 2) -> machine (8, 21)
+ATRANS X5 ; shifts along the rotated X, which is machine +Y
+G1 X0 Y0 ; machine (10, 25)
+G2 X2 Y0 I1 J0 ; half circle in the rotated plane, centre offset rotated to J1
+ROT Z90 ; absolute: the offset is deleted, the quarter turn kept
+G1 X1 Y0 ; machine (0, 1)
+ROT ; bare absolute instruction: the frame is deleted
+G1 X1 Y0 ; machine (1, 0)
+M30

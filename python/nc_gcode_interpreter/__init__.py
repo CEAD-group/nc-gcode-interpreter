@@ -447,7 +447,7 @@ def nc_to_rows(
 
     Errors raise ``ValueError`` from ``next()`` when reached. After the
     iterator is exhausted, its ``state`` attribute holds the final
-    interpreter state (axes, symbol_table, translation).
+    interpreter state (axes, symbol_table, translation, rotation, string_table).
 
     Example:
     --------
@@ -488,7 +488,8 @@ class _BatchIterator:
     no Python list of primitives materialized. ``pl.DataFrame`` wraps that
     capsule directly (polars >= 1.3), so no ``pyarrow`` is involved. After
     exhaustion its ``state`` attribute holds the final interpreter state (axes,
-    symbol_table, translation), like the iterator returned by :func:`nc_to_rows`.
+    symbol_table, translation, rotation, string_table), like the iterator
+    returned by :func:`nc_to_rows`.
     """
 
     def __init__(self, inner: Any) -> None:

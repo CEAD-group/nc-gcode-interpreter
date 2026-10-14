@@ -7,8 +7,9 @@ from nc_gcode_interpreter import nc_to_dataframe
     [
         "MIRROR X0\nX2",  # mirroring frame
         "AMIRROR X0\nX2",  # additive mirroring frame
-        "ROT RPL=30\nX2",  # rotation frame
-        "AROT RPL=30\nX2",  # additive rotation frame
+        "ROTS X30 Y10\nX2",  # solid-angle rotation frame
+        "AROTS X30\nX2",  # additive solid-angle rotation frame
+        "CROTS X30\nX2",  # solid-angle rotation on the data-management frame
         "SCALE X2 Y2\nX2",  # scaling frame
         "ASCALE X2 Y2\nX2",  # additive scaling frame
     ],

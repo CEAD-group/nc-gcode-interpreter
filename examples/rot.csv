@@ -1,0 +1,17 @@
+gg01_motion,X,Y,Z,F,I,J,M,comment
+,,,,,,,,; Programmable frame rotation (manual 3.12.2.4): machine XYZ = R * local XYZ + t.
+,,,,,,,,"; TRANS sets the offset, AROT RPL=90 turns the workpiece system a quarter turn"
+,,,,,,,,"; about Z (G17), so local +X runs along machine +Y. ATRANS after the rotation"
+,,,,,,,,"; offsets in the rotated system (3.12.2.1), ROT replaces the whole frame"
+,,,,,,,,"; (the TRANS offset included), and a bare ROT deletes it."
+G1,0.000,0.000,0.000,100.000,,,,
+G1,10.000,21.000,0.000,100.000,,,,"; local (1, 0) -> machine (10, 21)"
+G1,8.000,21.000,0.000,100.000,,,,"; local (1, 2) -> machine (8, 21)"
+G1,8.000,21.000,0.000,100.000,,,,"; shifts along the rotated X, which is machine +Y"
+G1,10.000,25.000,0.000,100.000,,,,"; machine (10, 25)"
+G2,10.000,27.000,0.000,100.000,0.000,1.000,,"; half circle in the rotated plane, centre offset rotated to J1"
+G2,10.000,27.000,0.000,100.000,,,,"; absolute: the offset is deleted, the quarter turn kept"
+G1,0.000,1.000,0.000,100.000,,,,"; machine (0, 1)"
+G1,0.000,1.000,0.000,100.000,,,,; bare absolute instruction: the frame is deleted
+G1,1.000,0.000,0.000,100.000,,,,"; machine (1, 0)"
+G1,1.000,0.000,0.000,100.000,,,M30,

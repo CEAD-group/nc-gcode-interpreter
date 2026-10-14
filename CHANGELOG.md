@@ -18,6 +18,30 @@ released to PyPI.
   (manual 4.1.4.1). Real programs write `MATCH(<machine data>, <<NAME)` in an
   IF condition; that line used to be a parse error (#64).
 
+- Programmable frame rotations `ROT` and `AROT`, with `X.. Y.. Z..` angles or
+  the planar form `RPL=`, on top of the existing `TRANS`/`ATRANS` offsets
+  (#68). The geometry axes X, Y, Z are output as machine coordinates under a
+  rotation matrix plus translation (machine = R * local + t); every other axis
+  keeps its plain offset, so programmed A/B/C orientations are never rotated.
+  The semantics follow the Sinumerik frame chapters (NC programming manual
+  3.12.2.1 and 3.12.2.4, Basic Functions manual 4.5.2.3 and 4.5.2.4): `ROT`
+  and `TRANS` are both absolute and each deletes the whole programmable frame,
+  so a `TRANS` after `AROT` drops the rotation and a `ROT` after `TRANS` drops
+  the offset; `AROT` chains onto the current frame; several angles in one
+  block are RPY angles executed Z, then Y', then X'' (MD10600
+  FRAME_ANGLE_INPUT_MODE = 1, the default; the Euler ZX'Z'' mode is out of
+  scope); `RPL` turns about the normal of the active G17/G18/G19 plane;
+  `ATRANS` after a rotation offsets in the rotated system. `IC()` increments
+  stay in local coordinates. G2/G3 arcs (I/J/K and CR forms, TURN) are
+  supported while the rotation keeps the arc plane equal to the machine plane
+  (RPL, or a rotation about the plane normal): the centre offsets are rotated
+  with the frame and the flattener works unchanged. An arc under a rotation
+  that tilts the plane, `RPL=` mixed with axis angles, angles on non-geometry
+  axes, and the still unmodeled `ROTS`/`AROTS`/`CROTS`, `SCALE`/`ASCALE` and
+  `MIRROR`/`AMIRROR` all raise with line context. The final state dict gains a
+  `rotation` entry (row-major 3x3 list); `translation` keeps its meaning. The
+  fast path and the streaming/batch APIs mirror the whole-file interpreter.
+
 ### Changed
 
 - The fast path builds its jump-target index (one `N:` key per block number,
@@ -25,6 +49,20 @@ released to PyPI.
   Trivial lines can never carry a jump, so a program without one skips the
   allocation entirely; a GOTO inside a comment merely builds an unused index.
   About 40 % less time on a 400k-line straight-line program (#73).
+
+- A frame instruction no longer moves the interpreted position. `TRANS`,
+  `ATRANS`, `ROT` and `AROT` hold the machine position of every positioned
+  axis and re-derive its local (workpiece) coordinate under the new frame, as
+  a control does when a frame becomes active (Basic Functions manual 4.5.11:
+  `$AA_IM` is the machine setpoint, `$AA_IW` the workpiece one). So a block
+  after the frame change that programs only some axes moves the others only
+  through the rotation, `$AA_IM` agrees with the output rows, `$AA_IW` reports
+  the re-derived value, and an `IC()` increment after a `TRANS` moves from the
+  current position (NC programming manual 3.1.1.5) instead of jumping by the
+  offset; `examples/trans2.csv` changes accordingly. A geometry axis that a
+  rotation couples to a positioned axis before any block positioned it is
+  taken at machine 0 (with a warning) from then on, so it can be read with
+  `$AA_IM` and appears in the rows.
 
 ### Fixed
 

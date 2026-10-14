@@ -343,9 +343,9 @@ fn execute_decoded(
             Word::Assign(key, value) => {
                 match state.resolve_output_key(key) {
                     Some((ColKind::Axis, skey)) => {
-                        let machine_value = state.update_axis(skey, *value)?;
+                        state.update_axis(skey, *value)?;
                         let last = output.last_mut().expect("row was just pushed");
-                        last.insert(skey, Value::Float(machine_value));
+                        state.insert_machine_axis(skey, *value, last);
                     }
                     Some((ColKind::Block, skey)) => {
                         let last = output.last_mut().expect("row was just pushed");
@@ -432,9 +432,9 @@ fn execute_decoded(
                 match state.resolve_output_key(key) {
                     Some((ColKind::Axis, skey)) => {
                         let local_value = increment_local(state, skey, value);
-                        let machine_value = state.update_axis(skey, local_value)?;
+                        state.update_axis(skey, local_value)?;
                         let last = output.last_mut().expect("row was just pushed");
-                        last.insert(skey, Value::Float(machine_value));
+                        state.insert_machine_axis(skey, local_value, last);
                     }
                     Some((ColKind::Block, skey)) => {
                         let local_value = increment_local(state, skey, value);
@@ -463,9 +463,14 @@ fn execute_decoded(
                 last.insert("non_returning_function_call", Value::Str(value.to_string()));
             }
             Word::GCommand(group, as_written) => {
-                let last = output.last_mut().expect("row was just pushed");
                 // Uppercase like the grammar path: g2 IS G2.
-                last.insert(group, Value::Str(as_written.to_uppercase()));
+                let code = as_written.to_uppercase();
+                // The plane feeds the frame model, exactly as interpret_g_command does.
+                if *group == "gg06_plane_select" {
+                    state.set_plane(&code);
+                }
+                let last = output.last_mut().expect("row was just pushed");
+                last.insert(group, Value::Str(code));
             }
             Word::MCode(code) => {
                 let last = output.last_mut().expect("row was just pushed");
@@ -478,6 +483,8 @@ fn execute_decoded(
         }
     }
     let last = output.last_mut().expect("row was just pushed");
+    // Same end-of-block frame hook as interpret_block (arc words under a rotation).
+    state.finish_block_frame(last, line.line_no)?;
     if let Some(n) = line.n {
         last.insert("N", Value::Str(n.to_string()));
     }
@@ -1108,6 +1115,7 @@ mod tests {
                     full_state.translation, fast_state.translation,
                     "translation for:\n{program}"
                 );
+                assert_eq!(full_state.rotation, fast_state.rotation, "rotation for:\n{program}");
             }
             (Err(full_err), Err(fast_err)) => {
                 // Both error. Interpretation errors (undefined variable,

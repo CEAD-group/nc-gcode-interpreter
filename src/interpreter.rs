@@ -732,6 +732,35 @@ mod tests {
         assert_eq!(state.symbol_table["R2"], 15.0);
     }
 
+    /// A frame instruction holds the machine position and re-derives the
+    /// local coordinates: `$AA_IM` keeps its value across a `TRANS` or `ROT`,
+    /// `$AA_IW` changes, and the rows agree with both.
+    #[test]
+    fn frame_instructions_hold_the_machine_position() {
+        let run = |src: &str| {
+            nc_to_table(src, None, None, None, 10000, false, None, false, None).expect("program should interpret")
+        };
+        let (_, state) = run("G1 Z5 F100\nTRANS Z10\nR1 = $AA_IW[Z]\nR2 = $AA_IM[Z]\nZ=IC(1)\nR3 = $AA_IM[Z]\nM30\n");
+        assert_eq!(state.symbol_table["R1"], -5.0);
+        assert_eq!(state.symbol_table["R2"], 5.0);
+        assert_eq!(state.symbol_table["R3"], 6.0);
+        // ROT Z90 then X2: local Y stays at the re-derived -1, so the machine
+        // moves along +Y to (1, 2, 0); the bare ROT holds that point.
+        let (table, state) = run("G1 X1 Y0 Z0 F100\nROT Z90\nG1 X2\nROT\nG1 X3\nR1 = $AA_IM[Y]\nM30\n");
+        let close = |name: &str, want: &[f64]| {
+            let got: Vec<f64> = floats(&table, name).iter().map(|v| v.expect("axis is set")).collect();
+            assert_eq!(got.len(), want.len(), "{name}: {got:?}");
+            assert!(
+                got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9),
+                "{name}: {got:?}"
+            );
+        };
+        // Rows: the first G1, X2, X3 and M30 (the frame and R lines emit none).
+        close("X", &[1.0, 1.0, 3.0, 3.0]);
+        close("Y", &[0.0, 2.0, 2.0, 2.0]);
+        assert_eq!(state.symbol_table["R1"], 2.0);
+    }
+
     /// Machine-state boundaries stay loud: reading an actual position before
     /// the axis was ever positioned is an error (warning + 0.0 only under
     /// allow_undefined_variables), and $AA_IW/$AA_IM are read-only.
