@@ -22,10 +22,11 @@
 #![allow(unused_variables)] // structure-line entry points are still todo!()
 
 use crate::ast::{
-    AssignMulti, Assignment, Block, Body, Call, DataType, DefItem, Definition, ElementRhs, Expr, Index, MultiValues,
-    Rhs, Statement,
+    AssignMulti, Assignment, Block, Body, Call, DataType, DefItem, Definition, ElementRhs, Expr, FrameKind, FrameOp,
+    Index, MultiValues, Rhs, Statement,
 };
 use crate::errors::ParsingError;
+use crate::frame::{self, Matrix3};
 use crate::interpret_rules::{
     insert_m_key, is_end_of_program_m_code, looks_like_axis_word_typo, JumpRequest, FRAME_KEYWORDS,
 };
@@ -71,7 +72,7 @@ pub(crate) fn exec_block(block: &Block, state: &mut State, output: &mut OutputRo
     match &block.body {
         Body::Empty => {}
         Body::Definition(definition) => define(definition, state, output, line_no)?,
-        Body::FrameOp(_) => todo!("phase 2: frame instructions"),
+        Body::FrameOp(op) => frame_op(op, state, line_no)?,
         Body::Statements(statements) => {
             let mut ends_program = false;
             for statement in statements {
@@ -598,6 +599,175 @@ fn check_declared_name(name: &str, state: &State, line_no: usize) -> Result<(), 
     }
 }
 
+// ---------------------------------------------------------------------------
+// Frame instructions (interpret_frame_op)
+// ---------------------------------------------------------------------------
+
+fn frame_op(op: &FrameOp, state: &mut State, line_no: usize) -> Result<(), ParsingError> {
+    let preview = preview(state, line_no);
+    // A frame instruction never moves the machine (State::change_frame).
+    state.change_frame(|state| match op.kind {
+        // TRANS substitutes the whole programmable frame, rotation included (manual 3.12.2.2).
+        FrameKind::Trans => {
+            state.reset_frame();
+            for (axis, value) in frame_assignments(&op.assignments, state, line_no)? {
+                state.update_translation(&axis, value, line_no, &preview)?;
+            }
+            Ok(())
+        }
+        // Additive in the current, possibly rotated, workpiece system.
+        FrameKind::ATrans => {
+            for (axis, value) in frame_assignments(&op.assignments, state, line_no)? {
+                state.add_translation(&axis, value, line_no, &preview)?;
+            }
+            Ok(())
+        }
+        FrameKind::Rot | FrameKind::ARot => {
+            let absolute = op.kind == FrameKind::Rot;
+            if op.assignments.is_empty() {
+                // Bare ROT deletes the programmable frame (manual 3.12.2.1); bare AROT adds nothing.
+                if absolute {
+                    state.reset_frame();
+                }
+                return Ok(());
+            }
+            let rotation = rotation(&op.assignments, state, line_no, &preview)?;
+            state.apply_rotation(rotation, absolute, line_no, &preview)
+        }
+        // Bare absolute forms delete the frame (CROTS is absolute despite its C).
+        FrameKind::Scale | FrameKind::Rots | FrameKind::CRots | FrameKind::Mirror if op.assignments.is_empty() => {
+            state.reset_frame();
+            Ok(())
+        }
+        FrameKind::AScale | FrameKind::ARots | FrameKind::AMirror if op.assignments.is_empty() => Ok(()),
+        // Solid-angle rotation, scaling and mirroring with values are not modeled.
+        FrameKind::Scale
+        | FrameKind::AScale
+        | FrameKind::Rots
+        | FrameKind::ARots
+        | FrameKind::CRots
+        | FrameKind::Mirror
+        | FrameKind::AMirror => Err(ParsingError::UnsupportedStatement {
+            line_no,
+            preview: preview.clone(),
+            statement: format!("The frame instruction {}", op.kind.keyword()),
+            hint: "Solid-angle rotation, scaling and mirroring frames are not modeled; interpreting this program \
+                   would produce wrong coordinates. Only TRANS, ATRANS, ROT and AROT are supported."
+                .to_string(),
+        }),
+    })
+}
+
+/// The axis values of a TRANS/ATRANS block, evaluated as assignments with the
+/// axis positions restored afterwards; every target must be an axis.
+fn frame_assignments(
+    assignments: &[Assignment],
+    state: &mut State,
+    line_no: usize,
+) -> Result<Vec<(String, f64)>, ParsingError> {
+    let saved_axes = state.axes.clone();
+    let mut result = Vec::with_capacity(assignments.len());
+    for assignment in assignments {
+        let assigned = assign(assignment, state, line_no)?;
+        let Some(value) = assigned.value else {
+            state.axes = saved_axes;
+            return Err(context_error(
+                state,
+                line_no,
+                "frame instruction",
+                format!("frame instruction cannot assign a string to '{}'", assigned.key),
+            ));
+        };
+        if !state.is_axis(&assigned.key) {
+            state.axes = saved_axes;
+            return Err(ParsingError::UnexpectedAxis {
+                axis: assigned.key.into_owned(),
+                axes: state.axis_identifiers.join(", "),
+                line_no,
+                preview: preview(state, line_no),
+            });
+        }
+        result.push((assigned.key.into_owned(), value));
+    }
+    state.axes = saved_axes;
+    Ok(result)
+}
+
+/// The angle words of a ROT/AROT block: `X.. Y.. Z..` (RPY angles) or `RPL=..`
+/// (about the active plane's normal), never both (manual 3.12.2.4).
+fn rotation(
+    assignments: &[Assignment],
+    state: &mut State,
+    line_no: usize,
+    preview: &str,
+) -> Result<Matrix3, ParsingError> {
+    let mut angles = [0.0; 3];
+    let mut has_axis_angle = false;
+    let mut rpl: Option<f64> = None;
+    for assignment in assignments {
+        // The walker quotes the target as written; an element target is rebuilt from its indices.
+        let (name, angle) = match assignment {
+            Assignment::Var { name, rhs } => (
+                Cow::Borrowed(name.as_str()),
+                match rhs {
+                    Rhs::Expr(value) => Some(value),
+                    Rhs::Increment(_) | Rhs::Str(_) => None,
+                },
+            ),
+            Assignment::Element { name, indices, rhs } => (
+                Cow::Owned(element_text(name, indices)),
+                match rhs {
+                    ElementRhs::Expr(value) => Some(value),
+                    ElementRhs::Str(_) => None,
+                },
+            ),
+        };
+        let Some(angle) = angle else {
+            return Err(ParsingError::with_context(
+                line_no,
+                preview.to_string(),
+                "frame rotation".to_string(),
+                format!("{name}= expects a numeric angle in degrees"),
+            ));
+        };
+        // Angle words name geometry axes, which need not be configured axes.
+        let angle = expr::eval_expr(angle, state, line_no)?;
+        if name == "RPL" {
+            rpl = Some(angle);
+            continue;
+        }
+        let Some(index) = frame::geometry_index(&name) else {
+            return Err(ParsingError::with_context(
+                line_no,
+                preview.to_string(),
+                "frame rotation".to_string(),
+                format!("ROT/AROT angles refer to the geometry axes X, Y, Z only; '{name}' cannot be rotated about"),
+            ));
+        };
+        angles[index] = angle;
+        has_axis_angle = true;
+    }
+    match rpl {
+        Some(_) if has_axis_angle => Err(ParsingError::with_context(
+            line_no,
+            preview.to_string(),
+            "frame rotation".to_string(),
+            "RPL= cannot be combined with X/Y/Z angles in one block (manual 3.12.2.4 lists them as alternative \
+             syntaxes)"
+                .to_string(),
+        )),
+        // RPL=a rotates about the plane normal: Z in G17, Y in G18, X in G19.
+        Some(angle) => Ok(frame::axis_rotation(state.plane.normal_axis(), angle)),
+        None => Ok(frame::rpy_rotation(angles[0], angles[1], angles[2])),
+    }
+}
+
+/// `NAME[i, ...]` as the walker's uppercased target text, without the source spacing.
+fn element_text(name: &str, indices: &[Index]) -> String {
+    let indices: Vec<String> = indices.iter().map(|index| index.text.to_uppercase()).collect();
+    format!("{name}[{}]", indices.join(","))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1101,5 +1271,51 @@ mod tests {
         assert_error_parity("DEF STRING[4] NAME\nDEF REAL NAME=1\n");
         assert_error_parity("DEF REAL ARR[1]=SET(1,2,3)\n");
         assert_error_parity("DEF REAL ARR[1,1,1,1]\n");
+    }
+
+    // -----------------------------------------------------------------------
+    // Frame instructions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn translations() {
+        assert_parity("G1 X1 Y2 Z3\nTRANS X10 Y=5\nX2\nATRANS X1\nX3\nTRANS\nX4 Y4\n");
+        assert_parity("X1\nTRANS X=IC(5)\nX2\n");
+        // Frame values never position an axis that had no position.
+        assert_parity("TRANS X10 A5\nY1\n");
+        assert_error_parity("TRANS R1=5\n");
+        assert_error_parity("DEF STRING[3] NAME\nTRANS NAME=\"a\"\n");
+        assert_error_parity("ATRANS X=\"a\"\n");
+    }
+
+    #[test]
+    fn rotations() {
+        assert_parity("G1 X1 Y0 Z0\nROT Z90\nX1 Y0\nAROT Z90\nX1\nATRANS X2\nX1\nROT\nX1\n");
+        assert_parity("G1 X1 Y1\nROT RPL=30\nX1 Y1\nAROT\nX2\n");
+        assert_parity("G18\nX1 Z1\nROT RPL=45\nX1 Z1\n");
+        assert_parity("X1 Y1 Z1\nROT X30 Y=10 Z=5+5\nX2\n");
+        assert_parity("X0 Y0\nROT RPL=90\nG2 X1 Y1 I1 J0\n");
+    }
+
+    #[test]
+    fn rotation_errors() {
+        assert_error_parity("ROT X30 RPL=10\n");
+        assert_error_parity("ROT A30\n");
+        assert_error_parity("ROT Z=IC(5)\n");
+        assert_error_parity("ROT Z=\"a\"\n");
+        assert_error_parity("ROT ARR[1]=\"a\"\n");
+        // A STRING variable or string function as an angle fails as a numeric read.
+        assert_error_parity("DEF STRING[3] NAME=\"a\"\nROT Z=NAME\n");
+        assert_error_parity("ROT RPL=SPRINT(\"%D\", 1)\n");
+        // Under a rotation that tilts the arc plane, the end-of-block hook rejects the arc.
+        assert_error_parity("X0 Y0 Z0\nROT X30\nG2 X1 Y1 I1 J0\n");
+    }
+
+    #[test]
+    fn unsupported_frames_and_bare_resets() {
+        for keyword in ["SCALE", "ASCALE", "ROTS", "AROTS", "CROTS", "MIRROR", "AMIRROR"] {
+            assert_error_parity(&format!("{keyword} X2\n"));
+            assert_parity(&format!("X1\nTRANS X5\nROT Z90\nX1\n{keyword}\nX1 Y1\n"));
+        }
     }
 }
