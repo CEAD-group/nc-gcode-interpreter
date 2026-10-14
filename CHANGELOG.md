@@ -4,6 +4,34 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- Programmable frame rotations `ROT` and `AROT`, with `X.. Y.. Z..` angles or
+  the planar form `RPL=`, on top of the existing `TRANS`/`ATRANS` offsets
+  (#68). The geometry axes X, Y, Z are output as machine coordinates under a
+  rotation matrix plus translation (machine = R * local + t); every other axis
+  keeps its plain offset, so programmed A/B/C orientations are never rotated.
+  The semantics follow the Sinumerik frame chapters (NC programming manual
+  3.12.2.1 and 3.12.2.4, Basic Functions manual 4.5.2.3 and 4.5.2.4): `ROT`
+  and `TRANS` are both absolute and each deletes the whole programmable frame,
+  so a `TRANS` after `AROT` drops the rotation and a `ROT` after `TRANS` drops
+  the offset; `AROT` chains onto the current frame; several angles in one
+  block are RPY angles executed Z, then Y', then X'' (MD10600
+  FRAME_ANGLE_INPUT_MODE = 1, the default; the Euler ZX'Z'' mode is out of
+  scope); `RPL` turns about the normal of the active G17/G18/G19 plane;
+  `ATRANS` after a rotation offsets in the rotated system. `IC()` increments
+  stay in local coordinates. G2/G3 arcs (I/J/K and CR forms, TURN) are
+  supported while the rotation keeps the arc plane equal to the machine plane
+  (RPL, or a rotation about the plane normal): the centre offsets are rotated
+  with the frame and the flattener works unchanged. An arc under a rotation
+  that tilts the plane, `RPL=` mixed with axis angles, angles on non-geometry
+  axes, and the still unmodeled `ROTS`/`AROTS`/`CROTS`, `SCALE`/`ASCALE` and
+  `MIRROR`/`AMIRROR` all raise with line context. The final state dict gains a
+  `rotation` entry (row-major 3x3 list); `translation` keeps its meaning. The
+  fast path and the streaming/batch APIs mirror the whole-file interpreter.
+
 ## [v0.2.7] - 2026-09-08
 
 ### Changed
