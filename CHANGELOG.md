@@ -64,6 +64,10 @@ released to PyPI.
   taken at machine 0 (with a warning) from then on, so it can be read with
   `$AA_IM` and appears in the rows.
 
+- `scripts/compare_benchmarks.py` refuses to compare reports recorded on
+  different inputs or, when both were recorded with `--verify-digest`, with
+  differing row counts or output/state digests in any matched case (#76).
+
 ### Fixed
 
 - Flattened `BSPLINE` samples now carry the line number of the control-point

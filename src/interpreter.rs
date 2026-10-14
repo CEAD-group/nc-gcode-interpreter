@@ -48,7 +48,7 @@ pub fn nc_to_table(
     Ok((table, state))
 }
 
-fn build_state(
+pub(crate) fn build_state(
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,

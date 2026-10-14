@@ -1,0 +1,41 @@
+name: Benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      lines:
+        description: Space-separated synthetic line counts
+        default: '100000 400000'
+        required: true
+      samples:
+        description: Warm samples per case
+        default: '5'
+        required: true
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Run correctness gates
+        run: cargo test --features bench-experiments
+      - name: Differential benchmark smoke test
+        run: python scripts/benchmark.py --lines 1000 --shapes flat --edits coordinate parameter insert delete --threads 1 --blocks 64 --samples 1 --verify-digest --output benchmark-smoke.json
+      - name: Record baseline and experiments
+        env:
+          BENCH_LINES: ${{ inputs.lines }}
+          BENCH_SAMPLES: ${{ inputs.samples }}
+        run: python scripts/benchmark.py --lines $BENCH_LINES --samples "$BENCH_SAMPLES" --output benchmark-results.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: |
+            benchmark-results.json
+            benchmark-smoke.json

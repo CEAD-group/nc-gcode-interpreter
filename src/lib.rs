@@ -14,6 +14,10 @@ pub mod output;
 mod state;
 mod structure_scan;
 
+// Unstable research helpers, excluded from normal library/Python builds.
+#[cfg(feature = "bench-experiments")]
+pub use line_driver::experiments;
+
 #[cfg(feature = "python")]
 mod python_bindings {
     use pyo3::exceptions::PyValueError;
