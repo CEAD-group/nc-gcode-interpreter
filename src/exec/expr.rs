@@ -74,8 +74,7 @@ fn read_variable(name: &str, state: &mut State, line_no: usize) -> Result<f64, P
     })
 }
 
-/// Both operands are evaluated, left first, before the operator applies (AND
-/// and OR do not short-circuit in the tree walker either).
+/// Left operand first, then right; AND and OR do not short-circuit, as in the walker.
 fn eval_binary(op: BinaryOp, lhs: &Expr, rhs: &Expr, state: &mut State, line_no: usize) -> Result<f64, ParsingError> {
     let a = eval_expr(lhs, state, line_no)?;
     let b = eval_expr(rhs, state, line_no)?;
@@ -114,8 +113,7 @@ fn eval_binary(op: BinaryOp, lhs: &Expr, rhs: &Expr, state: &mut State, line_no:
     })
 }
 
-/// A fractional, non-finite or out-of-range REAL has no bit pattern; `as i64`
-/// would truncate or saturate it silently.
+/// A fractional, non-finite or huge REAL has no bit pattern; `as i64` would truncate it silently.
 fn bit_operand(value: f64, op: BinaryOp, state: &State, line_no: usize) -> Result<i64, ParsingError> {
     if !value.is_finite() || value.fract() != 0.0 || value.abs() >= 9_007_199_254_740_992.0 {
         return Err(context_error(
@@ -131,8 +129,7 @@ fn bit_operand(value: f64, op: BinaryOp, state: &State, line_no: usize) -> Resul
     Ok(value as i64)
 }
 
-/// `interpret_primary` on a `variable_array`; unlike a plain variable, an
-/// undefined element is `UnknownVariable` and a STRING name is not checked.
+/// `interpret_primary` on a `variable_array`: an undefined element is `UnknownVariable`.
 fn read_element(name: &str, indices: &[ast::Index], state: &mut State, line_no: usize) -> Result<f64, ParsingError> {
     if let Some(value) = read_actual_position(name, indices, state, line_no)? {
         return Ok(value);
@@ -156,20 +153,21 @@ fn read_element(name: &str, indices: &[ast::Index], state: &mut State, line_no: 
     })
 }
 
-/// `read_actual_position_sysvar`: `$AA_IW[<axis>]` is the local coordinate,
-/// `$AA_IM[<axis>]` the machine one. `None` sends any other name or index
-/// shape to the generic element read.
+/// The read-only actual-position variables `$AA_IW` (work) and `$AA_IM` (machine), whatever the index.
+pub(crate) fn is_actual_position_sysvar(name: &str) -> bool {
+    name == "$AA_IW" || name == "$AA_IM"
+}
+
+/// `read_actual_position_sysvar`; `None` sends other names and index shapes to the element read.
 fn read_actual_position(
     name: &str,
     indices: &[ast::Index],
     state: &mut State,
     line_no: usize,
 ) -> Result<Option<f64>, ParsingError> {
-    let work = match name {
-        "$AA_IW" => true,
-        "$AA_IM" => false,
-        _ => return Ok(None),
-    };
+    if !is_actual_position_sysvar(name) {
+        return Ok(None);
+    }
     let [index] = indices else {
         return Ok(None);
     };
@@ -177,7 +175,7 @@ fn read_actual_position(
     if !state.is_axis(&axis) {
         return Ok(None);
     }
-    let value = if work {
+    let value = if name == "$AA_IW" {
         state.get_axis_local(&axis)
     } else {
         state.get_axis_machine(&axis)
@@ -203,9 +201,13 @@ fn read_actual_position(
     ))
 }
 
-/// The last name `interpret_variable_array` builds, without building the
-/// others (a read of `A[100,100]` would build 10,201).
-fn element_key(name: &str, indices: &[ast::Index], state: &mut State, line_no: usize) -> Result<String, ParsingError> {
+/// The element's own name, the last of `element_keys`, without building the others.
+pub(crate) fn element_key(
+    name: &str,
+    indices: &[ast::Index],
+    state: &mut State,
+    line_no: usize,
+) -> Result<String, ParsingError> {
     match eval_indices(indices, state, line_no)?.as_slice() {
         [i] => Ok(format!("{}[{}]", name, *i as i32)),
         [i, j] => Ok(format!("{}[{},{}]", name, *i as i32, *j as i32)),
@@ -220,8 +222,7 @@ fn too_many_indices() -> ParsingError {
     }
 }
 
-/// A function argument the tree walker sees: `function_arguments` yields no
-/// pair for an omitted position.
+/// A function argument as the walker sees it (an omitted position yields no pair).
 #[derive(Clone, Copy)]
 enum ArgRef<'a> {
     Num(&'a Expr),
@@ -280,8 +281,7 @@ fn eval_index_arg(arg: ArgRef, state: &mut State, line_no: usize) -> Result<usiz
     Ok(n as usize)
 }
 
-/// The number-returning string functions (manual 4.1.4), which take their
-/// string arguments as text.
+/// The number-returning string functions (manual 4.1.4); their arguments are taken as text.
 #[derive(Clone, Copy)]
 enum StringQuery {
     Index,
@@ -327,8 +327,7 @@ impl StringFn {
     }
 }
 
-/// `evaluate_arithmetic_function`: every argument is evaluated before the
-/// arity check and before an unknown name is reported, as in the walker.
+/// `evaluate_arithmetic_function`: arguments are evaluated before the arity and name checks.
 fn eval_function(name: &str, args: &[ast::Arg], state: &mut State, line_no: usize) -> Result<f64, ParsingError> {
     let upper = name.to_uppercase();
     if let Some(query) = StringQuery::from_upper(&upper) {
@@ -506,8 +505,7 @@ enum StringSource<'e> {
     Call(StringFn, &'e [ast::Arg]),
 }
 
-/// AST names are uppercased, so `normalize_reserved_case` is the identity on
-/// them and the string table is keyed by the name itself.
+/// AST names are uppercased, so `normalize_reserved_case` would be the identity here.
 fn string_source<'e>(expr: &'e Expr, state: &State) -> Option<StringSource<'e>> {
     match expr {
         Expr::Var(name) => state.string_table.contains_key(name).then_some(StringSource::Var(name)),
@@ -540,8 +538,7 @@ pub(crate) fn eval_expr_string(expr: &ast::Expr, state: &mut State, line_no: usi
     }
 }
 
-/// SUBSTR(<string>, <index>[, <length>]) (manual 4.1.4.7): a start past the
-/// end is empty, an over-long length is clamped.
+/// SUBSTR(<string>, <index>[, <length>]) (manual 4.1.4.7); a start or length past the end clamps.
 fn eval_substr(args: &[ArgRef], state: &mut State, line_no: usize) -> Result<String, ParsingError> {
     if args.len() != 2 && args.len() != 3 {
         return Err(ParsingError::InvalidFunctionArity {
@@ -567,8 +564,7 @@ fn sprint_err(state: &State, line_no: usize, message: String) -> ParsingError {
     context_error(state, line_no, "SPRINT", message)
 }
 
-/// SPRINT(<format>, <value>...) (manual 4.1.4.9): each `%` takes the next
-/// value, `%%` is a literal percent, there are no flags.
+/// SPRINT(<format>, <value>...) (manual 4.1.4.9): printf-like, `%%` is a percent, no flags.
 fn eval_sprint(args: &[ArgRef], state: &mut State, line_no: usize) -> Result<String, ParsingError> {
     let Some((&format_arg, value_args)) = args.split_first() else {
         return Err(sprint_err(state, line_no, "SPRINT needs a format string".to_string()));
@@ -802,8 +798,7 @@ mod tests {
         .map(|(_, state)| state)
     }
 
-    /// The last line of `program` is `NAME=<rhs>`. The lines before it run on
-    /// the default path; the right-hand side is evaluated here.
+    /// Run all but the last line on the default path, then evaluate the last line's right-hand side here.
     fn ours_with(program: &str, opts: &Opts) -> (Outcome, State) {
         let lines: Vec<&str> = program.lines().collect();
         let line_no = lines.len();
@@ -833,8 +828,7 @@ mod tests {
         ours_with(program, opts).0
     }
 
-    /// The default path on `program` plus `suffix`: the value the last line of
-    /// `program` assigned, or the error.
+    /// The default path on `program` plus `suffix`: the value the last line of `program` assigned, or the error.
     fn theirs(program: &str, suffix: &str, opts: &Opts) -> Outcome {
         let last = program.lines().last().expect("a line");
         let name = last.split('=').next().expect("an assignment").trim().to_uppercase();
@@ -981,8 +975,7 @@ mod tests {
         }
     }
 
-    /// Accepted deviation: the AST keeps the operator, not its spelling, so
-    /// the message quotes it uppercase where the walker quotes it as written.
+    /// Accepted deviation: the AST keeps the operator, not its spelling, so the message quotes it uppercase.
     #[test]
     fn lowercase_bit_operator_message_is_uppercase() {
         let program = "R1=1.5 b_and 1";
