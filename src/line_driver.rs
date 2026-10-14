@@ -77,9 +77,9 @@ enum Word<'a> {
         factor: f64,
         incremental: bool,
     },
-    /// A bare identifier that is neither a vocabulary command, a frame or
-    /// reserved keyword, nor a word operator: a parameterless subprogram
-    /// call, stored exactly like `interpret_non_returning_function_call`.
+    /// An identifier that is neither a vocabulary command, a frame or
+    /// reserved keyword, nor a word operator: a subprogram call with optional
+    /// numeric arguments, stored like `interpret_non_returning_function_call`.
     /// `value` preserves the trailing whitespace that pest's span includes;
     /// `typo_warn` mirrors `looks_like_axis_word_typo` and is emitted at
     /// execution time (like the pest path, once per execution, never for
@@ -765,7 +765,7 @@ fn fold_const_expr(line: &str, i: &mut usize) -> Option<f64> {
 /// Byte-level scanner for trivially decodable lines. Conservative: any
 /// construct beyond `N<d>`, `LABEL:`, `LETTER<num>`, `ident=<const expr>`,
 /// `ident=IC(<product>)`, `ident=(<product>)`, `M<d>`, a vocabulary-known
-/// bare keyword, a bare parameterless subprogram call and a trailing comment
+/// bare keyword, a subprogram call with numeric arguments and a trailing comment
 /// rejects the line to the full grammar.
 fn decode_line<'a>(line: &'a str, line_no: usize, arena: &mut Vec<Word<'a>>) -> DecodeResult<'a> {
     // Words are appended to the shared arena as they decode. A line that turns
@@ -954,8 +954,8 @@ fn decode_line_inner<'a>(
                     };
                     arena.push(Word::Assign(key, value));
                 }
-            } else if i < n_len && !(bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b';') {
-                // '(', '[', quotes, operators...: full grammar.
+            } else if i < n_len && !(bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b';' || bytes[i] == b'(') {
+                // '[', quotes and operators require the full grammar.
                 return DecodeResult::NeedsGrammar;
             } else {
                 match classify_g_command(&word.to_uppercase()) {
@@ -993,9 +993,32 @@ fn decode_line_inner<'a>(
                         // optional argument list; replicate it in the value.
                         let mut ws_end = i;
                         skip_ws(&mut ws_end);
+                        let has_args = bytes.get(ws_end) == Some(&b'(');
+                        if has_args {
+                            i = ws_end + 1;
+                            skip_ws(&mut i);
+                            if bytes.get(i) != Some(&b')') {
+                                loop {
+                                    if parse_number(line, &mut i).is_none() {
+                                        return DecodeResult::NeedsGrammar;
+                                    }
+                                    skip_ws(&mut i);
+                                    if bytes.get(i) != Some(&b',') {
+                                        break;
+                                    }
+                                    i += 1;
+                                    skip_ws(&mut i);
+                                }
+                            }
+                            if bytes.get(i) != Some(&b')') {
+                                return DecodeResult::NeedsGrammar;
+                            }
+                            // Argument-bearing spans end at ')', preserving all internal whitespace.
+                            ws_end = i + 1;
+                        }
                         let value = &line[word_start..ws_end];
                         i = ws_end;
-                        let typo_warn = crate::interpret_rules::looks_like_axis_word_typo(word);
+                        let typo_warn = !has_args && crate::interpret_rules::looks_like_axis_word_typo(word);
                         arena.push(Word::Call { value, typo_warn });
                     }
                 }
@@ -1251,6 +1274,67 @@ M30
         let mut output = crate::output::OutputRows::collect();
         let declined = super::interpret_lines(&program, &mut padded, &mut output, &mut state).expect("no error");
         assert!(declined.is_none(), "expected the ratio guard to decline");
+    }
+
+    #[test]
+    fn numeric_subprogram_calls_match_full_parse() {
+        for call in [
+            "SUPPORT_PIN_TRIGGER(2.5)",
+            "support_pin_trigger ( -2.5, 0, 3. )",
+            "CUSTOM()",
+            "CUSTOM ( )",
+            "CUSTOM(1)   ; comment",
+            "CUSTOM(1) OTHER(2)",
+        ] {
+            let line = format!("N20 target: {call}");
+            assert!(matches!(
+                super::decode_line(&line, 2, &mut Vec::new()),
+                super::DecodeResult::Trivial(..)
+            ));
+            assert_paths_agree(&format!("X1\n{line}\nX2"), false);
+        }
+        for call in [
+            "CUSTOM(1+2)",
+            "CUSTOM(unknown)",
+            "CUSTOM(\"text\")",
+            "CUSTOM(,2)",
+            "CUSTOM(1,)",
+            "CUSTOM(1",
+            "CUSTOM(1e3)",
+            "CUSTOM((1))",
+            "CUSTOM(1,,2)",
+            "TRANS(1)",
+            "IF(1)",
+        ] {
+            assert!(matches!(
+                super::decode_line(call, 1, &mut Vec::new()),
+                super::DecodeResult::NeedsGrammar
+            ));
+            assert_paths_agree(&format!("X1\n{call}\nX2"), false);
+        }
+    }
+
+    #[test]
+    fn scattered_numeric_calls_do_not_exhaust_padding_budget() {
+        let mut program = String::new();
+        let mut old_padding_bytes = 0;
+        for index in 0..100_000 {
+            if index % 1000 == 999 {
+                program.push_str("SUPPORT_PIN_TRIGGER(2.5)\n");
+                old_padding_bytes += index;
+            } else {
+                program.push_str("G1 X1 Y2\n");
+            }
+        }
+        assert!(old_padding_bytes > program.len().max(1 << 22));
+        let mut state = crate::state::State::new(vec!["X".to_string(), "Y".to_string()], 200_000, None, false);
+        state.set_input(&program);
+        let mut padded = Vec::new();
+        let mut output = crate::output::OutputRows::collect();
+        let claimed = super::interpret_lines(&program, &mut padded, &mut output, &mut state).unwrap();
+        assert!(claimed.is_some(), "scattered calls must stay on the fast path");
+        assert!(padded.iter().all(String::is_empty));
+        assert_paths_agree(&program, false);
     }
 
     #[test]
