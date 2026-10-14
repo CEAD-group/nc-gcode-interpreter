@@ -120,6 +120,15 @@ def test_concat_prefix_form_is_accepted_in_function_arguments():
     assert state["symbol_table"]["R2"] == 3.0
 
 
+def test_deeply_nested_function_calls_parse_in_linear_time():
+    """Regression (#78): each function argument is parsed once. Trying a `<<`
+    chain before a plain expression re-parsed every nested argument (4^n), so
+    a 24-level call would not finish; it must be instant."""
+    program = "R1 = " + "SIN(" * 24 + "0" + ")" * 24 + "\n"
+    _df, state = nc_to_dataframe(program)
+    assert state["symbol_table"]["R1"] == 0.0
+
+
 def test_unknown_system_variable_in_string_argument_is_loud():
     """There is no machine-data model: reading an unknown `$`-variable where a
     string is expected names the variable and the line, never a silent empty

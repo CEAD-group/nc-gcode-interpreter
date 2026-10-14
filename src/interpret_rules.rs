@@ -309,7 +309,7 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
     // some arguments as text, so they are dispatched from the raw pairs before
     // the numeric arguments below are evaluated (a string argument evaluated as
     // a number would error).
-    let raw_args: Vec<Pair<Rule>> = args_pair.into_inner().collect();
+    let raw_args: Vec<Pair<Rule>> = args_pair.into_inner().map(unwrap_lone_operand).collect();
     let func_upper = func_name.as_str().to_uppercase();
     match func_upper.as_str() {
         // Number-returning string functions (manual 4.1.4): evaluate their
@@ -791,6 +791,7 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
 
     let expression_pair = inner_pairs
         .next()
+        .map(unwrap_lone_operand)
         .ok_or_else(|| ParsingError::InvalidElementCount { expected: 2, actual: 1 })?;
 
     // A string-valued right-hand side: a quoted literal, a `<<` concatenation,
@@ -1008,6 +1009,23 @@ fn interpret_string_char_write(
 // `evaluate_arithmetic_function` through `evaluate_string_query_function`.
 // ---------------------------------------------------------------------------
 
+/// A `string_expression` is one operand with zero or more `<<` links, parsed
+/// once. Without a link, hand back the operand itself (the expression or
+/// quoted string) so callers see the usual tokens. The prefix form `<< X`
+/// keeps its chain: its operand starts after the chain does.
+fn unwrap_lone_operand(pair: Pair<Rule>) -> Pair<Rule> {
+    if pair.as_rule() != Rule::string_expression {
+        return pair;
+    }
+    let mut operands = pair.clone().into_inner();
+    match (operands.next(), operands.next()) {
+        (Some(operand), None) if operand.as_span().start() == pair.as_span().start() => {
+            operand.into_inner().next().expect("concat_operand has one child")
+        }
+        _ => pair,
+    }
+}
+
 /// True when a `Rule::expression` right-hand side actually yields a string: a
 /// bare STRING-variable read, or a string-returning function (SPRINT/SUBSTR).
 /// Anything with an operator, or the number-returning string functions, is
@@ -1131,7 +1149,10 @@ fn evaluate_string_function(arith_fun: Pair<Rule>, state: &mut State) -> Result<
     let (line_no, preview) = get_error_context(&arith_fun, state);
     let mut pairs = arith_fun.into_inner();
     let name = pairs.next().map(|n| n.as_str().to_uppercase()).unwrap_or_default();
-    let raw_args: Vec<Pair<Rule>> = pairs.next().map(|a| a.into_inner().collect()).unwrap_or_default();
+    let raw_args: Vec<Pair<Rule>> = pairs
+        .next()
+        .map(|a| a.into_inner().map(unwrap_lone_operand).collect())
+        .unwrap_or_default();
     match name.as_str() {
         "SPRINT" => evaluate_sprint(&raw_args, state, line_no, &preview),
         "SUBSTR" => evaluate_substr(&raw_args, state, line_no, &preview),

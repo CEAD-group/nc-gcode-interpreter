@@ -143,21 +143,14 @@ indices        = { expression ~ ("," ~ expression)* }
 assignment     = {
     (variable_single_char ~ value) // variable must be an axis
 
-  | (variable ~ "=" ~ axis_increment) // variable must be an axis, and may be a normal variable. Sort it out after parsing
+  // The variable may be an axis or a normal variable; sorted out after parsing.
+  // One rule for every right-hand side (expression, quoted string, << chain)
+  // so it is parsed once: separate alternatives parsed it twice (#78).
+  | (variable ~ "=" ~ (axis_increment | string_expression))
 
-  // A string concatenation (`<<`) must be tried before `expression`/`string_value`:
-  // those would each match only the first operand and leave `<< ...` dangling.
-  | (variable ~ "=" ~ string_expression) // string variable built with << (manual 4.1.4)
-
-  | (variable ~ "=" ~ expression) // variable may be an axis, and may be a normal variable. Sort it out after parsing
-
-  | (variable ~ "=" ~ string_value) // string variable (DEF STRING or reassignment); never an axis
-
-  | (variable_array ~ "=" ~ string_expression) // string-valued array element (never an axis)
-
-  | (variable_array ~ "=" ~ expression) // variable may not be an axis
-
-  | (variable_array ~ "=" ~ string_value) // single-character write into a STRING variable: STRING[<index>] = "<char>" (manual 4.1.4.8)
+  // Never an axis: a numeric or string element, or the single-character write
+  // STRING[<index>] = "<char>" (manual 4.1.4.8).
+  | (variable_array ~ "=" ~ string_expression)
 }
 axis_increment = { ^"IC" ~ "(" ~ expression ~ ")" }
 // A quoted string. Compound-atomic ($): no implicit WHITESPACE is skipped
@@ -165,15 +158,15 @@ axis_increment = { ^"IC" ~ "(" ~ expression ~ ")" }
 // by INDEX in real date-formatting code) keeps its content instead of being
 // eaten by the WHITESPACE rule. The inner `string` pair still surfaces.
 string_value   = ${ QUOTE ~ string ~ QUOTE }
-// String concatenation with the link operator `<<` (manual 4.1.4): joins
-// quoted strings, STRING variables, string functions (SPRINT/SUBSTR) and
-// numbers (converted to text) into one string. Requires at least one `<<` so
-// a lone string or expression still matches the simpler rules. Each operand is
-// a quoted string or a full (numeric or string-returning) expression; `<<` is
-// not an expression operator, so `expression` stops at the next `<<`.
-// The left operand is optional: a lone `<< <any_type>` is the implicit
-// conversion to STRING (manual 4.1.4.1), as in `MATCH(STR, <<NAME)`.
-string_expression = { concat_operand? ~ ("<<" ~ concat_operand)+ }
+// An operand with zero or more `<<` links (manual 4.1.4). The link operator
+// joins quoted strings, STRING variables, SPRINT/SUBSTR results and numbers
+// (converted to text); it is not an expression operator, so `expression`
+// stops at the next `<<`. Zero links are allowed so an operand is parsed
+// once (the interpreter unwraps a lone one): trying a chain before a plain
+// expression parsed every operand twice, 4^n for nested calls (#78).
+// A missing left operand (`<< X`) is the implicit conversion to STRING
+// (manual 4.1.4.1), as in `MATCH(STR, <<NAME)`.
+string_expression = { (concat_operand ~ ("<<" ~ concat_operand)*) | ("<<" ~ concat_operand)+ }
 concat_operand    = { string_value | expression }
 
 assignment_multi =  { variable_array ~ "=" ~ (value_array | value_repeating) }
@@ -236,10 +229,12 @@ frame_kw = @{
 
 // function call parser
 non_returning_function_call =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }
-// An argument is a `<<` concatenation, an expression or a quoted string. The
-// concatenation is tried first: a plain expression stops at the first `<<`.
-function_arguments          =  { (function_argument? ~ ",")* ~ function_argument }
-function_argument           = _{ string_expression | expression | string_value }
+// Arguments may be left empty (`CYCLE(1,,3)`) except the last one. Each one
+// is parsed once: `(argument? ~ ",")* ~ argument` parsed the last argument
+// twice, doubling the work at every nesting level (#78).
+function_arguments          =  { ","* ~ function_argument ~ ("," ~ ","* ~ function_argument)* }
+// An expression, a quoted string or a `<<` concatenation (see string_expression).
+function_argument           = _{ string_expression }
 // Atomic body: a maximal run of non-quote characters, taken verbatim with no
 // WHITESPACE skipping (may be empty for ""). Its quote wrapper (string_value)
 // is compound-atomic, so leading/trailing/only-whitespace content survives.

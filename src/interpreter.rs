@@ -1127,6 +1127,17 @@ mod tests {
         assert_eq!(s.string_table["STR"], "5");
     }
 
+    /// Regression (#78): every function argument is parsed once. Trying a
+    /// `<<` chain before a plain expression, and the argument list re-parsing
+    /// its last element, made nested calls cost 4^n; this 24-level call would
+    /// not finish. It must evaluate instantly.
+    #[test]
+    fn deeply_nested_function_calls_parse_in_linear_time() {
+        let program = format!("R1 = {}0{}\n", "SIN(".repeat(24), ")".repeat(24));
+        let s = string_state(&program);
+        assert_eq!(s.symbol_table["R1"], 0.0);
+    }
+
     /// There is no machine-data model: reading an unknown `$`-variable in a
     /// string argument errors with the variable name and the line instead of
     /// silently becoming an empty string.

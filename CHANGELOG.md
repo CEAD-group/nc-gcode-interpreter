@@ -33,6 +33,9 @@ released to PyPI.
 - A quoted string passed to a numeric function (`SIN("abc")`) was silently
   dropped from the argument list and surfaced as an arity error; it is now a
   type error naming the string.
+- Nested function calls parse in linear time: each function argument, and
+  each assignment right-hand side, is parsed once instead of once per grammar
+  alternative, so a deeply nested `SIN(SIN(...))` is instant (#78).
 
 ## [v0.2.7] - 2026-09-08
 
