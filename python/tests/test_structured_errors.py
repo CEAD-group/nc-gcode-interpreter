@@ -89,3 +89,22 @@ def test_axis_used_as_variable_carries_location():
     assert e.kind == "axis_used_as_variable"
     assert e.line == 1
     assert e.line_text is not None and "X" in e.line_text
+
+
+def test_glued_statements_report_the_second_statement_position():
+    # Two DEFs with no separator on one line (#58) is malformed source. The
+    # error names the trailing text and points at the column where the second
+    # statement starts, on both the line and the whole-file parse paths.
+    line = "DEF REAL POSE[6] = SET(0,-20,-110,0,0,0)DEF INT COUNT = 8"
+    for program, context in [
+        (f"G1 X1\n{line}\nG1 X2\n", "line parsing"),
+        (f"G1 X1\n{line}\nIF COUNT == 8\nG1 X2\nENDIF\n", "initial file parsing"),
+    ]:
+        with pytest.raises(NcError) as exc:
+            nc_to_dataframe(program)
+        e = exc.value
+        assert (e.line, e.column) == (2, 41)
+        assert e.line_text == line
+        assert e.context == context
+        assert "unexpected text 'DEF INT COUNT = 8'" in str(e)
+        assert "own line" in str(e)

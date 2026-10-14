@@ -309,12 +309,12 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
     // some arguments as text, so they are dispatched from the raw pairs before
     // the numeric arguments below are evaluated (a string argument evaluated as
     // a number would error).
-    let raw_args: Vec<Pair<Rule>> = args_pair.into_inner().collect();
+    let raw_args: Vec<Pair<Rule>> = args_pair.into_inner().map(unwrap_lone_operand).collect();
     let func_upper = func_name.as_str().to_uppercase();
     match func_upper.as_str() {
         // Number-returning string functions (manual 4.1.4): evaluate their
         // string argument as text, not as a numeric expression.
-        "INDEX" | "RINDEX" | "NUMBER" | "STRLEN" | "ISNUMBER" => {
+        "INDEX" | "RINDEX" | "MINDEX" | "MATCH" | "NUMBER" | "STRLEN" | "ISNUMBER" => {
             return evaluate_string_query_function(&func_upper, &raw_args, state, line_no, &preview);
         }
         // String-returning functions have no meaning where a number is wanted.
@@ -329,12 +329,11 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
         _ => {}
     }
 
-    // Numeric arguments (quoted-string arguments cannot appear for these).
+    // Numeric arguments; a string argument is a loud type error, not a
+    // silently dropped operand.
     let mut args = Vec::new();
     for arg in &raw_args {
-        if arg.as_rule() == Rule::expression {
-            args.push(evaluate_expression(arg.clone(), state)?);
-        }
+        args.push(eval_number_arg(arg, state, line_no, &preview)?);
     }
 
     // Helper to validate argument count
@@ -792,6 +791,7 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
 
     let expression_pair = inner_pairs
         .next()
+        .map(unwrap_lone_operand)
         .ok_or_else(|| ParsingError::InvalidElementCount { expected: 2, actual: 1 })?;
 
     // A string-valued right-hand side: a quoted literal, a `<<` concatenation,
@@ -1005,9 +1005,26 @@ fn interpret_string_char_write(
 // The numeric evaluator stays f64-only; string handling is a parallel path that
 // meets the numeric one at two seams: string-returning functions (SPRINT,
 // SUBSTR) evaluate here, and number-returning string functions (INDEX, RINDEX,
-// NUMBER, STRLEN, ISNUMBER) are dispatched from `evaluate_arithmetic_function`
-// through `evaluate_string_query_function`.
+// MINDEX, MATCH, NUMBER, STRLEN, ISNUMBER) are dispatched from
+// `evaluate_arithmetic_function` through `evaluate_string_query_function`.
 // ---------------------------------------------------------------------------
+
+/// A `string_expression` is one operand with zero or more `<<` links, parsed
+/// once. Without a link, hand back the operand itself (the expression or
+/// quoted string) so callers see the usual tokens. The prefix form `<< X`
+/// keeps its chain: its operand starts after the chain does.
+fn unwrap_lone_operand(pair: Pair<Rule>) -> Pair<Rule> {
+    if pair.as_rule() != Rule::string_expression {
+        return pair;
+    }
+    let mut operands = pair.clone().into_inner();
+    match (operands.next(), operands.next()) {
+        (Some(operand), None) if operand.as_span().start() == pair.as_span().start() => {
+            operand.into_inner().next().expect("concat_operand has one child")
+        }
+        _ => pair,
+    }
+}
 
 /// True when a `Rule::expression` right-hand side actually yields a string: a
 /// bare STRING-variable read, or a string-returning function (SPRINT/SUBSTR).
@@ -1132,7 +1149,10 @@ fn evaluate_string_function(arith_fun: Pair<Rule>, state: &mut State) -> Result<
     let (line_no, preview) = get_error_context(&arith_fun, state);
     let mut pairs = arith_fun.into_inner();
     let name = pairs.next().map(|n| n.as_str().to_uppercase()).unwrap_or_default();
-    let raw_args: Vec<Pair<Rule>> = pairs.next().map(|a| a.into_inner().collect()).unwrap_or_default();
+    let raw_args: Vec<Pair<Rule>> = pairs
+        .next()
+        .map(|a| a.into_inner().map(unwrap_lone_operand).collect())
+        .unwrap_or_default();
     match name.as_str() {
         "SPRINT" => evaluate_sprint(&raw_args, state, line_no, &preview),
         "SUBSTR" => evaluate_substr(&raw_args, state, line_no, &preview),
@@ -1146,8 +1166,9 @@ fn evaluate_string_function(arith_fun: Pair<Rule>, state: &mut State) -> Result<
 }
 
 /// Number-returning string functions dispatched from the numeric evaluator:
-/// INDEX, RINDEX, NUMBER, STRLEN, ISNUMBER (manual 4.1.4). All string indices
-/// are 0-based; the search family returns -1 when the character is not found.
+/// INDEX, RINDEX, MINDEX, MATCH, NUMBER, STRLEN, ISNUMBER (manual 4.1.4). All
+/// string indices are 0-based; the search family returns -1 when the
+/// character or string is not found.
 fn evaluate_string_query_function(
     name: &str,
     raw_args: &[Pair<Rule>],
@@ -1182,6 +1203,36 @@ fn evaluate_string_query_function(
                 chars.iter().position(|&c| c == target)
             } else {
                 chars.iter().rposition(|&c| c == target)
+            };
+            Ok(pos.map(|p| p as f64).unwrap_or(-1.0))
+        }
+        // MINDEX(<string>, <list>): position of the first character of <string>
+        // that occurs in <list> (manual 4.1.4.6). The list is taken character by
+        // character; its example list "M,N,O,P" therefore includes the commas.
+        "MINDEX" => {
+            if raw_args.len() != 2 {
+                return Err(arity(2));
+            }
+            let haystack = evaluate_string(raw_args[0].clone(), state)?;
+            let list: Vec<char> = evaluate_string(raw_args[1].clone(), state)?.chars().collect();
+            let pos = haystack.chars().position(|c| list.contains(&c));
+            Ok(pos.map(|p| p as f64).unwrap_or(-1.0))
+        }
+        // MATCH(<string>, <search>): position of the first occurrence of
+        // <search> as a substring (manual 4.1.4.6). An empty search string
+        // occurs at position 0, as with C's strstr.
+        "MATCH" => {
+            if raw_args.len() != 2 {
+                return Err(arity(2));
+            }
+            let haystack: Vec<char> = evaluate_string(raw_args[0].clone(), state)?.chars().collect();
+            let needle: Vec<char> = evaluate_string(raw_args[1].clone(), state)?.chars().collect();
+            let pos = if needle.is_empty() {
+                Some(0)
+            } else {
+                haystack
+                    .windows(needle.len())
+                    .position(|window| window == needle.as_slice())
             };
             Ok(pos.map(|p| p as f64).unwrap_or(-1.0))
         }
