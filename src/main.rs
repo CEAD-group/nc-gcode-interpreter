@@ -8,6 +8,7 @@ use std::io::{self};
 
 mod errors;
 mod flatten;
+mod frame;
 mod interpret_rules;
 mod interpreter;
 mod line_driver;

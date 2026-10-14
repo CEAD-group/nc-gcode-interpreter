@@ -52,7 +52,7 @@ def nc_to_batches(
     """Interpret an NC program into an iterator of columnar polars DataFrames.
 
     The returned iterator exposes ``state`` (dict with ``axes``,
-    ``symbol_table``, ``translation`` and ``string_table``) once exhausted, and
+    ``symbol_table``, ``translation``, ``rotation`` and ``string_table``) once exhausted, and
     - when ``include_variables`` is set - ``variable_events`` (an Arrow batch of
     ``row_idx`` / ``name_id`` / ``value``) and ``variable_names`` (list[str]).
     """

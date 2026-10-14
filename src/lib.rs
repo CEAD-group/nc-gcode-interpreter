@@ -5,6 +5,7 @@ mod types;
 
 mod errors;
 pub mod flatten;
+mod frame;
 mod interpret_rules;
 pub mod interpreter;
 mod line_driver;
@@ -119,7 +120,7 @@ mod python_bindings {
     }
 
     /// Render a [`FinalState`] as the Python `.state` dict:
-    /// `{axes, symbol_table, translation, string_table}`. The three numeric
+    /// `{axes, symbol_table, translation, rotation, string_table}`. The three numeric
     /// sub-tables become `dict[str, float]`; `string_table` (DEF STRING
     /// variables) becomes `dict[str, str]`. Shared by both iterators.
     fn final_state_to_py<'py>(py: Python<'py>, state: &FinalState) -> PyResult<Bound<'py, PyDict>> {
@@ -127,6 +128,9 @@ mod python_bindings {
         dict.set_item("axes", state.axes.clone())?;
         dict.set_item("symbol_table", state.symbol_table.clone())?;
         dict.set_item("translation", state.translation.clone())?;
+        // Row-major 3x3: machine XYZ = rotation * local XYZ + translation.
+        let rotation: Vec<Vec<f64>> = state.rotation.iter().map(|row| row.to_vec()).collect();
+        dict.set_item("rotation", rotation)?;
         dict.set_item("string_table", state.string_table.clone())?;
         Ok(dict)
     }
@@ -470,7 +474,7 @@ mod python_bindings {
         }
 
         /// The final interpreter state
-        /// (`{axes, symbol_table, translation, string_table}`), available once
+        /// (`{axes, symbol_table, translation, rotation, string_table}`), available once
         /// the iterator is exhausted.
         #[getter]
         fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
@@ -626,7 +630,7 @@ mod python_bindings {
         }
 
         /// The final interpreter state
-        /// (`{axes, symbol_table, translation, string_table}`), available once
+        /// (`{axes, symbol_table, translation, rotation, string_table}`), available once
         /// the iterator is exhausted.
         #[getter]
         fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {

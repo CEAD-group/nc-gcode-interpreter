@@ -11,7 +11,7 @@ The **NC-GCode-Interpreter** offers a streamlined and efficient solution for int
 ### Supported G-code Features
 
 - **G Group Commands**: Recognizes G-code groups and modal G-code commands.
-- **Global Transformations**: Supports commands like `TRANS` and `ATRANS` for adjusting coordinates globally.
+- **Programmable frames**: `TRANS`/`ATRANS` work offsets and `ROT`/`AROT` rotations (`X.. Y.. Z..` RPY angles or `RPL=` in the active plane) for the geometry axes X, Y, Z; output coordinates are machine coordinates with the frame applied, and the final state reports the `translation` and `rotation`.
 - **Looping Constructs**: Handles loops using `WHILE`, `FOR`, `REPEAT ... UNTIL` and `LOOP ... ENDLOOP` statements.
 - **Variable Handling**: Supports definition and manipulation of local variables.
 - **Conditional Logic**: Implements conditional execution with `IF`, `ELSE`, and `ENDIF`.

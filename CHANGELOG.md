@@ -6,7 +6,115 @@ released to PyPI.
 
 ## [Unreleased]
 
+### Added
+
+- `MATCH` and `MINDEX` string search functions (manual 4.1.4.6), next to
+  `INDEX`/`RINDEX`: `MATCH` returns the 0-based position of a substring,
+  `MINDEX` that of the first character found in a character list; both return
+  `-1` when nothing matches (#64).
+
+- The `<<` operator is accepted in function-argument position, including the
+  prefix form with no left operand, which is the implicit conversion to STRING
+  (manual 4.1.4.1). Real programs write `MATCH(<machine data>, <<NAME)` in an
+  IF condition; that line used to be a parse error (#64).
+
+- Programmable frame rotations `ROT` and `AROT`, with `X.. Y.. Z..` angles or
+  the planar form `RPL=`, on top of the existing `TRANS`/`ATRANS` offsets
+  (#68). The geometry axes X, Y, Z are output as machine coordinates under a
+  rotation matrix plus translation (machine = R * local + t); every other axis
+  keeps its plain offset, so programmed A/B/C orientations are never rotated.
+  The semantics follow the Sinumerik frame chapters (NC programming manual
+  3.12.2.1 and 3.12.2.4, Basic Functions manual 4.5.2.3 and 4.5.2.4): `ROT`
+  and `TRANS` are both absolute and each deletes the whole programmable frame,
+  so a `TRANS` after `AROT` drops the rotation and a `ROT` after `TRANS` drops
+  the offset; `AROT` chains onto the current frame; several angles in one
+  block are RPY angles executed Z, then Y', then X'' (MD10600
+  FRAME_ANGLE_INPUT_MODE = 1, the default; the Euler ZX'Z'' mode is out of
+  scope); `RPL` turns about the normal of the active G17/G18/G19 plane;
+  `ATRANS` after a rotation offsets in the rotated system. `IC()` increments
+  stay in local coordinates. G2/G3 arcs (I/J/K and CR forms, TURN) are
+  supported while the rotation keeps the arc plane equal to the machine plane
+  (RPL, or a rotation about the plane normal): the centre offsets are rotated
+  with the frame and the flattener works unchanged. An arc under a rotation
+  that tilts the plane, `RPL=` mixed with axis angles, angles on non-geometry
+  axes, and the still unmodeled `ROTS`/`AROTS`/`CROTS`, `SCALE`/`ASCALE` and
+  `MIRROR`/`AMIRROR` all raise with line context. The final state dict gains a
+  `rotation` entry (row-major 3x3 list); `translation` keeps its meaning. The
+  fast path and the streaming/batch APIs mirror the whole-file interpreter.
+
+### Changed
+
+- The fast path builds its jump-target index (one `N:` key per block number,
+  one `LABEL:` key per label) only when a grammar-bound line mentions GOTO.
+  Trivial lines can never carry a jump, so a program without one skips the
+  allocation entirely; a GOTO inside a comment merely builds an unused index.
+  About 40 % less time on a 400k-line straight-line program (#73).
+
+- A frame instruction no longer moves the interpreted position. `TRANS`,
+  `ATRANS`, `ROT` and `AROT` hold the machine position of every positioned
+  axis and re-derive its local (workpiece) coordinate under the new frame, as
+  a control does when a frame becomes active (Basic Functions manual 4.5.11:
+  `$AA_IM` is the machine setpoint, `$AA_IW` the workpiece one). So a block
+  after the frame change that programs only some axes moves the others only
+  through the rotation, `$AA_IM` agrees with the output rows, `$AA_IW` reports
+  the re-derived value, and an `IC()` increment after a `TRANS` moves from the
+  current position (NC programming manual 3.1.1.5) instead of jumping by the
+  offset; `examples/trans2.csv` changes accordingly. A geometry axis that a
+  rotation couples to a positioned axis before any block positioned it is
+  taken at machine 0 (with a warning) from then on, so it can be read with
+  `$AA_IM` and appears in the rows.
+
+- The fast path builds its jump-target index (one `N:` key per block number,
+  one `LABEL:` key per label) only when a grammar-bound line mentions GOTO.
+  Trivial lines can never carry a jump, so a program without one skips the
+  allocation entirely; a GOTO inside a comment merely builds an unused index.
+  About 40 % less time on a 400k-line straight-line program (#73).
+
+- `scripts/compare_benchmarks.py` refuses to compare reports recorded on
+  different inputs or, when both were recorded with `--verify-digest`, with
+  differing row counts or output/state digests in any matched case (#76).
+
 ### Fixed
+
+- Flattened `BSPLINE` samples now carry the line number of the control-point
+  block they belong to, instead of all carrying the last control point's line.
+  `ASPLINE`/`CSPLINE` and G2/G3 already attributed their samples per segment,
+  so a simulator that highlights the executing line from `line_no` stuck on
+  one line for a B-spline and walked through the control-point lines for
+  every other curve. The curve is now split at the Greville abscissae of the
+  clamped knot vector: a sample belongs to the first control point whose
+  Greville abscissa is at or beyond the sample's parameter, the last control
+  point taking the remainder. Between its Greville abscissae a control point
+  is the one with the most influence on the curve, and for degree 1 the rule
+  reduces to the polyline segment ending at each programmed point. The
+  sampled geometry is unchanged (same coordinates, order and count), only the
+  `line_no` distribution changes: the auxiliary cells of a control-point
+  block (feed, M codes, comments) now ride on its first sample, and a block
+  that owns samples no longer emits an aux-only placeholder row. Only the
+  curve end stays a programmed position; every other sample keeps
+  `flattened = 1`. The checked-in `examples/flattening/flatten_demo_flattened.csv`
+  is regenerated accordingly (#62).
+
+- Two statements glued onto one line with no separator (`... = SET(...)DEF INT
+  ...`, a copy-paste defect seen in a real program) are still rejected, but
+  the error now names the trailing text and points at the column where the
+  second statement starts, instead of "expected the end of the program". The
+  INDEX-based single-character write from the same report has worked since
+  v0.2.6 and is now pinned by a test (#58).
+
+- Reading an array element or indexed system variable that was never assigned
+  reported "Invalid array index ... used as an array index"; the message now
+  says the element is undefined and how to supply it. It still names the
+  variable and the line, so an unknown string-typed machine data in a string
+  argument is a loud error rather than a silent empty string (#64).
+
+- A quoted string passed to a numeric function (`SIN("abc")`) was silently
+  dropped from the argument list and surfaced as an arity error; it is now a
+  type error naming the string.
+
+- Nested function calls parse in linear time: each function argument, and
+  each assignment right-hand side, is parsed once instead of once per grammar
+  alternative, so a deeply nested `SIN(SIN(...))` is instant (#78).
 
 - The line fast path no longer declines whole programs because a few hundred
   grammar-bound lines (procedure calls such as `SUPPORT_PIN_TRIGGER(2.5)`,
@@ -26,16 +134,23 @@ released to PyPI.
   program with about 12,000 such lines the Python batch API went from 24.3 s
   and 3.0 GiB peak RSS (whole-file parse) to 2.2 s and 1.3 GiB.
 
-### Changed
-
-- The fast path builds its jump-target index (one `N:` key per block number,
-  one `LABEL:` key per label) only when a grammar-bound line mentions GOTO.
-  Trivial lines can never carry a jump, so a program without one skips the
-  allocation entirely; a GOTO inside a comment merely builds an unused index.
-  About 40 % less time on a 400k-line straight-line program (#73).
-- `scripts/compare_benchmarks.py` refuses to compare reports recorded on
-  different inputs or, when both were recorded with `--verify-digest`, with
-  differing row counts or output/state digests in any matched case (#76).
+- The line fast path no longer declines whole programs because a few hundred
+  grammar-bound lines (procedure calls such as `SUPPORT_PIN_TRIGGER(2.5)`,
+  `MATERIAL_UPDATE`, `R1=R1+1`, `STOPRE`) are spread through a large file
+  (#69). Grammar-bound lines used to be parsed one at a time, each padded with
+  one newline per preceding line so that pest reported whole-file positions;
+  the padding cost O(line index) bytes per line, and a budget guard sent any
+  program over it to the whole-file parse. The grammar-bound lines are now
+  parsed in one pest run over a sparse copy of the program (only those lines
+  keep their text, every other line is empty), which gives the same whole-file
+  positions at O(input) bytes. The budget guard, the padded buffers and the
+  grammar-line ratio guard are gone: a program that is entirely grammar-bound
+  now costs the same as the whole-file parse (measured equal at 100k and 400k
+  lines), so every structure-free program takes the line path and the
+  whole-file parse is only used for programs with IF/WHILE/FOR/LOOP/REPEAT
+  blocks. On a 112 MB, 1.28M-line CAM
+  program with about 12,000 such lines the Python batch API went from 24.3 s
+  and 3.0 GiB peak RSS (whole-file parse) to 2.2 s and 1.3 GiB.
 
 ## [v0.2.7] - 2026-09-08
 

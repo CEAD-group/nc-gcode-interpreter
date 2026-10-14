@@ -304,7 +304,8 @@ fn exec_block<'i>(block: Pair<'i, Rule>, output: &mut Output, state: &mut State)
             message: format!("Expected a block, found {:?}", block.as_rule()),
         });
     }
-    output.start_row(block.line_col().0)?;
+    let line_no = block.line_col().0;
+    output.start_row(line_no)?;
 
     // Mirror `interpret_block`: process EVERY item, letting the control-flow
     // signal accumulate (last write wins, like `flow = interpret_control(...)`),
@@ -312,9 +313,11 @@ fn exec_block<'i>(block: Pair<'i, Rule>, output: &mut Output, state: &mut State)
     // still lands on the row. A *structured* control opens a body scope and must
     // suspend block processing, so it returns `Enter` immediately.
     let mut flow = BlockFlow::Continue;
+    let mut had_statements = false;
     for item in block.into_inner() {
         match item.as_rule() {
             Rule::statement => {
+                had_statements = true;
                 if let BlockFlow::EndProgram = interpret_statement(item, output, state)? {
                     flow = BlockFlow::EndProgram;
                 }
@@ -342,6 +345,11 @@ fn exec_block<'i>(block: Pair<'i, Rule>, output: &mut Output, state: &mut State)
                 });
             }
         }
+    }
+    // Same end-of-block frame hook as interpret_block (arc words under a rotation).
+    if had_statements {
+        let last = output.last_mut().expect("row started");
+        state.finish_block_frame(last, line_no)?;
     }
     Ok(match flow {
         BlockFlow::Continue => Step::Continue,

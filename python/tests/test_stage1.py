@@ -27,6 +27,7 @@ def run_both(program, **kwargs):
     assert full_state["symbol_table"] == fast_state["symbol_table"]
     assert full_state["axes"] == fast_state["axes"]
     assert full_state["translation"] == fast_state["translation"]
+    assert full_state["rotation"] == fast_state["rotation"]
     return fast_df
 
 
@@ -70,6 +71,12 @@ def run_both(program, **kwargs):
         "R1=10\nX=5 DIV R1\nX=5 MOD R1",
         # lines the decoder must reject to pest, mixed with claimed ones
         "DEF REAL DEPTH=2.5\nX=DEPTH\nTRANS X10\nX1\nTRANS\nX2",
+        # frame rotations: the ROT/AROT lines go to pest, the moves after them
+        # through the fast path, which must rotate them identically
+        "G1 X0 Y0 Z0\nTRANS X10 Y20\nAROT Z90\nG1 X1 Y0\nX2 Y3 Z1\nX=IC(1)",
+        "G1 X0 Y0 Z0 F100\nAROT RPL=30\nG2 X10 Y0 I5 J0\nG1 X0 Y0\nG3 X10 Y0 CR=5",
+        "G1 X0 Y0 Z0\nAROT Y90\nX1 Y2 Z3 A4\nATRANS X5\nX1\nROT\nX1",
+        "G18\nG1 X0 Y0 Z0\nAROT RPL=90\nX1\nG17\nZ1",
         "R1=1+2\nX=R1*3\nY=SIN(30)\nZ=IC(5)",
         "T=\"drill\"\nX1\nT5",
         "x100\nX100",  # lowercase bare word is a call, uppercase an axis move

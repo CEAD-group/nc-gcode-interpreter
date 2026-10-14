@@ -75,9 +75,9 @@ enum Word<'a> {
         factor: f64,
         incremental: bool,
     },
-    /// A bare identifier that is neither a vocabulary command, a frame or
-    /// reserved keyword, nor a word operator: a parameterless subprogram
-    /// call, stored exactly like `interpret_non_returning_function_call`.
+    /// An identifier that is neither a vocabulary command, a frame or
+    /// reserved keyword, nor a word operator: a subprogram call with optional
+    /// numeric arguments, stored like `interpret_non_returning_function_call`.
     /// `value` preserves the trailing whitespace that pest's span includes;
     /// `typo_warn` mirrors `looks_like_axis_word_typo` and is emitted at
     /// execution time (like the pest path, once per execution, never for
@@ -348,9 +348,9 @@ fn execute_decoded(
             Word::Assign(key, value) => {
                 match state.resolve_output_key(key) {
                     Some((ColKind::Axis, skey)) => {
-                        let machine_value = state.update_axis(skey, *value)?;
+                        state.update_axis(skey, *value)?;
                         let last = output.last_mut().expect("row was just pushed");
-                        last.insert(skey, Value::Float(machine_value));
+                        state.insert_machine_axis(skey, *value, last);
                     }
                     Some((ColKind::Block, skey)) => {
                         let last = output.last_mut().expect("row was just pushed");
@@ -437,9 +437,9 @@ fn execute_decoded(
                 match state.resolve_output_key(key) {
                     Some((ColKind::Axis, skey)) => {
                         let local_value = increment_local(state, skey, value);
-                        let machine_value = state.update_axis(skey, local_value)?;
+                        state.update_axis(skey, local_value)?;
                         let last = output.last_mut().expect("row was just pushed");
-                        last.insert(skey, Value::Float(machine_value));
+                        state.insert_machine_axis(skey, local_value, last);
                     }
                     Some((ColKind::Block, skey)) => {
                         let local_value = increment_local(state, skey, value);
@@ -468,9 +468,14 @@ fn execute_decoded(
                 last.insert("non_returning_function_call", Value::Str(value.to_string()));
             }
             Word::GCommand(group, as_written) => {
-                let last = output.last_mut().expect("row was just pushed");
                 // Uppercase like the grammar path: g2 IS G2.
-                last.insert(group, Value::Str(as_written.to_uppercase()));
+                let code = as_written.to_uppercase();
+                // The plane feeds the frame model, exactly as interpret_g_command does.
+                if *group == "gg06_plane_select" {
+                    state.set_plane(&code);
+                }
+                let last = output.last_mut().expect("row was just pushed");
+                last.insert(group, Value::Str(code));
             }
             Word::MCode(code) => {
                 let last = output.last_mut().expect("row was just pushed");
@@ -483,6 +488,8 @@ fn execute_decoded(
         }
     }
     let last = output.last_mut().expect("row was just pushed");
+    // Same end-of-block frame hook as interpret_block (arc words under a rotation).
+    state.finish_block_frame(last, line.line_no)?;
     if let Some(n) = line.n {
         last.insert("N", Value::Str(n.to_string()));
     }
@@ -761,7 +768,7 @@ fn fold_const_expr(line: &str, i: &mut usize) -> Option<f64> {
 /// Byte-level scanner for trivially decodable lines. Conservative: any
 /// construct beyond `N<d>`, `LABEL:`, `LETTER<num>`, `ident=<const expr>`,
 /// `ident=IC(<product>)`, `ident=(<product>)`, `M<d>`, a vocabulary-known
-/// bare keyword, a bare parameterless subprogram call and a trailing comment
+/// bare keyword, a subprogram call with numeric arguments and a trailing comment
 /// rejects the line to the full grammar.
 fn decode_line<'a>(line: &'a str, line_no: usize, arena: &mut Vec<Word<'a>>) -> DecodeResult<'a> {
     // Words are appended to the shared arena as they decode. A line that turns
@@ -950,8 +957,8 @@ fn decode_line_inner<'a>(
                     };
                     arena.push(Word::Assign(key, value));
                 }
-            } else if i < n_len && !(bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b';') {
-                // '(', '[', quotes, operators...: full grammar.
+            } else if i < n_len && !(bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b';' || bytes[i] == b'(') {
+                // '[', quotes and operators require the full grammar.
                 return DecodeResult::NeedsGrammar;
             } else {
                 match classify_g_command(&word.to_uppercase()) {
@@ -989,9 +996,32 @@ fn decode_line_inner<'a>(
                         // optional argument list; replicate it in the value.
                         let mut ws_end = i;
                         skip_ws(&mut ws_end);
+                        let has_args = bytes.get(ws_end) == Some(&b'(');
+                        if has_args {
+                            i = ws_end + 1;
+                            skip_ws(&mut i);
+                            if bytes.get(i) != Some(&b')') {
+                                loop {
+                                    if parse_number(line, &mut i).is_none() {
+                                        return DecodeResult::NeedsGrammar;
+                                    }
+                                    skip_ws(&mut i);
+                                    if bytes.get(i) != Some(&b',') {
+                                        break;
+                                    }
+                                    i += 1;
+                                    skip_ws(&mut i);
+                                }
+                            }
+                            if bytes.get(i) != Some(&b')') {
+                                return DecodeResult::NeedsGrammar;
+                            }
+                            // Argument-bearing spans end at ')', preserving all internal whitespace.
+                            ws_end = i + 1;
+                        }
                         let value = &line[word_start..ws_end];
                         i = ws_end;
-                        let typo_warn = crate::interpret_rules::looks_like_axis_word_typo(word);
+                        let typo_warn = !has_args && crate::interpret_rules::looks_like_axis_word_typo(word);
                         arena.push(Word::Call { value, typo_warn });
                     }
                 }
@@ -1090,6 +1120,7 @@ mod tests {
                     full_state.translation, fast_state.translation,
                     "translation for:\n{program}"
                 );
+                assert_eq!(full_state.rotation, fast_state.rotation, "rotation for:\n{program}");
             }
             (Err(full_err), Err(fast_err)) => {
                 // Both error. Interpretation errors (undefined variable,
@@ -1242,6 +1273,64 @@ M30
         for program in [all_grammar.as_str(), mixed.as_str(), "", "\n\n", "; only a comment"] {
             assert_paths_agree(program, false);
         }
+    }
+
+    #[test]
+    fn numeric_subprogram_calls_match_full_parse() {
+        for call in [
+            "SUPPORT_PIN_TRIGGER(2.5)",
+            "support_pin_trigger ( -2.5, 0, 3. )",
+            "CUSTOM()",
+            "CUSTOM ( )",
+            "CUSTOM(1)   ; comment",
+            "CUSTOM(1) OTHER(2)",
+        ] {
+            let line = format!("N20 target: {call}");
+            assert!(matches!(
+                super::decode_line(&line, 2, &mut Vec::new()),
+                super::DecodeResult::Trivial(..)
+            ));
+            assert_paths_agree(&format!("X1\n{line}\nX2"), false);
+        }
+        for call in [
+            "CUSTOM(1+2)",
+            "CUSTOM(unknown)",
+            "CUSTOM(\"text\")",
+            "CUSTOM(,2)",
+            "CUSTOM(1,)",
+            "CUSTOM(1",
+            "CUSTOM(1e3)",
+            "CUSTOM((1))",
+            "CUSTOM(1,,2)",
+            "TRANS(1)",
+            "IF(1)",
+        ] {
+            assert!(matches!(
+                super::decode_line(call, 1, &mut Vec::new()),
+                super::DecodeResult::NeedsGrammar
+            ));
+            assert_paths_agree(&format!("X1\n{call}\nX2"), false);
+        }
+    }
+
+    #[test]
+    fn scattered_numeric_calls_stay_on_the_fast_path() {
+        // Numeric subprogram calls spread through a long program decode as
+        // trivial lines, so none of them needs the grammar (#69).
+        let mut program = String::new();
+        for index in 0..100_000 {
+            if index % 1000 == 999 {
+                program.push_str("SUPPORT_PIN_TRIGGER(2.5)\n");
+            } else {
+                program.push_str("G1 X1 Y2\n");
+            }
+        }
+        let mut state = crate::state::State::new(vec!["X".to_string(), "Y".to_string()], 200_000, None, false);
+        state.set_input(&program);
+        let mut output = crate::output::OutputRows::collect();
+        super::interpret_lines(&program, &mut output, &mut state).expect("no error");
+        assert_eq!(output.finish().expect("rows").len(), 100_000);
+        assert_paths_agree(&program, false);
     }
 
     #[test]

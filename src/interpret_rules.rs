@@ -1,4 +1,5 @@
 use crate::errors::ParsingError;
+use crate::frame::{self, Matrix3};
 use crate::state::{ColKind, State};
 use crate::types::Pair;
 use crate::types::Rule;
@@ -309,12 +310,12 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
     // some arguments as text, so they are dispatched from the raw pairs before
     // the numeric arguments below are evaluated (a string argument evaluated as
     // a number would error).
-    let raw_args: Vec<Pair<Rule>> = args_pair.into_inner().collect();
+    let raw_args: Vec<Pair<Rule>> = args_pair.into_inner().map(unwrap_lone_operand).collect();
     let func_upper = func_name.as_str().to_uppercase();
     match func_upper.as_str() {
         // Number-returning string functions (manual 4.1.4): evaluate their
         // string argument as text, not as a numeric expression.
-        "INDEX" | "RINDEX" | "NUMBER" | "STRLEN" | "ISNUMBER" => {
+        "INDEX" | "RINDEX" | "MINDEX" | "MATCH" | "NUMBER" | "STRLEN" | "ISNUMBER" => {
             return evaluate_string_query_function(&func_upper, &raw_args, state, line_no, &preview);
         }
         // String-returning functions have no meaning where a number is wanted.
@@ -329,12 +330,11 @@ fn evaluate_arithmetic_function(pair: Pair<Rule>, state: &mut State) -> Result<f
         _ => {}
     }
 
-    // Numeric arguments (quoted-string arguments cannot appear for these).
+    // Numeric arguments; a string argument is a loud type error, not a
+    // silently dropped operand.
     let mut args = Vec::new();
     for arg in &raw_args {
-        if arg.as_rule() == Rule::expression {
-            args.push(evaluate_expression(arg.clone(), state)?);
-        }
+        args.push(eval_number_arg(arg, state, line_no, &preview)?);
     }
 
     // Helper to validate argument count
@@ -686,13 +686,20 @@ fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> R
 /// against the vocabulary table: the column key is the G-group name, the
 /// value the command as written. An unknown G number is a hard error, like
 /// alarm 12470 "undefined G function" on a real control.
-fn interpret_g_command(g_command: Pair<Rule>, state: &State) -> Result<(&'static str, String), ParsingError> {
+fn interpret_g_command(g_command: Pair<Rule>, state: &mut State) -> Result<(&'static str, String), ParsingError> {
     let command_str = g_command.as_str().trim().to_string();
     // Store uppercase: the language is case-insensitive (g2 IS G2), and
     // source case leaking into the output breaks downstream comparisons -
     // worst case the flattener seeing 'g18' would arc in the wrong plane.
     match crate::modal_groups::classify_g_command(&command_str.to_uppercase()) {
-        Some((group, _modal)) => Ok((group, command_str.to_uppercase())),
+        Some((group, _modal)) => {
+            let code = command_str.to_uppercase();
+            // The frame model needs the active plane for RPL and the arc check.
+            if group == "gg06_plane_select" {
+                state.set_plane(&code);
+            }
+            Ok((group, code))
+        }
         None => {
             let (line_no, preview) = get_error_context(&g_command, state);
             Err(ParsingError::UnknownGCommand {
@@ -792,6 +799,7 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
 
     let expression_pair = inner_pairs
         .next()
+        .map(unwrap_lone_operand)
         .ok_or_else(|| ParsingError::InvalidElementCount { expected: 2, actual: 1 })?;
 
     // A string-valued right-hand side: a quoted literal, a `<<` concatenation,
@@ -1005,9 +1013,26 @@ fn interpret_string_char_write(
 // The numeric evaluator stays f64-only; string handling is a parallel path that
 // meets the numeric one at two seams: string-returning functions (SPRINT,
 // SUBSTR) evaluate here, and number-returning string functions (INDEX, RINDEX,
-// NUMBER, STRLEN, ISNUMBER) are dispatched from `evaluate_arithmetic_function`
-// through `evaluate_string_query_function`.
+// MINDEX, MATCH, NUMBER, STRLEN, ISNUMBER) are dispatched from
+// `evaluate_arithmetic_function` through `evaluate_string_query_function`.
 // ---------------------------------------------------------------------------
+
+/// A `string_expression` is one operand with zero or more `<<` links, parsed
+/// once. Without a link, hand back the operand itself (the expression or
+/// quoted string) so callers see the usual tokens. The prefix form `<< X`
+/// keeps its chain: its operand starts after the chain does.
+fn unwrap_lone_operand(pair: Pair<Rule>) -> Pair<Rule> {
+    if pair.as_rule() != Rule::string_expression {
+        return pair;
+    }
+    let mut operands = pair.clone().into_inner();
+    match (operands.next(), operands.next()) {
+        (Some(operand), None) if operand.as_span().start() == pair.as_span().start() => {
+            operand.into_inner().next().expect("concat_operand has one child")
+        }
+        _ => pair,
+    }
+}
 
 /// True when a `Rule::expression` right-hand side actually yields a string: a
 /// bare STRING-variable read, or a string-returning function (SPRINT/SUBSTR).
@@ -1132,7 +1157,10 @@ fn evaluate_string_function(arith_fun: Pair<Rule>, state: &mut State) -> Result<
     let (line_no, preview) = get_error_context(&arith_fun, state);
     let mut pairs = arith_fun.into_inner();
     let name = pairs.next().map(|n| n.as_str().to_uppercase()).unwrap_or_default();
-    let raw_args: Vec<Pair<Rule>> = pairs.next().map(|a| a.into_inner().collect()).unwrap_or_default();
+    let raw_args: Vec<Pair<Rule>> = pairs
+        .next()
+        .map(|a| a.into_inner().map(unwrap_lone_operand).collect())
+        .unwrap_or_default();
     match name.as_str() {
         "SPRINT" => evaluate_sprint(&raw_args, state, line_no, &preview),
         "SUBSTR" => evaluate_substr(&raw_args, state, line_no, &preview),
@@ -1146,8 +1174,9 @@ fn evaluate_string_function(arith_fun: Pair<Rule>, state: &mut State) -> Result<
 }
 
 /// Number-returning string functions dispatched from the numeric evaluator:
-/// INDEX, RINDEX, NUMBER, STRLEN, ISNUMBER (manual 4.1.4). All string indices
-/// are 0-based; the search family returns -1 when the character is not found.
+/// INDEX, RINDEX, MINDEX, MATCH, NUMBER, STRLEN, ISNUMBER (manual 4.1.4). All
+/// string indices are 0-based; the search family returns -1 when the
+/// character or string is not found.
 fn evaluate_string_query_function(
     name: &str,
     raw_args: &[Pair<Rule>],
@@ -1182,6 +1211,36 @@ fn evaluate_string_query_function(
                 chars.iter().position(|&c| c == target)
             } else {
                 chars.iter().rposition(|&c| c == target)
+            };
+            Ok(pos.map(|p| p as f64).unwrap_or(-1.0))
+        }
+        // MINDEX(<string>, <list>): position of the first character of <string>
+        // that occurs in <list> (manual 4.1.4.6). The list is taken character by
+        // character; its example list "M,N,O,P" therefore includes the commas.
+        "MINDEX" => {
+            if raw_args.len() != 2 {
+                return Err(arity(2));
+            }
+            let haystack = evaluate_string(raw_args[0].clone(), state)?;
+            let list: Vec<char> = evaluate_string(raw_args[1].clone(), state)?.chars().collect();
+            let pos = haystack.chars().position(|c| list.contains(&c));
+            Ok(pos.map(|p| p as f64).unwrap_or(-1.0))
+        }
+        // MATCH(<string>, <search>): position of the first occurrence of
+        // <search> as a substring (manual 4.1.4.6). An empty search string
+        // occurs at position 0, as with C's strstr.
+        "MATCH" => {
+            if raw_args.len() != 2 {
+                return Err(arity(2));
+            }
+            let haystack: Vec<char> = evaluate_string(raw_args[0].clone(), state)?.chars().collect();
+            let needle: Vec<char> = evaluate_string(raw_args[1].clone(), state)?.chars().collect();
+            let pos = if needle.is_empty() {
+                Some(0)
+            } else {
+                haystack
+                    .windows(needle.len())
+                    .position(|window| window == needle.as_slice())
             };
             Ok(pos.map(|p| p as f64).unwrap_or(-1.0))
         }
@@ -2446,12 +2505,9 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                 match state.resolve_output_key(&key) {
                     Some((ColKind::Axis, skey)) => {
                         // State keeps local coordinates; the output row gets the machine
-                        // coordinate under the translation active here. `update_axis` just
-                        // stored this axis' local == `local_value`, so machine =
-                        // local_value + translation — one lookup instead of
-                        // `get_axis_machine`'s two (it would re-read the axis we just set).
-                        let machine_value = local_value + state.get_translation(skey);
-                        last.insert(skey, Value::Float(machine_value));
+                        // coordinate under the frame active here (`update_axis` just
+                        // stored this axis' local == `local_value`).
+                        state.insert_machine_axis(skey, local_value, last);
                     }
                     Some((ColKind::Block, skey)) => {
                         last.insert(skey, Value::Float(local_value));
@@ -2510,6 +2566,78 @@ fn frame_assignments(pairs: Vec<Pair<Rule>>, state: &mut State) -> Result<Vec<(S
     Ok(result)
 }
 
+/// Evaluate the angle words of a ROT/AROT block into a rotation matrix:
+/// either `X.. Y.. Z..` (RPY angles) or `RPL=..` (about the active plane's
+/// normal). Manual 3.12.2.4 lists the two as alternative syntaxes, so mixing
+/// them in one block is rejected rather than guessed at.
+fn rotation_assignments(
+    pairs: Vec<Pair<Rule>>,
+    state: &mut State,
+    line_no: usize,
+    preview: &str,
+) -> Result<Matrix3, ParsingError> {
+    let mut angles = [0.0; 3];
+    let mut has_axis_angle = false;
+    let mut rpl: Option<f64> = None;
+    for pair in pairs {
+        let (pair_line_no, pair_preview) = get_error_context(&pair, state);
+        let mut inner = pair.into_inner();
+        let target = inner.next().expect("assignment has a target");
+        let value_pair = inner.next().expect("assignment has a value");
+        // The angle words name geometry axes, which need not be configured
+        // axes (a rotation about Z on an X/Y machine is fine), so they are
+        // evaluated here rather than as axis assignments.
+        let name = target.as_str().trim().to_uppercase();
+        let angle = match value_pair.as_rule() {
+            Rule::value => value_pair.as_str().parse::<f64>().map_err(|_| {
+                ParsingError::with_context(
+                    pair_line_no,
+                    pair_preview.clone(),
+                    "frame rotation".to_string(),
+                    format!("'{}' is not a valid angle", value_pair.as_str()),
+                )
+            })?,
+            Rule::expression => evaluate_expression(value_pair, state)?,
+            _ => {
+                return Err(ParsingError::with_context(
+                    pair_line_no,
+                    pair_preview,
+                    "frame rotation".to_string(),
+                    format!("{name}= expects a numeric angle in degrees"),
+                ))
+            }
+        };
+        if name == "RPL" {
+            rpl = Some(angle);
+            continue;
+        }
+        let Some(index) = frame::geometry_index(&name) else {
+            return Err(ParsingError::with_context(
+                pair_line_no,
+                pair_preview,
+                "frame rotation".to_string(),
+                format!("ROT/AROT angles refer to the geometry axes X, Y, Z only; '{name}' cannot be rotated about"),
+            ));
+        };
+        angles[index] = angle;
+        has_axis_angle = true;
+    }
+    match rpl {
+        Some(_) if has_axis_angle => Err(ParsingError::with_context(
+            line_no,
+            preview.to_string(),
+            "frame rotation".to_string(),
+            "RPL= cannot be combined with X/Y/Z angles in one block (manual 3.12.2.4 lists them as \
+             alternative syntaxes)"
+                .to_string(),
+        )),
+        // RPL=a is the rotation about the plane normal: Z in G17, Y in G18,
+        // X in G19, with the same sign as ROT about that axis.
+        Some(angle) => Ok(frame::axis_rotation(state.plane.normal_axis(), angle)),
+        None => Ok(frame::rpy_rotation(angles[0], angles[1], angles[2])),
+    }
+}
+
 fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), ParsingError> {
     let (line_no, preview) = get_error_context(&element, state);
     let mut pairs = element.into_inner();
@@ -2517,31 +2645,47 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
     let op = kw.as_str().to_uppercase();
     let assignments: Vec<Pair<Rule>> = pairs.collect();
 
-    match op.as_str() {
+    // A frame instruction never moves the machine (State::change_frame).
+    state.change_frame(|state| match op.as_str() {
         "TRANS" => {
             // TRANS is a substituting frame instruction: it deletes ALL
-            // previously programmed frame components, including offsets on
-            // axes not mentioned in this block (manual 3.12.2.2, and the
-            // Notice "Absolute frame instructions delete all programmed
-            // frames"). Bare TRANS is therefore just the reset.
-            state.reset_translations();
+            // previously programmed frame components, the rotation included
+            // and offsets on axes not mentioned in this block (manual
+            // 3.12.2.2 and the Notice "Absolute frame instructions delete all
+            // programmed frames"; 3.12.2.4 example 1 relies on a TRANS after
+            // AROT dropping the rotation). Bare TRANS is therefore just the reset.
+            state.reset_frame();
             for (key, value) in frame_assignments(assignments, state)? {
                 state.update_translation(&key, value, line_no, &preview)?;
             }
             Ok(())
         }
         "ATRANS" => {
+            // Additive in the current workpiece system, so under a rotation
+            // the offset is rotated with the frame (State::add_translation).
             for (key, value) in frame_assignments(assignments, state)? {
-                let current_translation = state.get_translation(&key);
-                state.update_translation(&key, current_translation + value, line_no, &preview)?;
+                state.add_translation(&key, value, line_no, &preview)?;
             }
             Ok(())
         }
-        // Rotation, scaling and mirroring change the geometry in ways this
-        // interpreter does not model, so anything with parameters must fail
-        // loudly instead of producing wrong coordinates. The bare forms are
-        // frame resets: a bare ABSOLUTE instruction (ROT/ROTS/CROTS/SCALE/
-        // MIRROR) deletes the whole programmable frame including the
+        "ROT" | "AROT" => {
+            let absolute = op == "ROT";
+            if assignments.is_empty() {
+                // Bare ROT deletes the programmable frame (manual 3.12.2.1);
+                // bare AROT adds nothing.
+                if absolute {
+                    state.reset_frame();
+                }
+                return Ok(());
+            }
+            let rotation = rotation_assignments(assignments, state, line_no, &preview)?;
+            state.apply_rotation(rotation, absolute, line_no, &preview)
+        }
+        // Solid-angle rotation, scaling and mirroring change the geometry in
+        // ways this interpreter does not model, so anything with parameters
+        // must fail loudly instead of producing wrong coordinates. The bare
+        // forms are frame resets: a bare ABSOLUTE instruction (ROTS/CROTS/
+        // SCALE/MIRROR) deletes the whole programmable frame including the
         // translation (manual 3.12.2.1), while a bare ADDITIVE instruction
         // adds nothing and is a no-op.
         _ => {
@@ -2549,7 +2693,7 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
                 if !op.starts_with('A') {
                     // Bare absolute frame instruction: delete the programmable
                     // frame. (CROTS is absolute despite the leading C.)
-                    state.reset_translations();
+                    state.reset_frame();
                 }
                 Ok(())
             } else {
@@ -2557,14 +2701,14 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
                     line_no,
                     preview,
                     statement: format!("The frame instruction {}", op),
-                    hint: "Rotation, scaling and mirroring frames are not modeled; interpreting \
-                           this program would produce wrong coordinates. Only TRANS and ATRANS \
-                           are supported."
+                    hint: "Solid-angle rotation, scaling and mirroring frames are not modeled; \
+                           interpreting this program would produce wrong coordinates. Only TRANS, \
+                           ATRANS, ROT and AROT are supported."
                         .to_string(),
                 })
             }
         }
-    }
+    })
 }
 fn interpret_block_number(element: Pair<Rule>, output: &mut Output) {
     let mut pairs = element.into_inner();
@@ -2601,12 +2745,15 @@ pub(crate) fn interpret_block(
     match element.as_rule() {
         Rule::block => {
             // Start this block's output row, flushing the previous one.
-            output.start_row(element.line_col().0)?;
+            let line_no = element.line_col().0;
+            output.start_row(line_no)?;
 
             let mut flow = BlockFlow::Continue;
+            let mut had_statements = false;
             for item in element.into_inner() {
                 match item.as_rule() {
                     Rule::statement => {
+                        had_statements = true;
                         if let BlockFlow::EndProgram = interpret_statement(item, output, state)? {
                             flow = BlockFlow::EndProgram;
                         }
@@ -2631,6 +2778,12 @@ pub(crate) fn interpret_block(
                         ))
                     }
                 }
+            }
+            // Only a statement row can carry arc words; a control block's
+            // rows belong to its body blocks, which ran this hook themselves.
+            if had_statements {
+                let last = output.last_mut().expect("Output vector should not be empty");
+                state.finish_block_frame(last, line_no)?;
             }
             Ok(flow)
         }
