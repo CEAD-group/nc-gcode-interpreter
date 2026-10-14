@@ -95,15 +95,16 @@ def test_structured_programs_take_the_full_path():
     assert df["X"].drop_nulls().to_list() == [5.0, 6.0]
 
 
-def test_grammar_heavy_program_declines_the_fast_path():
-    """When most lines need the per-line grammar, the newline padding that
-    keeps pest positions correct would cost O(n^2) memory; the line driver
-    must decline and the whole-file parse take over, transparently."""
-    lines = 5000  # padding would be ~12.5 MB, over the 4 MB budget
+def test_grammar_heavy_program_matches_full_parse():
+    """A program where every line needs the grammar stays on the fast path
+    (one sparse pest parse over exactly those lines) and must agree with the
+    whole-file parse; there is no ratio or padding guard any more."""
+    lines = 5000
     program = "\n".join("X=SIN(30)" for _ in range(lines))
     df, _state = nc_to_dataframe(program)
     assert df.height == lines
     assert abs(df["X"][0] - 0.5) < 1e-12
+    run_both(program)
 
 
 EXAMPLES = pathlib.Path(__file__).parent.parent.parent / "examples"

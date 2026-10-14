@@ -17,8 +17,12 @@ released to PyPI.
   program over it to the whole-file parse. The grammar-bound lines are now
   parsed in one pest run over a sparse copy of the program (only those lines
   keep their text, every other line is empty), which gives the same whole-file
-  positions at O(input) bytes. The budget guard and the padded buffers are
-  gone; the grammar-line ratio guard remains. On a 112 MB, 1.28M-line CAM
+  positions at O(input) bytes. The budget guard, the padded buffers and the
+  grammar-line ratio guard are gone: a program that is entirely grammar-bound
+  now costs the same as the whole-file parse (measured equal at 100k and 400k
+  lines), so every structure-free program takes the line path and the
+  whole-file parse is only used for programs with IF/WHILE/FOR/LOOP/REPEAT
+  blocks. On a 112 MB, 1.28M-line CAM
   program with about 12,000 such lines the Python batch API went from 24.3 s
   and 3.0 GiB peak RSS (whole-file parse) to 2.2 s and 1.3 GiB.
 

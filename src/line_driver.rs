@@ -41,13 +41,6 @@ const PARALLEL_MIN_BYTES: usize = 4 << 20; // 4 MiB
 
 type Output = crate::output::OutputRows;
 
-/// Minimum non-blank lines to observe before the low-trivial-ratio guard may
-/// decline the fast path. Small programs pay negligible per-line overhead
-/// either way, so the guard stays out of their path; the warm-up also stops a
-/// handful of grammar-bound header lines from declining an otherwise trivial
-/// program.
-const RATIO_SAMPLE_MIN: usize = 2048;
-
 /// One word of a decoded trivial line, in source order.
 ///
 /// Every string field borrows a `&'a str` span of the program buffer, so pass
@@ -132,11 +125,7 @@ fn reject_string_variable(key: &str, state: &State, line_no: usize) -> Result<()
 /// Interpret a structure-free program line by line. Mirrors
 /// `interpret_blocks` for a flat block list: jumps resolve against the
 /// line index; an unresolved jump propagates to the caller.
-///
-/// Returns `Ok(None)` - before touching `output` or `state` - when the
-/// program does not suit the fast path after all (see the ratio guard
-/// below); the caller then runs the whole-file parse instead.
-pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> Result<Option<BlockFlow>, ParsingError> {
+pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
     // Pass 1: decode every line. Words borrow `&str` spans of `input` and are
     // appended to per-chunk arenas; each decoded line only records its
     // half-open range into its chunk's arena, so pass 1 does no per-line/
@@ -148,37 +137,20 @@ pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> R
     let lines: Vec<&str> = input.lines().collect();
     let (chunk_arenas, decode_results) = decode_all_lines(&lines, input.len());
 
-    // Low-trivial-ratio guard. Every grammar-bound line costs a pest parse
-    // (plus its byte-decode probe), which is strictly more work than the same
-    // line in one whole-file parse; the fast path only wins when the trivial
-    // lines it decodes cheaply dominate. Empirically the wall-time crossover
-    // on assignment-heavy CAM output sits well under 50% grammar-bound lines,
-    // so declining above 50% only sheds clear losers while leaving
-    // trivial-heavy programs (>99% trivial in practice) untouched. Sample a
-    // warm-up prefix before judging so a few early oddball lines can't trip it.
-    //
-    // Applied here over the ordered results (a cheap counting scan) rather than
-    // inside the decode loop: the parallel decode has no single ordered loop to
-    // early-return from, so the decision is deterministic (a pure function of
-    // the input, never of thread timing) and byte-for-byte identical to the old
-    // in-loop guard - it trips at the very same line. The only difference is
-    // that a declining program is now fully decoded before it declines; those
-    // are rare (grammar-heavy) and fall back to the whole-file parse anyway.
-    let mut non_blank: usize = 0;
-    let mut needs_grammar: usize = 0;
-    for result in decode_results.iter().flatten() {
-        match result {
-            DecodeResult::NeedsGrammar => {
-                needs_grammar += 1;
-                non_blank += 1;
-            }
-            DecodeResult::Trivial(..) => non_blank += 1,
-            DecodeResult::Blank => {}
-        }
-        if non_blank >= RATIO_SAMPLE_MIN && needs_grammar * 2 > non_blank {
-            return Ok(None);
-        }
-    }
+    // No ratio guard: the sparse parse hands pest exactly the grammar-bound
+    // lines, so a program that is 100% grammar-bound costs the same as the
+    // whole-file parse (measured equal at 100k and 400k lines) while the
+    // trivial lines, however few, still skip the tree walker.
+    let non_blank = decode_results
+        .iter()
+        .flatten()
+        .filter(|r| !matches!(r, DecodeResult::Blank))
+        .count();
+    let needs_grammar = decode_results
+        .iter()
+        .flatten()
+        .filter(|r| matches!(r, DecodeResult::NeedsGrammar))
+        .count();
 
     // Debug hook: NC_STAGE1_STATS=1 reports how much of the program the
     // byte decoder claims (used to diagnose fast-path pessimizations on
@@ -268,7 +240,7 @@ pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> R
     }
     let result = run_lines(&execs, &chunk_arenas, &targets, output, state);
     state.jump_scopes.pop();
-    result.map(Some)
+    result
 }
 
 /// Decode every line into per-chunk word arenas and per-chunk result lists.
@@ -1253,41 +1225,20 @@ M30
     }
 
     #[test]
-    fn low_trivial_ratio_declines_the_fast_path() {
-        // >50% grammar-bound lines after the warm-up prefix: the line driver
-        // must decline (transparently falling back to the whole-file parse)
-        // instead of paying a per-line pest parse for most of the program.
-        let lines = super::RATIO_SAMPLE_MIN + 100;
-        let program: String = (0..lines).map(|_| "X=SIN(30)\n").collect();
-        let _guard = env_lock();
-        let (table, _state) = run(&program, true, false).expect("interpret");
-        let x = table.columns.iter().find(|(name, _)| name == "X").expect("X column");
-        assert_eq!(x.1.len(), lines);
-        // Confirm the decline: interpret_lines itself must return None.
-        let mut state = crate::state::State::new(vec!["X".to_string()], 10_000, None, false);
-        state.set_input(&program);
-        let mut output = crate::output::OutputRows::collect();
-        let declined = super::interpret_lines(&program, &mut output, &mut state).expect("no error");
-        assert!(declined.is_none(), "expected the ratio guard to decline");
+    fn grammar_heavy_programs_match_full_parse() {
+        // No ratio guard any more: a program that is mostly or entirely
+        // grammar-bound runs on the fast path too and must agree with the
+        // whole-file parse, including an empty program.
+        let all_grammar: String = (0..3000).map(|_| "X=SIN(30)\n").collect();
+        let mut mixed = String::new();
+        for i in 0..3000 {
+            mixed.push_str(if i % 3 == 0 { "X1.5 Y2.5\n" } else { "X=SIN(30)\n" });
+        }
+        for program in [all_grammar.as_str(), mixed.as_str(), "", "\n\n", "; only a comment"] {
+            assert_paths_agree(program, false);
+        }
     }
 
-    #[test]
-    fn mostly_trivial_program_stays_on_the_fast_path() {
-        // Below the 50% threshold the fast path must claim the program.
-        let mut program = String::new();
-        for i in 0..(super::RATIO_SAMPLE_MIN * 2) {
-            if i % 3 == 0 {
-                program.push_str("X=SIN(30)\n"); // grammar-bound (33%)
-            } else {
-                program.push_str("X1.5 Y2.5\n");
-            }
-        }
-        let mut state = crate::state::State::new(vec!["X".to_string(), "Y".to_string()], 10_000, None, false);
-        state.set_input(&program);
-        let mut output = crate::output::OutputRows::collect();
-        let claimed = super::interpret_lines(&program, &mut output, &mut state).expect("no error");
-        assert!(claimed.is_some(), "expected the fast path to claim the program");
-    }
     #[test]
     fn scattered_grammar_lines_stay_on_the_fast_path() {
         // A few hundred grammar-bound lines spread through a long program used
@@ -1304,8 +1255,8 @@ M30
         let mut state = crate::state::State::new(vec!["X".to_string(), "Y".to_string()], 200_000, None, false);
         state.set_input(&program);
         let mut output = crate::output::OutputRows::collect();
-        let claimed = super::interpret_lines(&program, &mut output, &mut state).expect("no error");
-        assert!(claimed.is_some(), "scattered grammar lines must stay on the fast path");
+        super::interpret_lines(&program, &mut output, &mut state).expect("no error");
+        assert_eq!(output.finish().expect("rows").len(), 100_000);
         assert_paths_agree(&program, false);
     }
 
