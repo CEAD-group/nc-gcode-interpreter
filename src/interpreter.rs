@@ -234,16 +234,12 @@ fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Re
 
     // Stage-1 fast path: structure-free programs (all CAM output) are
     // interpreted line by line - trivial lines through the byte decoder,
-    // the rest through per-line pest parses. NC_STAGE1=0 disables it.
+    // the rest through one sparse pest parse. NC_STAGE1=0 disables it.
     if !shape.has_block_structures && crate::line_driver::stage1_enabled() {
-        let mut padded_lines = Vec::new();
-        // None: the line driver declined (padding budget); fall through to
-        // the whole-file parse below.
-        match crate::line_driver::interpret_lines(input, &mut padded_lines, output, state)? {
-            Some(BlockFlow::Continue) | Some(BlockFlow::EndProgram) => return Ok(()),
-            Some(BlockFlow::Jump(request)) => return Err(request.into_not_found_error(state)),
-            None => {}
-        }
+        return match crate::line_driver::interpret_lines(input, output, state)? {
+            BlockFlow::Continue | BlockFlow::EndProgram => Ok(()),
+            BlockFlow::Jump(request) => Err(request.into_not_found_error(state)),
+        };
     }
 
     let file = NCParser::parse(Rule::file, input)

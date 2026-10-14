@@ -18,6 +18,14 @@ released to PyPI.
   (manual 4.1.4.1). Real programs write `MATCH(<machine data>, <<NAME)` in an
   IF condition; that line used to be a parse error (#64).
 
+### Changed
+
+- The fast path builds its jump-target index (one `N:` key per block number,
+  one `LABEL:` key per label) only when a grammar-bound line mentions GOTO.
+  Trivial lines can never carry a jump, so a program without one skips the
+  allocation entirely; a GOTO inside a comment merely builds an unused index.
+  About 40 % less time on a 400k-line straight-line program (#73).
+
 ### Fixed
 
 - Flattened `BSPLINE` samples now carry the line number of the control-point
@@ -59,6 +67,24 @@ released to PyPI.
 - Nested function calls parse in linear time: each function argument, and
   each assignment right-hand side, is parsed once instead of once per grammar
   alternative, so a deeply nested `SIN(SIN(...))` is instant (#78).
+
+- The line fast path no longer declines whole programs because a few hundred
+  grammar-bound lines (procedure calls such as `SUPPORT_PIN_TRIGGER(2.5)`,
+  `MATERIAL_UPDATE`, `R1=R1+1`, `STOPRE`) are spread through a large file
+  (#69). Grammar-bound lines used to be parsed one at a time, each padded with
+  one newline per preceding line so that pest reported whole-file positions;
+  the padding cost O(line index) bytes per line, and a budget guard sent any
+  program over it to the whole-file parse. The grammar-bound lines are now
+  parsed in one pest run over a sparse copy of the program (only those lines
+  keep their text, every other line is empty), which gives the same whole-file
+  positions at O(input) bytes. The budget guard, the padded buffers and the
+  grammar-line ratio guard are gone: a program that is entirely grammar-bound
+  now costs the same as the whole-file parse (measured equal at 100k and 400k
+  lines), so every structure-free program takes the line path and the
+  whole-file parse is only used for programs with IF/WHILE/FOR/LOOP/REPEAT
+  blocks. On a 112 MB, 1.28M-line CAM
+  program with about 12,000 such lines the Python batch API went from 24.3 s
+  and 3.0 GiB peak RSS (whole-file parse) to 2.2 s and 1.3 GiB.
 
 ## [v0.2.7] - 2026-09-08
 

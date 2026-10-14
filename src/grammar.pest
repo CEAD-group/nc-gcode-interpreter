@@ -1,8 +1,10 @@
 file                =  { SOI ~ blocks ~ newline? ~ EOI }
-// Entry point for parsing one line in isolation (stage-1 triage). Leading
-// newlines are allowed so a line can be parsed padded to its original file
-// position, keeping error positions in whole-file coordinates.
-line_entry          = _{ SOI ~ newline* ~ block ~ EOI }
+// Entry point for the line fast path (stage-1 triage): a copy of the program
+// in which only the lines that need the grammar keep their text and every
+// other line is empty. Blank runs are consumed by `newline+` without
+// producing a block, so the pairs are exactly the grammar-bound lines in
+// order, at their whole-file positions. The buffer always ends in a newline.
+sparse_lines        =  { SOI ~ newline* ~ (block ~ newline+)* ~ EOI }
 blocks              =  { block ~ (newline ~ block)* }
 newline             = _{ "\n" | "\r\n" }
 WHITESPACE          = _{ " " | "\t" }
