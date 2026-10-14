@@ -33,6 +33,9 @@ released to PyPI.
   Trivial lines can never carry a jump, so a program without one skips the
   allocation entirely; a GOTO inside a comment merely builds an unused index.
   About 40 % less time on a 400k-line straight-line program (#73).
+- `scripts/compare_benchmarks.py` refuses to compare reports recorded on
+  different inputs or, when both were recorded with `--verify-digest`, with
+  differing row counts or output/state digests in any matched case (#76).
 
 ## [v0.2.7] - 2026-09-08
 
