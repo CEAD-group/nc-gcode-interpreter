@@ -54,7 +54,7 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --check
       - name: Run Rust unit and integration tests
-        run: cargo test
+        run: cargo test --features bench-experiments
 
   linux-x64:
     needs: [lint]

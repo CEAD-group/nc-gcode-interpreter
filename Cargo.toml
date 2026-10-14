@@ -46,4 +46,10 @@ arrow-data = { version = "59", optional = true, default-features = false }
 
 [features]
 default = []
+bench-experiments = []
 python = ["pyo3", "arrow-array", "arrow-schema", "arrow-data"]
+
+[[bench]]
+name = "workloads"
+harness = false
+required-features = ["bench-experiments"]

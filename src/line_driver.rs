@@ -34,6 +34,10 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::ops::Range;
 
+#[cfg(feature = "bench-experiments")]
+#[allow(dead_code)] // The CLI also compiles this private module; helpers are used via the library.
+pub mod experiments;
+
 /// Below this many bytes the parallel decode's thread hand-off and per-chunk
 /// stitching cost more than the sequential scan saves, so small programs (all
 /// of the test suite, most hand-written files) stay single-threaded.
@@ -88,6 +92,7 @@ enum Word<'a> {
 /// A decoded trivial line. `words` is a half-open range into this line's chunk
 /// arena (the chunk is recorded on the `LineExec`), not an owned `Vec`, so a
 /// line adds no heap allocation of its own.
+#[derive(Clone)]
 struct DecodedLine<'a> {
     line_no: usize,
     n: Option<&'a str>,
