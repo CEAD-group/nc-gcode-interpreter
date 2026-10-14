@@ -1,4 +1,5 @@
 use crate::errors::ParsingError;
+use crate::frame::{self, Matrix3};
 use crate::state::{ColKind, State};
 use crate::types::Pair;
 use crate::types::Rule;
@@ -686,13 +687,20 @@ fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> R
 /// against the vocabulary table: the column key is the G-group name, the
 /// value the command as written. An unknown G number is a hard error, like
 /// alarm 12470 "undefined G function" on a real control.
-fn interpret_g_command(g_command: Pair<Rule>, state: &State) -> Result<(&'static str, String), ParsingError> {
+fn interpret_g_command(g_command: Pair<Rule>, state: &mut State) -> Result<(&'static str, String), ParsingError> {
     let command_str = g_command.as_str().trim().to_string();
     // Store uppercase: the language is case-insensitive (g2 IS G2), and
     // source case leaking into the output breaks downstream comparisons -
     // worst case the flattener seeing 'g18' would arc in the wrong plane.
     match crate::modal_groups::classify_g_command(&command_str.to_uppercase()) {
-        Some((group, _modal)) => Ok((group, command_str.to_uppercase())),
+        Some((group, _modal)) => {
+            let code = command_str.to_uppercase();
+            // The frame model needs the active plane for RPL and the arc check.
+            if group == "gg06_plane_select" {
+                state.set_plane(&code);
+            }
+            Ok((group, code))
+        }
         None => {
             let (line_no, preview) = get_error_context(&g_command, state);
             Err(ParsingError::UnknownGCommand {
@@ -2446,12 +2454,9 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                 match state.resolve_output_key(&key) {
                     Some((ColKind::Axis, skey)) => {
                         // State keeps local coordinates; the output row gets the machine
-                        // coordinate under the translation active here. `update_axis` just
-                        // stored this axis' local == `local_value`, so machine =
-                        // local_value + translation — one lookup instead of
-                        // `get_axis_machine`'s two (it would re-read the axis we just set).
-                        let machine_value = local_value + state.get_translation(skey);
-                        last.insert(skey, Value::Float(machine_value));
+                        // coordinate under the frame active here (`update_axis` just
+                        // stored this axis' local == `local_value`).
+                        state.insert_machine_axis(skey, local_value, last);
                     }
                     Some((ColKind::Block, skey)) => {
                         last.insert(skey, Value::Float(local_value));
@@ -2510,6 +2515,78 @@ fn frame_assignments(pairs: Vec<Pair<Rule>>, state: &mut State) -> Result<Vec<(S
     Ok(result)
 }
 
+/// Evaluate the angle words of a ROT/AROT block into a rotation matrix:
+/// either `X.. Y.. Z..` (RPY angles) or `RPL=..` (about the active plane's
+/// normal). Manual 3.12.2.4 lists the two as alternative syntaxes, so mixing
+/// them in one block is rejected rather than guessed at.
+fn rotation_assignments(
+    pairs: Vec<Pair<Rule>>,
+    state: &mut State,
+    line_no: usize,
+    preview: &str,
+) -> Result<Matrix3, ParsingError> {
+    let mut angles = [0.0; 3];
+    let mut has_axis_angle = false;
+    let mut rpl: Option<f64> = None;
+    for pair in pairs {
+        let (pair_line_no, pair_preview) = get_error_context(&pair, state);
+        let mut inner = pair.into_inner();
+        let target = inner.next().expect("assignment has a target");
+        let value_pair = inner.next().expect("assignment has a value");
+        // The angle words name geometry axes, which need not be configured
+        // axes (a rotation about Z on an X/Y machine is fine), so they are
+        // evaluated here rather than as axis assignments.
+        let name = target.as_str().trim().to_uppercase();
+        let angle = match value_pair.as_rule() {
+            Rule::value => value_pair.as_str().parse::<f64>().map_err(|_| {
+                ParsingError::with_context(
+                    pair_line_no,
+                    pair_preview.clone(),
+                    "frame rotation".to_string(),
+                    format!("'{}' is not a valid angle", value_pair.as_str()),
+                )
+            })?,
+            Rule::expression => evaluate_expression(value_pair, state)?,
+            _ => {
+                return Err(ParsingError::with_context(
+                    pair_line_no,
+                    pair_preview,
+                    "frame rotation".to_string(),
+                    format!("{name}= expects a numeric angle in degrees"),
+                ))
+            }
+        };
+        if name == "RPL" {
+            rpl = Some(angle);
+            continue;
+        }
+        let Some(index) = frame::geometry_index(&name) else {
+            return Err(ParsingError::with_context(
+                pair_line_no,
+                pair_preview,
+                "frame rotation".to_string(),
+                format!("ROT/AROT angles refer to the geometry axes X, Y, Z only; '{name}' cannot be rotated about"),
+            ));
+        };
+        angles[index] = angle;
+        has_axis_angle = true;
+    }
+    match rpl {
+        Some(_) if has_axis_angle => Err(ParsingError::with_context(
+            line_no,
+            preview.to_string(),
+            "frame rotation".to_string(),
+            "RPL= cannot be combined with X/Y/Z angles in one block (manual 3.12.2.4 lists them as \
+             alternative syntaxes)"
+                .to_string(),
+        )),
+        // RPL=a is the rotation about the plane normal: Z in G17, Y in G18,
+        // X in G19, with the same sign as ROT about that axis.
+        Some(angle) => Ok(frame::axis_rotation(state.plane.normal_axis(), angle)),
+        None => Ok(frame::rpy_rotation(angles[0], angles[1], angles[2])),
+    }
+}
+
 fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), ParsingError> {
     let (line_no, preview) = get_error_context(&element, state);
     let mut pairs = element.into_inner();
@@ -2520,28 +2597,43 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
     match op.as_str() {
         "TRANS" => {
             // TRANS is a substituting frame instruction: it deletes ALL
-            // previously programmed frame components, including offsets on
-            // axes not mentioned in this block (manual 3.12.2.2, and the
-            // Notice "Absolute frame instructions delete all programmed
-            // frames"). Bare TRANS is therefore just the reset.
-            state.reset_translations();
+            // previously programmed frame components, the rotation included
+            // and offsets on axes not mentioned in this block (manual
+            // 3.12.2.2 and the Notice "Absolute frame instructions delete all
+            // programmed frames"; 3.12.2.4 example 1 relies on a TRANS after
+            // AROT dropping the rotation). Bare TRANS is therefore just the reset.
+            state.reset_frame();
             for (key, value) in frame_assignments(assignments, state)? {
                 state.update_translation(&key, value, line_no, &preview)?;
             }
             Ok(())
         }
         "ATRANS" => {
+            // Additive in the current workpiece system, so under a rotation
+            // the offset is rotated with the frame (State::add_translation).
             for (key, value) in frame_assignments(assignments, state)? {
-                let current_translation = state.get_translation(&key);
-                state.update_translation(&key, current_translation + value, line_no, &preview)?;
+                state.add_translation(&key, value, line_no, &preview)?;
             }
             Ok(())
         }
-        // Rotation, scaling and mirroring change the geometry in ways this
-        // interpreter does not model, so anything with parameters must fail
-        // loudly instead of producing wrong coordinates. The bare forms are
-        // frame resets: a bare ABSOLUTE instruction (ROT/ROTS/CROTS/SCALE/
-        // MIRROR) deletes the whole programmable frame including the
+        "ROT" | "AROT" => {
+            let absolute = op == "ROT";
+            if assignments.is_empty() {
+                // Bare ROT deletes the programmable frame (manual 3.12.2.1);
+                // bare AROT adds nothing.
+                if absolute {
+                    state.reset_frame();
+                }
+                return Ok(());
+            }
+            let rotation = rotation_assignments(assignments, state, line_no, &preview)?;
+            state.apply_rotation(rotation, absolute, line_no, &preview)
+        }
+        // Solid-angle rotation, scaling and mirroring change the geometry in
+        // ways this interpreter does not model, so anything with parameters
+        // must fail loudly instead of producing wrong coordinates. The bare
+        // forms are frame resets: a bare ABSOLUTE instruction (ROTS/CROTS/
+        // SCALE/MIRROR) deletes the whole programmable frame including the
         // translation (manual 3.12.2.1), while a bare ADDITIVE instruction
         // adds nothing and is a no-op.
         _ => {
@@ -2549,7 +2641,7 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
                 if !op.starts_with('A') {
                     // Bare absolute frame instruction: delete the programmable
                     // frame. (CROTS is absolute despite the leading C.)
-                    state.reset_translations();
+                    state.reset_frame();
                 }
                 Ok(())
             } else {
@@ -2557,9 +2649,9 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
                     line_no,
                     preview,
                     statement: format!("The frame instruction {}", op),
-                    hint: "Rotation, scaling and mirroring frames are not modeled; interpreting \
-                           this program would produce wrong coordinates. Only TRANS and ATRANS \
-                           are supported."
+                    hint: "Solid-angle rotation, scaling and mirroring frames are not modeled; \
+                           interpreting this program would produce wrong coordinates. Only TRANS, \
+                           ATRANS, ROT and AROT are supported."
                         .to_string(),
                 })
             }
@@ -2601,12 +2693,15 @@ pub(crate) fn interpret_block(
     match element.as_rule() {
         Rule::block => {
             // Start this block's output row, flushing the previous one.
-            output.start_row(element.line_col().0)?;
+            let line_no = element.line_col().0;
+            output.start_row(line_no)?;
 
             let mut flow = BlockFlow::Continue;
+            let mut had_statements = false;
             for item in element.into_inner() {
                 match item.as_rule() {
                     Rule::statement => {
+                        had_statements = true;
                         if let BlockFlow::EndProgram = interpret_statement(item, output, state)? {
                             flow = BlockFlow::EndProgram;
                         }
@@ -2631,6 +2726,12 @@ pub(crate) fn interpret_block(
                         ))
                     }
                 }
+            }
+            // Only a statement row can carry arc words; a control block's
+            // rows belong to its body blocks, which ran this hook themselves.
+            if had_statements {
+                let last = output.last_mut().expect("Output vector should not be empty");
+                state.finish_block_frame(last, line_no)?;
             }
             Ok(flow)
         }
