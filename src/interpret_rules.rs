@@ -2583,7 +2583,9 @@ fn rotation_assignments(
         let (pair_line_no, pair_preview) = get_error_context(&pair, state);
         let mut inner = pair.into_inner();
         let target = inner.next().expect("assignment has a target");
-        let value_pair = inner.next().expect("assignment has a value");
+        // `RPL=30` parses as a one-operand string_expression (#78); unwrap it
+        // to the expression it is.
+        let value_pair = unwrap_lone_operand(inner.next().expect("assignment has a value"));
         // The angle words name geometry axes, which need not be configured
         // axes (a rotation about Z on an X/Y machine is fine), so they are
         // evaluated here rather than as axis assignments.
