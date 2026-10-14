@@ -149,9 +149,10 @@ def test_ic_increments_the_local_coordinate_under_a_rotation():
     df, _ = nc_to_dataframe(
         nc_lines("G1 X1 Y0 Z0", "AROT Z90", "G1 X=IC(1)", "G1 Y=IC(2)")
     )
-    # local (2, 0, 0) -> machine (0, 2, 0); local (2, 2, 0) -> machine (-2, 2, 0)
-    assert_xyz(df, (0.0, 2.0, 0.0), row=1)
-    assert_xyz(df, (-2.0, 2.0, 0.0), row=2)
+    # The machine stays at (1, 0, 0) through the AROT. IC(1) on X then moves
+    # 1 along the rotated X (machine +Y), IC(2) on Y moves 2 along machine -X.
+    assert_xyz(df, (1.0, 1.0, 0.0), row=1)
+    assert_xyz(df, (-1.0, 1.0, 0.0), row=2)
 
 
 def test_orientation_axes_are_never_rotated():
@@ -164,26 +165,88 @@ def test_orientation_axes_are_never_rotated():
             "G1 A10",
         )
     )
-    assert_xyz(df, (0.0, 1.0, 0.0), row=1)
+    # X=1 along the rotated X from machine (1, 0, 0) lands on (1, 1, 0).
+    assert_xyz(df, (1.0, 1.0, 0.0), row=1)
     assert (df["A"][1], df["B"][1], df["C"][1]) == (10.0, 20.0, 30.0)
     # ATRANS on an orientation axis is a plain offset.
     assert df["A"][-1] == 15.0
 
 
 def test_unpositioned_axis_coupled_by_the_rotation_is_emitted():
-    """A 2D program tilted about X moves Z even though Z was never programmed;
-    the row must report that motion (Z assumed at local 0)."""
-    df, _ = nc_to_dataframe(nc_lines("G1 X0 Y1", "AROT X90", "G1 X1"))
-    assert df["Y"][-1] == pytest.approx(0.0, abs=1e-12)
-    assert df["Z"][-1] == pytest.approx(1.0, abs=1e-12)
+    """A 2D program tilted about X: Z joins the geometry triple (taken at
+    machine 0, with a warning) and is reported from then on; a local Y move
+    becomes machine Z motion."""
+    df, _ = nc_to_dataframe(nc_lines("G1 X0 Y1", "AROT X90", "G1 X1", "G1 Y2"))
+    assert_xyz(df, (1.0, 1.0, 0.0), row=1)
+    assert_xyz(df, (1.0, 1.0, 2.0), row=2)
+
+
+def test_frame_change_does_not_move_the_machine():
+    """A frame instruction is not a motion: the axes stay put and their local
+    coordinates are re-derived, so a later block that programs one axis moves
+    the others only through the rotation. Rows, `$AA_IM` and `$AA_IW` agree."""
+    df, state = nc_to_dataframe(
+        nc_lines(
+            "G1 X1 Y0 Z0",
+            "ROT Z90",
+            "G1 X2",
+            "ROT",
+            "G1 X3",
+            "R1=$AA_IM[X]",
+            "R2=$AA_IM[Y]",
+            "R3=$AA_IW[Y]",
+        )
+    )
+    # Under ROT Z90 the point (1, 0, 0) is local (0, -1, 0); X2 keeps local
+    # Y=-1, so the machine moves along +Y to (1, 2, 0). The bare ROT holds
+    # that point, and X3 then leaves Y at 2.
+    assert_xyz(df, (1.0, 2.0, 0.0), row=1)
+    assert_xyz(df, (3.0, 2.0, 0.0), row=2)
+    symbols = state["symbol_table"]
+    assert (symbols["R1"], symbols["R2"], symbols["R3"]) == pytest.approx((3.0, 2.0, 2.0))
 
 
 def test_actual_machine_position_includes_the_rotation():
     _, state = nc_to_dataframe(
-        nc_lines("G1 X1 Y0 Z0", "AROT Z90", "R1=$AA_IM[Y]", "R2=$AA_IW[Y]")
+        nc_lines(
+            "G1 X1 Y0 Z0",
+            "AROT Z90",
+            "R1=$AA_IM[Y]",
+            "R2=$AA_IW[Y]",
+            "G1 X2",
+            "R3=$AA_IM[X]",
+            "R4=$AA_IM[Y]",
+        )
     )
-    assert state["symbol_table"]["R1"] == pytest.approx(1.0, abs=1e-12)
-    assert state["symbol_table"]["R2"] == 0.0
+    symbols = state["symbol_table"]
+    # The AROT moves nothing: machine Y stays 0 while the WCS Y becomes -1.
+    assert symbols["R1"] == pytest.approx(0.0, abs=1e-12)
+    assert symbols["R2"] == pytest.approx(-1.0, abs=1e-12)
+    # X2 in the rotated system: machine (1, 2, 0).
+    assert symbols["R3"] == pytest.approx(1.0, abs=1e-12)
+    assert symbols["R4"] == pytest.approx(2.0, abs=1e-12)
+
+
+def test_coupled_axis_can_be_read_after_the_rotation():
+    """An axis the rotation pulls into the geometry triple has a machine
+    position from then on, consistent with the rows."""
+    df, state = nc_to_dataframe(
+        nc_lines("G1 X0 Y1", "AROT X90", "G1 X1", "R1=$AA_IM[Z]", "R2=$AA_IM[Y]")
+    )
+    assert state["symbol_table"]["R1"] == pytest.approx(df["Z"][-1], abs=1e-12)
+    assert state["symbol_table"]["R2"] == pytest.approx(df["Y"][-1], abs=1e-12)
+
+
+def test_trans_after_a_move_keeps_the_machine_position():
+    """TRANS after motion re-derives the WCS position (manual 4.5.11: $AA_IM
+    is the machine setpoint, $AA_IW the WCS one) and an IC() increment then
+    moves from the current position (3.1.1.5), not from the old local value."""
+    df, state = nc_to_dataframe(
+        nc_lines("G1 Z0", "TRANS Z5", "G1 X10", "R1=$AA_IM[Z]", "R2=$AA_IW[Z]", "G1 Z=IC(1)")
+    )
+    assert df["Z"].to_list() == [0.0, 0.0, 1.0]
+    assert state["symbol_table"]["R1"] == 0.0
+    assert state["symbol_table"]["R2"] == -5.0
 
 
 def test_arc_under_rpl_flattens_to_the_rotated_arc():
@@ -257,7 +320,7 @@ def test_rotation_moving_an_unconfigured_geometry_axis_errors():
     df, _ = nc_to_dataframe(
         nc_lines("G1 X1 Y0", "AROT Z90", "G1 X1"), axis_identifiers=["X", "Y"]
     )
-    assert (df["X"][-1], df["Y"][-1]) == pytest.approx((0.0, 1.0), abs=1e-12)
+    assert (df["X"][-1], df["Y"][-1]) == pytest.approx((1.0, 1.0), abs=1e-12)
     with pytest.raises(ValueError, match="geometry axis Z, which is not a configured axis"):
         nc_to_dataframe(nc_lines("G1 X1 Y0", "AROT X30", "G1 X1"), axis_identifiers=["X", "Y"])
 
@@ -295,8 +358,10 @@ def baked_program() -> str:
     t2 = tuple(a + b for a, b in zip(t, apply(matrix, (0.0, 1.0, 0.0)), strict=True))
     return nc_lines(
         "G17 G1 X0 Y0 Z0 F100",
-        move("G1", (10.0, 0.0, 0.0)),
-        move("G1", (10.0, 10.0, 0.0)),
+        # The first two moves do not program Z, so the machine Z stays 0:
+        # local -5 under the TRANS Z5.
+        move("G1", (10.0, 0.0, -5.0)),
+        move("G1", (10.0, 10.0, -5.0)),
         move("G1", (0.0, 10.0, 2.0)),
         move("G2", (0.0, 0.0, 2.0), f" I{i!r} J{j!r}"),
         move("G1", (3.0, -1.0, 2.0)),

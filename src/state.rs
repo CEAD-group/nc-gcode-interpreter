@@ -68,6 +68,10 @@ pub enum ColKind {
 
 #[derive(Debug, Clone)]
 pub struct State {
+    /// Local (workpiece) coordinate of every axis a block has positioned. A
+    /// frame instruction re-derives these from the machine position it holds
+    /// fixed (see [`State::change_frame`]), so they are the WCS values of the
+    /// point the machine is at, not the last programmed words.
     pub axes: FxMap<String, f64>,
     /// Numeric variables. Keys are user-controlled variable names parsed from
     /// the input, so this map stays on the default SipHash hasher for
@@ -313,6 +317,30 @@ impl State {
         self.rotated = false;
     }
 
+    /// Run a frame instruction with the machine position held: a frame change
+    /// is not a motion, the control re-derives the workpiece coordinates of the
+    /// point it is at (`$AA_IW` changes, `$AA_IM` does not), so the locals are
+    /// recomputed from the machine position taken before `change`.
+    pub fn change_frame(
+        &mut self,
+        change: impl FnOnce(&mut Self) -> Result<(), ParsingError>,
+    ) -> Result<(), ParsingError> {
+        let (machine, positioned) = self.machine_snapshot();
+        let others: Vec<(String, f64)> = self
+            .axes
+            .iter()
+            .filter(|(key, _)| frame::geometry_index(key).is_none())
+            .map(|(key, local)| (key.clone(), local + self.get_translation(key)))
+            .collect();
+        change(self)?;
+        self.store_geometry_locals(machine, positioned);
+        for (key, machine_value) in others {
+            let local = machine_value - self.get_translation(&key);
+            self.axes.insert(key, local);
+        }
+        Ok(())
+    }
+
     /// Track the working plane from a G17/G18/G19 command.
     pub fn set_plane(&mut self, code: &str) {
         if let Some(plane) = Plane::from_code(code) {
@@ -391,8 +419,10 @@ impl State {
         Ok(())
     }
 
-    /// Local X, Y, Z plus a flag per axis saying whether any block has
-    /// positioned it; an unpositioned axis counts as local 0.
+    /// Local X, Y, Z plus a flag per axis saying whether it has a position.
+    /// An unpositioned axis counts as local 0, which reaches no machine value
+    /// that is read: the rotation never couples it to a positioned axis (see
+    /// [`State::pull_in_coupled`]).
     fn local_geometry(&self) -> ([f64; 3], [bool; 3]) {
         let mut local = [0.0; 3];
         let mut positioned = [false; 3];
@@ -415,6 +445,93 @@ impl State {
         machine
     }
 
+    /// Machine X, Y, Z with every unpositioned axis at machine 0, the value a
+    /// frame change or a coupling rotation has to assume for it.
+    fn machine_snapshot(&self) -> ([f64; 3], [bool; 3]) {
+        let (_, positioned) = self.local_geometry();
+        let mut machine = self.machine_geometry();
+        for (value, positioned) in machine.iter_mut().zip(positioned) {
+            if !positioned {
+                *value = 0.0;
+            }
+        }
+        (machine, positioned)
+    }
+
+    /// Mark every unpositioned geometry axis the rotation couples to a
+    /// positioned one (either direction, closed transitively) as positioned,
+    /// warning once per axis that it is taken at machine 0. The invariant
+    /// this keeps: the rotation never mixes positioned and unpositioned axes.
+    fn pull_in_coupled(&mut self, positioned: &mut [bool; 3]) {
+        loop {
+            let mut changed = false;
+            for row in 0..3 {
+                let Some(key) = self.geometry_keys[row] else { continue };
+                if positioned[row] {
+                    continue;
+                }
+                let coupled = (0..3).any(|other| {
+                    other != row
+                        && positioned[other]
+                        && (self.rotation[row][other].abs() > frame::EPS
+                            || self.rotation[other][row].abs() > frame::EPS)
+                });
+                if !coupled {
+                    continue;
+                }
+                positioned[row] = true;
+                changed = true;
+                if !self.warned_unpositioned[row] {
+                    self.warned_unpositioned[row] = true;
+                    emit_warning(format_args!(
+                        "Warning: the frame rotation couples axis {} to a positioned axis before any block positioned it; assuming it is at machine position 0 (a real control would use the actual axis position).",
+                        key
+                    ));
+                }
+            }
+            if !changed {
+                return;
+            }
+        }
+    }
+
+    /// Local X, Y, Z of a machine point under the active frame: R^T (machine - t).
+    fn local_of_machine(&self, machine: [f64; 3]) -> [f64; 3] {
+        let mut shifted = machine;
+        for (index, name) in frame::AXIS_NAMES.iter().enumerate() {
+            shifted[index] -= self.get_translation(name);
+        }
+        frame::apply_transposed(&self.rotation, shifted)
+    }
+
+    /// Store the local coordinates of `machine` for every positioned geometry
+    /// axis, after pulling in the axes the rotation couples to them.
+    fn store_geometry_locals(&mut self, machine: [f64; 3], mut positioned: [bool; 3]) {
+        self.pull_in_coupled(&mut positioned);
+        let local = self.local_of_machine(machine);
+        for (index, name) in frame::AXIS_NAMES.iter().enumerate() {
+            if positioned[index] {
+                self.axes.insert(name.to_string(), local[index]);
+            }
+        }
+    }
+
+    /// First position of a geometry axis under a rotation: the axes the
+    /// rotation couples to it get the local coordinates of machine 0, so the
+    /// block's machine target is defined once the caller stores this axis.
+    fn couple_first_position(&mut self, index: usize) {
+        let (machine, mut positioned) = self.machine_snapshot();
+        let before = positioned;
+        positioned[index] = true;
+        self.pull_in_coupled(&mut positioned);
+        let local = self.local_of_machine(machine);
+        for (axis, name) in frame::AXIS_NAMES.iter().enumerate() {
+            if positioned[axis] && !before[axis] && axis != index {
+                self.axes.insert(name.to_string(), local[axis]);
+            }
+        }
+    }
+
     /// Write the machine coordinate of a just-updated axis into the output row.
     /// Under a rotation a geometry axis cannot be emitted alone: the machine
     /// X, Y and Z all depend on the local X, Y and Z, so the whole triple is
@@ -428,27 +545,18 @@ impl State {
         last.insert(skey, Value::Float(local_value + self.get_translation(skey)));
     }
 
-    /// Emit every geometry axis whose machine value this block can change: the
-    /// positioned ones, plus an unpositioned axis the rotation couples to a
-    /// positioned one (assumed at local 0, with a once-per-run warning).
+    /// Emit every positioned geometry axis: under a rotation any of them can
+    /// move when one is programmed. An axis the rotation couples to a
+    /// positioned one was pulled in when the coupling arose, so it is
+    /// positioned here too; an uncoupled unpositioned axis stays absent.
     fn insert_rotated_geometry(&mut self, last: &mut CellMap) {
         let (_, positioned) = self.local_geometry();
         let machine = self.machine_geometry();
         for row in 0..3 {
             let Some(key) = self.geometry_keys[row] else { continue };
-            let coupled = (0..3)
-                .any(|column| column != row && positioned[column] && self.rotation[row][column].abs() > frame::EPS);
-            if !positioned[row] && !coupled {
-                continue;
+            if positioned[row] {
+                last.insert(key, Value::Float(machine[row]));
             }
-            if !positioned[row] && !self.warned_unpositioned[row] {
-                self.warned_unpositioned[row] = true;
-                emit_warning(format_args!(
-                    "Warning: axis {} is moved by the frame rotation before any block positioned it; assuming it starts at 0 (a real control would use the actual axis position).",
-                    key
-                ));
-            }
-            last.insert(key, Value::Float(machine[row]));
         }
     }
 
@@ -508,6 +616,11 @@ impl State {
         match self.axes.get_mut(key) {
             Some(slot) => *slot = local_value,
             None => {
+                if self.rotated {
+                    if let Some(index) = frame::geometry_index(key) {
+                        self.couple_first_position(index);
+                    }
+                }
                 self.axes.insert(key.to_string(), local_value);
             }
         }

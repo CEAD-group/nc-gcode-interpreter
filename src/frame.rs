@@ -84,6 +84,15 @@ pub fn apply(r: &Matrix3, v: [f64; 3]) -> [f64; 3] {
     out
 }
 
+/// The inverse rotation: a rotation matrix is orthogonal, so R^-1 = R^T.
+pub fn apply_transposed(r: &Matrix3, v: [f64; 3]) -> [f64; 3] {
+    let mut out = [0.0; 3];
+    for (i, cell) in out.iter_mut().enumerate() {
+        *cell = r[0][i] * v[0] + r[1][i] * v[1] + r[2][i] * v[2];
+    }
+    out
+}
+
 pub fn is_identity(r: &Matrix3) -> bool {
     (0..3).all(|i| (0..3).all(|j| (r[i][j] - IDENTITY[i][j]).abs() <= EPS))
 }

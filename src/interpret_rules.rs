@@ -2594,7 +2594,8 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
     let op = kw.as_str().to_uppercase();
     let assignments: Vec<Pair<Rule>> = pairs.collect();
 
-    match op.as_str() {
+    // A frame instruction never moves the machine (State::change_frame).
+    state.change_frame(|state| match op.as_str() {
         "TRANS" => {
             // TRANS is a substituting frame instruction: it deletes ALL
             // previously programmed frame components, the rotation included
@@ -2656,7 +2657,7 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
                 })
             }
         }
-    }
+    })
 }
 fn interpret_block_number(element: Pair<Rule>, output: &mut Output) {
     let mut pairs = element.into_inner();

@@ -32,6 +32,22 @@ released to PyPI.
   `rotation` entry (row-major 3x3 list); `translation` keeps its meaning. The
   fast path and the streaming/batch APIs mirror the whole-file interpreter.
 
+### Changed
+
+- A frame instruction no longer moves the interpreted position. `TRANS`,
+  `ATRANS`, `ROT` and `AROT` hold the machine position of every positioned
+  axis and re-derive its local (workpiece) coordinate under the new frame, as
+  a control does when a frame becomes active (Basic Functions manual 4.5.11:
+  `$AA_IM` is the machine setpoint, `$AA_IW` the workpiece one). So a block
+  after the frame change that programs only some axes moves the others only
+  through the rotation, `$AA_IM` agrees with the output rows, `$AA_IW` reports
+  the re-derived value, and an `IC()` increment after a `TRANS` moves from the
+  current position (NC programming manual 3.1.1.5) instead of jumping by the
+  offset; `examples/trans2.csv` changes accordingly. A geometry axis that a
+  rotation couples to a positioned axis before any block positioned it is
+  taken at machine 0 (with a warning) from then on, so it can be read with
+  `$AA_IM` and appears in the rows.
+
 ## [v0.2.7] - 2026-09-08
 
 ### Changed
