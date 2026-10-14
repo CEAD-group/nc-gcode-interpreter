@@ -2,17 +2,19 @@
 //! program line by line through `ast::Block`s, without a whole-file tree.
 //!
 //! Per line: `line_driver::decode_line` then `decode_ast::decode_ast` for a
-//! trivial line, `lower::parse_line` for a grammar-bound one, nothing for a
-//! blank one; then `exec::exec_block` and the `exec::Flow` it returns. Nesting
-//! comes only from `structure_scan::scan_structure_table`, which also raises
-//! the structure errors of check_structures. Jumps and loop iterations go to
-//! line indices and re-decode the lines they revisit; nothing is kept per line.
+//! trivial line, the block the pre-pass lowered for a grammar-bound one,
+//! nothing for a blank one; then `exec::exec_block` and the `exec::Flow` it
+//! returns. Nesting comes only from `structure_scan::scan_structure_table`,
+//! which also raises the structure errors of check_structures. Jumps and loop
+//! iterations go to line indices and re-decode the trivial lines they revisit.
 //!
-//! Before running, one pass parses every grammar-bound line (so a parse error
-//! anywhere wins over a runtime error, as with the whole-file parse), checks
-//! that each structure line parses as the form the scan paired, and records
-//! the byte offsets of the lines control can reach out of sequence. Only when
-//! the program mentions GOTO does it also build the jump index.
+//! Before running, one pass parses and lowers every grammar-bound line with
+//! `lower::parse_line` (so a parse error anywhere wins over a runtime error,
+//! as with the whole-file parse) and keeps those blocks, which is small on CAM
+//! output; trivial lines keep nothing. It also checks that each structure line
+//! parses as the form the scan paired, and records the byte offsets of the
+//! lines control can reach out of sequence. Only when the program mentions
+//! GOTO does it also build the jump index.
 //!
 //! The driver owns the control stack and keeps the tree walker's scoping: each
 //! IF branch and each loop body is a jump scope. A head line's label belongs to
@@ -37,6 +39,7 @@ use crate::output::OutputRows;
 use crate::state::State;
 use crate::structure_scan::{scan_structure_table, LineRole, Structure, StructureTable};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 /// Interpret `input` into `output` (the NC_EXEC=ast counterpart of
 /// `interpret_file`): sets the input on `state`, scans the structure, and runs
@@ -76,10 +79,13 @@ struct Cursor {
     offset: usize,
 }
 
-/// What the pre-pass knows about the program; O(structure and target lines).
+/// What the pre-pass knows about the program; O(grammar-bound, structure and
+/// target lines).
 struct Program<'a> {
     input: &'a str,
     table: StructureTable,
+    /// The lowered block of every grammar-bound line, parsed once.
+    grammar: HashMap<usize, Rc<Block>, rustc_hash::FxBuildHasher>,
     /// Byte offset of every structure line and jump-target line, the only
     /// lines control reaches out of sequence.
     offsets: HashMap<usize, usize>,
@@ -233,6 +239,7 @@ impl<'a> Program<'a> {
     fn index(input: &'a str, table: StructureTable, state: &State) -> Result<Self, ParsingError> {
         let has_jumps = mentions_goto(input);
         let mut offsets = HashMap::new();
+        let mut grammar = HashMap::default();
         let mut targets: HashMap<Scope, HashMap<String, Vec<usize>>> = HashMap::new();
         let mut open: Vec<Scope> = Vec::new();
         let mut arena: Vec<Word> = Vec::new();
@@ -259,6 +266,7 @@ impl<'a> Program<'a> {
                             block.label.as_deref().map(label_key),
                         ];
                     }
+                    grammar.insert(at.line, Rc::new(block));
                 }
             }
             // The line's block number and label belong to the scope open before it.
@@ -290,6 +298,7 @@ impl<'a> Program<'a> {
         Ok(Program {
             input,
             table,
+            grammar,
             offsets,
             targets,
             has_jumps,
@@ -325,6 +334,24 @@ impl<'a> Program<'a> {
     }
 }
 
+/// A line's block: decoded for this visit, or kept from the pre-pass.
+#[allow(clippy::large_enum_variant)] // one per visited line on the stack; a Box would allocate per trivial line
+enum LineBlock {
+    Decoded(Block),
+    Kept(Rc<Block>),
+}
+
+impl std::ops::Deref for LineBlock {
+    type Target = Block;
+
+    fn deref(&self) -> &Block {
+        match self {
+            LineBlock::Decoded(block) => block,
+            LineBlock::Kept(block) => block,
+        }
+    }
+}
+
 /// One entered structure on the control stack.
 struct Frame {
     kind: Structure,
@@ -333,7 +360,7 @@ struct Frame {
     /// The scope of the running body (an IF frame's branch).
     scope: Scope,
     /// The head line's block, for the WHILE re-test and each pass's first row.
-    head: Block,
+    head: LineBlock,
     /// The line after the head, where every pass starts.
     body: Cursor,
     /// Completed or started passes, as the tree walker counts them.
@@ -383,8 +410,8 @@ impl<'a> Driver<'a> {
         Ok(())
     }
 
-    /// Decode or parse the line at `at`; `None` for a blank line.
-    fn load(&mut self, at: Cursor, state: &State) -> Result<(Option<Block>, Cursor), ParsingError> {
+    /// Decode the line at `at`, or take its kept block; `None` for a blank line.
+    fn load(&mut self, at: Cursor, state: &State) -> Result<(Option<LineBlock>, Cursor), ParsingError> {
         let input: &'a str = self.program.input;
         let (text, next_offset) = line_at(input, at.offset);
         let next = Cursor {
@@ -394,19 +421,28 @@ impl<'a> Driver<'a> {
         self.arena.clear();
         let block = match decode_line(text, at.line, &mut self.arena) {
             DecodeResult::Blank => None,
-            DecodeResult::Trivial(decoded, label) => Some(crate::decode_ast::decode_ast(
+            DecodeResult::Trivial(decoded, label) => Some(LineBlock::Decoded(crate::decode_ast::decode_ast(
                 text,
                 &decoded,
                 &self.arena,
                 label.as_deref(),
-            )?),
-            DecodeResult::NeedsGrammar => Some(lower::parse_line(text, at.line, state)?),
+            )?)),
+            DecodeResult::NeedsGrammar => match self.program.grammar.get(&at.line) {
+                Some(block) => Some(LineBlock::Kept(Rc::clone(block))),
+                None => {
+                    return Err(structure_mismatch(
+                        at.line,
+                        state,
+                        "the pre-pass kept no block for this grammar-bound line".to_string(),
+                    ))
+                }
+            },
         };
         Ok((block, next))
     }
 
     /// Load a structure line out of sequence (an ELSE or a closer).
-    fn load_line(&mut self, line_no: usize, state: &State) -> Result<(Block, Cursor), ParsingError> {
+    fn load_line(&mut self, line_no: usize, state: &State) -> Result<(LineBlock, Cursor), ParsingError> {
         let at = Cursor {
             line: line_no,
             offset: self.program.offset(line_no, state)?,
@@ -424,7 +460,7 @@ impl<'a> Driver<'a> {
     /// A head line ran: enter the structure, or skip it to its closer.
     fn open(
         &mut self,
-        head: Block,
+        head: LineBlock,
         at: Cursor,
         next: Cursor,
         flow: Flow,
@@ -511,7 +547,7 @@ impl<'a> Driver<'a> {
     fn while_test(
         &mut self,
         taken: bool,
-        closer: Option<(Block, Cursor)>,
+        closer: Option<(LineBlock, Cursor)>,
         state: &mut State,
         output: &mut OutputRows,
     ) -> Result<Cursor, ParsingError> {
@@ -530,7 +566,7 @@ impl<'a> Driver<'a> {
     /// An ELSE or closer line ran: the body before it is done.
     fn scope_end(
         &mut self,
-        block: Block,
+        block: LineBlock,
         at: Cursor,
         next: Cursor,
         state: &mut State,
@@ -614,7 +650,7 @@ impl<'a> Driver<'a> {
     /// line when it just ran, otherwise it is loaded.
     fn close(
         &mut self,
-        closer: Option<(Block, Cursor)>,
+        closer: Option<(LineBlock, Cursor)>,
         state: &mut State,
         output: &mut OutputRows,
     ) -> Result<Cursor, ParsingError> {
