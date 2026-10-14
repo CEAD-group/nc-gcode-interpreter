@@ -12,6 +12,7 @@ released to PyPI.
   `INDEX`/`RINDEX`: `MATCH` returns the 0-based position of a substring,
   `MINDEX` that of the first character found in a character list; both return
   `-1` when nothing matches (#64).
+
 - The `<<` operator is accepted in function-argument position, including the
   prefix form with no left operand, which is the implicit conversion to STRING
   (manual 4.1.4.1). Real programs write `MATCH(<machine data>, <<NAME)` in an
@@ -19,20 +20,42 @@ released to PyPI.
 
 ### Fixed
 
+- Flattened `BSPLINE` samples now carry the line number of the control-point
+  block they belong to, instead of all carrying the last control point's line.
+  `ASPLINE`/`CSPLINE` and G2/G3 already attributed their samples per segment,
+  so a simulator that highlights the executing line from `line_no` stuck on
+  one line for a B-spline and walked through the control-point lines for
+  every other curve. The curve is now split at the Greville abscissae of the
+  clamped knot vector: a sample belongs to the first control point whose
+  Greville abscissa is at or beyond the sample's parameter, the last control
+  point taking the remainder. Between its Greville abscissae a control point
+  is the one with the most influence on the curve, and for degree 1 the rule
+  reduces to the polyline segment ending at each programmed point. The
+  sampled geometry is unchanged (same coordinates, order and count), only the
+  `line_no` distribution changes: the auxiliary cells of a control-point
+  block (feed, M codes, comments) now ride on its first sample, and a block
+  that owns samples no longer emits an aux-only placeholder row. Only the
+  curve end stays a programmed position; every other sample keeps
+  `flattened = 1`. The checked-in `examples/flattening/flatten_demo_flattened.csv`
+  is regenerated accordingly (#62).
+
 - Two statements glued onto one line with no separator (`... = SET(...)DEF INT
   ...`, a copy-paste defect seen in a real program) are still rejected, but
   the error now names the trailing text and points at the column where the
   second statement starts, instead of "expected the end of the program". The
   INDEX-based single-character write from the same report has worked since
   v0.2.6 and is now pinned by a test (#58).
+
 - Reading an array element or indexed system variable that was never assigned
   reported "Invalid array index ... used as an array index"; the message now
   says the element is undefined and how to supply it. It still names the
   variable and the line, so an unknown string-typed machine data in a string
   argument is a loud error rather than a silent empty string (#64).
+
 - A quoted string passed to a numeric function (`SIN("abc")`) was silently
   dropped from the argument list and surfaced as an arity error; it is now a
   type error naming the string.
+
 - Nested function calls parse in linear time: each function argument, and
   each assignment right-hand side, is parsed once instead of once per grammar
   alternative, so a deeply nested `SIN(SIN(...))` is instant (#78).
