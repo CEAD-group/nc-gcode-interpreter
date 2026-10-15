@@ -68,6 +68,15 @@ fn scan_structures(input: &str) -> Result<ProgramShape, ParsingError> {
         let Some(word) = first_structure_word(line) else {
             continue;
         };
+        if let Some((label, keyword, column)) = labelled_structure_keyword(raw_line) {
+            return Err(ParsingError::ParsingContext {
+                line_no,
+                column: Some(column),
+                preview: raw_line.to_string(),
+                context: "control structure check".to_string(),
+                message: labelled_structure_message(&label, &keyword),
+            });
+        }
         let error = |message: String| {
             Err(ParsingError::UnmatchedStructure {
                 line_no,
@@ -173,6 +182,12 @@ fn strip_comment(line: &str) -> &str {
 /// The line after the optional block number (N123) and the optional jump
 /// label (NAME:), without leading whitespace.
 fn skip_block_prefix(line: &str) -> &str {
+    split_block_prefix(line).1
+}
+
+/// The byte range of the jump label in `line`, if any, and the rest of the
+/// line after the block number and label (see skip_block_prefix).
+fn split_block_prefix(line: &str) -> (Option<(usize, usize)>, &str) {
     let mut rest = line.trim_start();
 
     // optional block number; the grammar's block_number_set is non-atomic,
@@ -187,11 +202,14 @@ fn skip_block_prefix(line: &str) -> &str {
     }
 
     // optional jump label: a word directly followed by a colon
+    let mut label = None;
     let word_end = word_len(rest);
     if word_end > 0 && rest.as_bytes().get(word_end) == Some(&b':') {
+        let start = line.len() - rest.len();
+        label = Some((start, start + word_end));
         rest = rest[word_end + 1..].trim_start();
     }
-    rest
+    (label, rest)
 }
 
 fn word_len(text: &str) -> usize {
@@ -276,6 +294,30 @@ pub(crate) fn misplaced_structure_keyword(line: &str) -> Option<(String, usize)>
     None
 }
 
+/// The label of a block that holds a control-structure keyword (`LB: WHILE
+/// R1<3`, `LB: ENDIF`), with the keyword and the label's 1-based column. A
+/// conditional jump (`LB: IF R1>0 GOTOB LB`) is no structure and may keep it.
+pub(crate) fn labelled_structure_keyword(line: &str) -> Option<(String, String, usize)> {
+    let keyword = first_structure_word(line)?;
+    let is_structure = match keyword.as_str() {
+        "IF" => !contains_goto_word(strip_comment(line)),
+        "ELSE" | "ENDIF" | "WHILE" | "ENDWHILE" | "FOR" | "ENDFOR" | "LOOP" | "ENDLOOP" | "REPEAT" | "UNTIL" => true,
+        _ => false,
+    };
+    if !is_structure {
+        return None;
+    }
+    let (start, end) = split_block_prefix(line).0?;
+    Some((line[start..end].to_string(), keyword, start + 1))
+}
+
+pub(crate) fn labelled_structure_message(label: &str, keyword: &str) -> String {
+    format!(
+        "the jump label {label}: is not allowed in a block with {keyword} (a real control raises \
+         alarm 12630), so write the label alone in the block before it"
+    )
+}
+
 pub(crate) fn misplaced_keyword_message(keyword: &str) -> String {
     format!(
         "{keyword} must start its own block: a control-structure keyword cannot follow other \
@@ -299,7 +341,7 @@ fn misplaced_keyword_error(input: &str) -> Option<ParsingError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{first_structure_word, misplaced_structure_keyword};
+    use super::{first_structure_word, labelled_structure_keyword, misplaced_structure_keyword};
 
     #[test]
     fn keyword_after_content_is_misplaced() {
@@ -335,6 +377,32 @@ mod tests {
             "WHILE R1<3",
         ] {
             assert_eq!(misplaced_structure_keyword(line), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn label_on_structure_line_is_found() {
+        for (line, label, keyword, column) in [
+            ("LB: WHILE R1<3", "LB", "WHILE", 1),
+            ("N10 LB: ENDIF", "LB", "ENDIF", 5),
+            ("  Back_1: else ; c", "Back_1", "ELSE", 3),
+            ("LB: IF R1>0 ; GOTOF in a comment", "LB", "IF", 1),
+        ] {
+            assert_eq!(
+                labelled_structure_keyword(line),
+                Some((label.to_string(), keyword.to_string(), column)),
+                "{line:?}"
+            );
+        }
+        for line in [
+            "LB: IF R1>0 GOTOB LB",
+            "LB: X1",
+            "LB:",
+            "WHILE R1<3",
+            "LB: INDEX(1)",
+            "LB: GOTOF ENDE",
+        ] {
+            assert_eq!(labelled_structure_keyword(line), None, "{line:?}");
         }
     }
 

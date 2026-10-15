@@ -77,7 +77,10 @@ released to PyPI.
   accepts more, so these forms are now parse errors that name the text to
   move. A comment after the keyword and a block number before it are still
   allowed. A closer after other content (`X1 ENDIF`) is reported at the closer
-  instead of as "IF is never closed".
+  instead of as "IF is never closed". A jump label on a structure line
+  (`LB: WHILE R1<3`, `LB: ENDIF`) is rejected too, as a real control does with
+  alarm 12630; a conditional jump (`LB: IF R1<3 GOTOB LB`) is no structure and
+  keeps its label.
 
 ### Fixed
 

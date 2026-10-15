@@ -292,6 +292,9 @@ pub(crate) fn describe_parse_error(error: &pest::error::Error<Rule>) -> String {
     if let Some((keyword, _)) = crate::structure_scan::misplaced_structure_keyword(error.line()) {
         return crate::structure_scan::misplaced_keyword_message(&keyword);
     }
+    if let Some((label, keyword, _)) = crate::structure_scan::labelled_structure_keyword(error.line()) {
+        return crate::structure_scan::labelled_structure_message(&label, &keyword);
+    }
     match &error.variant {
         ErrorVariant::ParsingError { positives, .. } if !positives.is_empty() => {
             if let Some(message) = describe_structure_head_text(error, positives) {
@@ -1495,5 +1498,38 @@ mod tests {
         );
 
         assert_eq!(floats(&table, "CR"), &[None, Some(20.0), None]);
+    }
+
+    #[test]
+    fn grammar_keeps_structure_keywords_alone_in_their_block() {
+        // The structure scan reports these first; the grammar must reject
+        // them on its own too, so every entry rule agrees (#84).
+        for program in [
+            "WHILE R1<3 X1\nENDWHILE",
+            "LOOP X1\nENDLOOP",
+            "REPEAT X1\nUNTIL R1>0",
+            "FOR R2=1 TO 3 X=R2\nENDFOR",
+            "IF R1==1\nX1\nELSE X2\nENDIF",
+            "IF R1==1\nX1 ELSE X2\nENDIF",
+            "IF R1==1\nX1 ENDIF",
+            "LB: WHILE R1<3\nENDWHILE",
+            "WHILE R1<3\nX1\nLB: ENDWHILE",
+            "IF R1==1\nX1\nN10 LB: ELSE\nX2\nENDIF",
+            "LB: IF R1==1\nX1\nENDIF",
+        ] {
+            assert!(
+                NCParser::parse(Rule::file, program).is_err(),
+                "{program:?} must not parse"
+            );
+        }
+        for program in [
+            "WHILE R1<3 ; head\nX1\nN20 ENDWHILE",
+            "IF R1==1 ; c\nX1\nELSE ; c\nX2\nENDIF",
+            "LB: IF R1>0 GOTOB LB",
+            "WHILE R1<3\nLB:\nENDWHILE",
+            "LB: X1\nIF R1==1\nX2\nENDIF",
+        ] {
+            assert!(NCParser::parse(Rule::file, program).is_ok(), "{program:?} must parse");
+        }
     }
 }

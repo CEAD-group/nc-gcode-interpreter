@@ -90,6 +90,9 @@ def test_unmatched_structures_point_at_the_cause(program, expected_line, expecte
         ("IF R1==0\nX1 ENDIF", 2, "ENDIF must start its own block"),
         ("WHILE R1<3\nR1=R1+1 ENDWHILE", 2, "ENDWHILE must start its own block"),
         ("X1 ELSE", 1, "ELSE must start its own block"),
+        ("LB: WHILE R1<3\nR1=R1+1\nENDWHILE", 1, "jump label LB: is not allowed in a block with WHILE"),
+        ("WHILE R1<3\nR1=R1+1\nLB: ENDWHILE", 3, "jump label LB: is not allowed in a block with ENDWHILE"),
+        ("IF R1==1\nX1\nN10 LB: ELSE\nX2\nENDIF", 3, "jump label LB: is not allowed in a block with ELSE"),
     ],
     ids=[
         "statement-after-WHILE",
@@ -102,12 +105,16 @@ def test_unmatched_structures_point_at_the_cause(program, expected_line, expecte
         "mid-line-ENDIF",
         "mid-line-ENDWHILE",
         "mid-line-ELSE-without-structures",
+        "label-on-WHILE",
+        "label-on-ENDWHILE",
+        "label-on-ELSE",
     ],
 )
 def test_statements_on_structure_lines_are_rejected(program, expected_line, expected_message):
-    """A control-structure keyword stands alone in its block (manual 4.1.7).
-    These forms used to run silently, `WHILE R1<3 X1` with X1 as the first
-    body block on every pass and `X1 ELSE X2` as an ELSE in mid-line (#84)."""
+    """A control-structure keyword stands alone in its block (manual 4.1.7),
+    without a label (alarm 12630). These forms used to run silently, `WHILE
+    R1<3 X1` with X1 as the first body block on every pass and `X1 ELSE X2`
+    as an ELSE in mid-line (#84)."""
     with pytest.raises(ValueError) as excinfo:
         nc_to_dataframe(program)
     message = str(excinfo.value)
@@ -125,6 +132,13 @@ def test_structure_lines_keep_comments_and_block_numbers():
     assert df["Y"].drop_nulls().to_list() == [1.0]
     assert df["comment"].drop_nulls().to_list() == ["; head", "; head", "; check"]
     assert df["N"].drop_nulls().to_list()[-1] == 20
+
+
+def test_labelled_conditional_jump_keeps_its_label():
+    """IF ... GOTO is a program jump, not a check structure, so its block may
+    carry the label it jumps to."""
+    df, _state = nc_to_dataframe("R1=0\nLB: R1=R1+1\nX=R1\nBACK: IF R1<3 GOTOB LB")
+    assert df["X"].drop_nulls().to_list() == [1.0, 2.0, 3.0]
 
 
 def test_single_line_conditional_jump_is_not_an_opener():
