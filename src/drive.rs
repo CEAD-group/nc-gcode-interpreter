@@ -30,6 +30,7 @@
 //! has none. A jump unresolved at top level is `into_not_found_error`.
 
 use crate::ast::{Block, Body, Control};
+use crate::decode_ast::BlockBuffer;
 use crate::errors::ParsingError;
 use crate::exec::{self, Flow};
 use crate::interpret_rules::{canonical_block_number, resolve_jump, JumpRequest};
@@ -57,6 +58,7 @@ pub(crate) fn interpret_ast(input: &str, state: &mut State, output: &mut OutputR
     Driver {
         program,
         arena: Vec::new(),
+        buffer: BlockBuffer::new(),
         stack: Vec::new(),
         top_jumps: 0,
     }
@@ -334,22 +336,11 @@ impl<'a> Program<'a> {
     }
 }
 
-/// A line's block: decoded for this visit, or kept from the pre-pass.
-#[allow(clippy::large_enum_variant)] // one per visited line on the stack; a Box would allocate per trivial line
-enum LineBlock {
-    Decoded(Block),
+/// A loaded line: blank, decoded into the driver's buffer, or kept from the pre-pass.
+enum Loaded {
+    Blank,
+    Decoded,
     Kept(Rc<Block>),
-}
-
-impl std::ops::Deref for LineBlock {
-    type Target = Block;
-
-    fn deref(&self) -> &Block {
-        match self {
-            LineBlock::Decoded(block) => block,
-            LineBlock::Kept(block) => block,
-        }
-    }
 }
 
 /// One entered structure on the control stack.
@@ -360,7 +351,7 @@ struct Frame {
     /// The scope of the running body (an IF frame's branch).
     scope: Scope,
     /// The head line's block, for the WHILE re-test and each pass's first row.
-    head: LineBlock,
+    head: Rc<Block>,
     /// The line after the head, where every pass starts.
     body: Cursor,
     /// Completed or started passes, as the tree walker counts them.
@@ -374,6 +365,8 @@ struct Frame {
 struct Driver<'a> {
     program: Program<'a>,
     arena: Vec<Word<'a>>,
+    /// The block of the decoded trivial line being run.
+    buffer: BlockBuffer,
     stack: Vec<Frame>,
     /// Backward jumps taken in the top-level scope.
     top_jumps: usize,
@@ -384,17 +377,25 @@ impl<'a> Driver<'a> {
         self.program.enter_scope(Scope::Top, state);
         let mut at = Cursor { line: 1, offset: 0 };
         while at.offset < self.program.input.len() {
-            let (block, next) = self.load(at, state)?;
-            let Some(block) = block else {
-                at = next;
-                continue;
+            let (loaded, next) = self.load(at, state)?;
+            let flow = match &loaded {
+                Loaded::Blank => {
+                    at = next;
+                    continue;
+                }
+                Loaded::Decoded => exec::exec_block(self.buffer.block(), state, output)?,
+                Loaded::Kept(block) => exec::exec_block(block, state, output)?,
             };
-            at = match exec::exec_block(&block, state, output)? {
+            at = match flow {
                 Flow::Continue => next,
                 Flow::EndProgram => return self.end_program(state, output),
                 Flow::Jump(request) => self.jump(request, at.line, state, output)?,
-                Flow::ScopeEnd => self.scope_end(block, at, next, state, output)?,
+                Flow::ScopeEnd => {
+                    let block = self.keep(loaded);
+                    self.scope_end(block, at, next, state, output)?
+                }
                 flow @ (Flow::Branch(_) | Flow::ForInit { .. } | Flow::LoopStart | Flow::Repeat) => {
+                    let block = self.keep(loaded);
                     self.open(block, at, next, flow, state, output)?
                 }
             };
@@ -410,8 +411,8 @@ impl<'a> Driver<'a> {
         Ok(())
     }
 
-    /// Decode the line at `at`, or take its kept block; `None` for a blank line.
-    fn load(&mut self, at: Cursor, state: &State) -> Result<(Option<LineBlock>, Cursor), ParsingError> {
+    /// Decode the line at `at` into the buffer, or take its kept block.
+    fn load(&mut self, at: Cursor, state: &State) -> Result<(Loaded, Cursor), ParsingError> {
         let input: &'a str = self.program.input;
         let (text, next_offset) = line_at(input, at.offset);
         let next = Cursor {
@@ -419,16 +420,14 @@ impl<'a> Driver<'a> {
             offset: next_offset,
         };
         self.arena.clear();
-        let block = match decode_line(text, at.line, &mut self.arena) {
-            DecodeResult::Blank => None,
-            DecodeResult::Trivial(decoded, label) => Some(LineBlock::Decoded(crate::decode_ast::decode_ast(
-                text,
-                &decoded,
-                &self.arena,
-                label.as_deref(),
-            )?)),
+        let loaded = match decode_line(text, at.line, &mut self.arena) {
+            DecodeResult::Blank => Loaded::Blank,
+            DecodeResult::Trivial(decoded, label) => {
+                self.buffer.decode(text, &decoded, &self.arena, label.as_deref())?;
+                Loaded::Decoded
+            }
             DecodeResult::NeedsGrammar => match self.program.grammar.get(&at.line) {
-                Some(block) => Some(LineBlock::Kept(Rc::clone(block))),
+                Some(block) => Loaded::Kept(Rc::clone(block)),
                 None => {
                     return Err(structure_mismatch(
                         at.line,
@@ -438,29 +437,38 @@ impl<'a> Driver<'a> {
                 }
             },
         };
-        Ok((block, next))
+        Ok((loaded, next))
+    }
+
+    /// A loaded line's block as a value a frame can hold; structure lines are
+    /// grammar-bound, so the copy of a decoded block is never taken in practice.
+    fn keep(&self, loaded: Loaded) -> Rc<Block> {
+        match loaded {
+            Loaded::Kept(block) => block,
+            Loaded::Blank | Loaded::Decoded => Rc::new(self.buffer.block().clone()),
+        }
     }
 
     /// Load a structure line out of sequence (an ELSE or a closer).
-    fn load_line(&mut self, line_no: usize, state: &State) -> Result<(LineBlock, Cursor), ParsingError> {
+    fn load_line(&mut self, line_no: usize, state: &State) -> Result<(Rc<Block>, Cursor), ParsingError> {
         let at = Cursor {
             line: line_no,
             offset: self.program.offset(line_no, state)?,
         };
         match self.load(at, state)? {
-            (Some(block), next) => Ok((block, next)),
-            (None, _) => Err(structure_mismatch(
+            (Loaded::Blank, _) => Err(structure_mismatch(
                 line_no,
                 state,
                 "a structure line is blank".to_string(),
             )),
+            (loaded, next) => Ok((self.keep(loaded), next)),
         }
     }
 
     /// A head line ran: enter the structure, or skip it to its closer.
     fn open(
         &mut self,
-        head: LineBlock,
+        head: Rc<Block>,
         at: Cursor,
         next: Cursor,
         flow: Flow,
@@ -547,7 +555,7 @@ impl<'a> Driver<'a> {
     fn while_test(
         &mut self,
         taken: bool,
-        closer: Option<(LineBlock, Cursor)>,
+        closer: Option<(Rc<Block>, Cursor)>,
         state: &mut State,
         output: &mut OutputRows,
     ) -> Result<Cursor, ParsingError> {
@@ -566,7 +574,7 @@ impl<'a> Driver<'a> {
     /// An ELSE or closer line ran: the body before it is done.
     fn scope_end(
         &mut self,
-        block: LineBlock,
+        block: Rc<Block>,
         at: Cursor,
         next: Cursor,
         state: &mut State,
@@ -650,7 +658,7 @@ impl<'a> Driver<'a> {
     /// line when it just ran, otherwise it is loaded.
     fn close(
         &mut self,
-        closer: Option<(LineBlock, Cursor)>,
+        closer: Option<(Rc<Block>, Cursor)>,
         state: &mut State,
         output: &mut OutputRows,
     ) -> Result<Cursor, ParsingError> {

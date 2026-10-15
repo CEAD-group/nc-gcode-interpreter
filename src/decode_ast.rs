@@ -14,67 +14,243 @@ pub(crate) fn decode_ast(
     arena: &[Word],
     label: Option<&str>,
 ) -> Result<Block, ParsingError> {
-    let internal =
-        |message: String| ParsingError::with_context(decoded.line_no, line, "decoded line", message.as_str());
-    let words = arena
-        .get(decoded.words.clone())
-        .ok_or_else(|| internal("word range outside the arena".to_string()))?;
-    let mut statements = Vec::with_capacity(words.len());
-    for word in words {
-        statements.push(match *word {
-            Word::Assign(key, value) => Statement::Assign(Assignment::Var {
-                name: key.to_uppercase(),
-                rhs: Rhs::Expr(Expr::Number(value)),
-            }),
-            Word::AssignDynamic {
-                key,
-                ident,
-                factor,
-                incremental,
-            } => {
-                let value = match ident {
-                    None => Expr::Number(factor),
-                    Some(name) => {
-                        let var = Expr::Var(name.to_uppercase());
-                        let number = Expr::Number(factor);
-                        // The decoder keeps no operand order, the tree does: IDENT*NUMBER or NUMBER*IDENT.
-                        if ident_precedes_star(line, name)
-                            .ok_or_else(|| internal("identifier outside its line".to_string()))?
-                        {
-                            Expr::Binary(BinaryOp::Mul, Box::new(var), Box::new(number))
-                        } else {
-                            Expr::Binary(BinaryOp::Mul, Box::new(number), Box::new(var))
-                        }
-                    }
-                };
-                let rhs = if incremental {
-                    Rhs::Increment(value)
-                } else {
-                    Rhs::Expr(Expr::Paren(Box::new(value)))
-                };
-                Statement::Assign(Assignment::Var {
+    let mut buffer = BlockBuffer::new();
+    buffer.decode(line, decoded, arena, label)?;
+    Ok(buffer.block)
+}
+
+/// One block reused for every decoded line, so a trivial line allocates
+/// nothing once the buffer has seen its shape.
+pub(crate) struct BlockBuffer {
+    block: Block,
+    /// The statement list, parked while the block's body is not `Statements`.
+    statements: Vec<Statement>,
+    /// Statements a shorter line left over, kept with their allocations.
+    spare: Vec<Statement>,
+    /// The block number, label and comment strings while the line has none.
+    spare_text: [String; 3],
+}
+
+impl BlockBuffer {
+    pub(crate) fn new() -> Self {
+        BlockBuffer {
+            block: Block {
+                line_no: 0,
+                block_number: None,
+                label: None,
+                body: Body::Empty,
+                comment: None,
+            },
+            statements: Vec::new(),
+            spare: Vec::new(),
+            spare_text: Default::default(),
+        }
+    }
+
+    /// The block of the last `decode`.
+    pub(crate) fn block(&self) -> &Block {
+        &self.block
+    }
+
+    /// Refill the block with a decoded trivial line (arguments as for `decode_ast`).
+    pub(crate) fn decode(
+        &mut self,
+        line: &str,
+        decoded: &DecodedLine,
+        arena: &[Word],
+        label: Option<&str>,
+    ) -> Result<&Block, ParsingError> {
+        let internal =
+            |message: String| ParsingError::with_context(decoded.line_no, line, "decoded line", message.as_str());
+        let words = arena
+            .get(decoded.words.clone())
+            .ok_or_else(|| internal("word range outside the arena".to_string()))?;
+        let mut statements = match std::mem::replace(&mut self.block.body, Body::Empty) {
+            Body::Statements(statements) => statements,
+            _ => std::mem::take(&mut self.statements),
+        };
+        for (index, word) in words.iter().enumerate() {
+            if index == statements.len() {
+                // An empty G code holds no allocation; `refill` replaces it.
+                statements.push(self.spare.pop().unwrap_or(Statement::G(String::new())));
+            }
+            refill(&mut statements[index], word, line).map_err(internal)?;
+        }
+        if !words.is_empty() {
+            // Reversed, so the next longer line pops them back in source order.
+            self.spare.extend(statements.drain(words.len()..).rev());
+        }
+        let block = &mut self.block;
+        block.line_no = decoded.line_no;
+        let [number, label_text, comment] = &mut self.spare_text;
+        set_optional(&mut block.block_number, number, decoded.n);
+        set_optional(&mut block.label, label_text, label);
+        set_optional(&mut block.comment, comment, decoded.comment);
+        if words.is_empty() {
+            // Parked with its statements, which the next line with words refills.
+            self.statements = statements;
+        } else {
+            block.body = Body::Statements(statements);
+        }
+        Ok(&self.block)
+    }
+}
+
+/// Refill `slot` with the statement of `word`, in the slot's own strings when
+/// it already has that shape.
+fn refill(slot: &mut Statement, word: &Word, line: &str) -> Result<(), String> {
+    match *word {
+        Word::Assign(key, value) => match slot {
+            Statement::Assign(Assignment::Var { name, rhs }) => {
+                set_upper(name, key);
+                match rhs {
+                    Rhs::Expr(Expr::Number(number)) => *number = value,
+                    rhs => *rhs = Rhs::Expr(Expr::Number(value)),
+                }
+            }
+            slot => {
+                *slot = Statement::Assign(Assignment::Var {
                     name: key.to_uppercase(),
-                    rhs,
+                    rhs: Rhs::Expr(Expr::Number(value)),
                 })
             }
-            Word::Call { value, .. } => {
-                Statement::Call(call_from_text(value).ok_or_else(|| internal(format!("undecodable call '{value}'")))?)
-            }
-            Word::GCommand(_, code) => Statement::G(code.to_uppercase()),
-            Word::MCode(code) => Statement::M(code.to_uppercase()),
-        });
-    }
-    Ok(Block {
-        line_no: decoded.line_no,
-        block_number: decoded.n.map(str::to_string),
-        label: label.map(str::to_string),
-        body: if statements.is_empty() {
-            Body::Empty
-        } else {
-            Body::Statements(statements)
         },
-        comment: decoded.comment.map(str::to_string),
-    })
+        Word::AssignDynamic {
+            key,
+            ident,
+            factor,
+            incremental,
+        } => {
+            // The decoder keeps no operand order, the tree does: IDENT*NUMBER or NUMBER*IDENT.
+            let ident = match ident {
+                None => None,
+                Some(name) => Some((
+                    name,
+                    ident_precedes_star(line, name).ok_or("identifier outside its line")?,
+                )),
+            };
+            match slot {
+                Statement::Assign(Assignment::Var { name, rhs }) => {
+                    set_upper(name, key);
+                    match (rhs, incremental) {
+                        (Rhs::Increment(product), true) => refill_product(product, ident, factor),
+                        (Rhs::Expr(Expr::Paren(product)), false) => refill_product(product, ident, factor),
+                        (rhs, _) => *rhs = dynamic_rhs(ident, factor, incremental),
+                    }
+                }
+                slot => {
+                    *slot = Statement::Assign(Assignment::Var {
+                        name: key.to_uppercase(),
+                        rhs: dynamic_rhs(ident, factor, incremental),
+                    })
+                }
+            }
+        }
+        Word::Call { value, .. } => match slot {
+            Statement::Call(call) => fill_call(call, value).ok_or_else(|| format!("undecodable call '{value}'"))?,
+            slot => {
+                let mut call = Call {
+                    name: String::new(),
+                    args: None,
+                    text: String::new(),
+                };
+                fill_call(&mut call, value).ok_or_else(|| format!("undecodable call '{value}'"))?;
+                *slot = Statement::Call(call);
+            }
+        },
+        Word::GCommand(_, code) => match slot {
+            Statement::G(text) => set_upper(text, code),
+            slot => *slot = Statement::G(code.to_uppercase()),
+        },
+        Word::MCode(code) => match slot {
+            Statement::M(text) => set_upper(text, code),
+            slot => *slot = Statement::M(code.to_uppercase()),
+        },
+    }
+    Ok(())
+}
+
+/// The value of a dynamic word: `IC(<product>)` or `(<product>)`.
+fn dynamic_rhs(ident: Option<(&str, bool)>, factor: f64, incremental: bool) -> Rhs {
+    let product = product(ident, factor);
+    if incremental {
+        Rhs::Increment(product)
+    } else {
+        Rhs::Expr(Expr::Paren(Box::new(product)))
+    }
+}
+
+/// `factor`, or `ident * factor` in source order (`ident` carries whether it comes first).
+fn product(ident: Option<(&str, bool)>, factor: f64) -> Expr {
+    match ident {
+        None => Expr::Number(factor),
+        Some((name, ident_first)) => {
+            let var = Box::new(Expr::Var(name.to_uppercase()));
+            let number = Box::new(Expr::Number(factor));
+            if ident_first {
+                Expr::Binary(BinaryOp::Mul, var, number)
+            } else {
+                Expr::Binary(BinaryOp::Mul, number, var)
+            }
+        }
+    }
+}
+
+/// `*expr = product(ident, factor)` in the boxes and name `expr` already holds
+/// when it is a product of the same kind.
+fn refill_product(expr: &mut Expr, ident: Option<(&str, bool)>, factor: f64) {
+    match ident {
+        None => {
+            if let Expr::Number(value) = expr {
+                *value = factor;
+                return;
+            }
+        }
+        Some((name, ident_first)) => {
+            if let Expr::Binary(BinaryOp::Mul, lhs, rhs) = expr {
+                let (var, number) = if ident_first { (lhs, rhs) } else { (rhs, lhs) };
+                if matches!(**var, Expr::Number(_)) && matches!(**number, Expr::Var(_)) {
+                    // The previous line had the other operand order.
+                    std::mem::swap(var, number);
+                }
+                if let (Expr::Var(slot), Expr::Number(value)) = (&mut **var, &mut **number) {
+                    set_upper(slot, name);
+                    *value = factor;
+                    return;
+                }
+            }
+        }
+    }
+    *expr = product(ident, factor);
+}
+
+/// `*slot = text.to_uppercase()` without a new allocation once the slot is large enough.
+fn set_upper(slot: &mut String, text: &str) {
+    slot.clear();
+    if text.is_ascii() {
+        slot.push_str(text);
+        slot.make_ascii_uppercase();
+    } else {
+        slot.push_str(&text.to_uppercase());
+    }
+}
+
+/// `*slot = value.map(str::to_string)`, parking the string in `spare` while the slot is empty.
+fn set_optional(slot: &mut Option<String>, spare: &mut String, value: Option<&str>) {
+    match value {
+        Some(value) => set_text(slot.get_or_insert_with(|| std::mem::take(spare)), value),
+        None => {
+            if let Some(text) = slot.take() {
+                *spare = text;
+            }
+        }
+    }
+}
+
+/// `*slot = text.to_string()` in the slot's own allocation.
+fn set_text(slot: &mut String, text: &str) {
+    slot.clear();
+    slot.push_str(text);
 }
 
 /// True when the `*` of a decoded product follows `ident` (IDENT*NUMBER);
@@ -85,36 +261,31 @@ fn ident_precedes_star(line: &str, ident: &str) -> Option<bool> {
     Some(after.trim_start_matches([' ', '\t']).starts_with('*'))
 }
 
-/// A decoded call: `NAME` or `NAME(<number>, ...)`, the only shapes the
-/// decoder claims.
-fn call_from_text(value: &str) -> Option<Call> {
+/// Fill `call` from a decoded call: `NAME` or `NAME(<number>, ...)`, the only
+/// shapes the decoder claims.
+fn fill_call(call: &mut Call, value: &str) -> Option<()> {
     let name_end = value
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .unwrap_or(value.len());
-    let name = &value[..name_end];
+    set_text(&mut call.name, &value[..name_end]);
+    set_text(&mut call.text, value);
     let rest = value[name_end..].trim_start_matches([' ', '\t']);
-    let args = match rest.strip_prefix('(') {
-        None if rest.is_empty() => None,
+    match rest.strip_prefix('(') {
+        None if rest.is_empty() => call.args = None,
         None => return None,
         Some(inner) => {
             let inner = inner.strip_suffix(')')?.trim_matches([' ', '\t']);
-            if inner.is_empty() {
-                Some(Vec::new())
-            } else {
-                let mut args = Vec::new();
+            let args = call.args.get_or_insert_with(Vec::new);
+            args.clear();
+            if !inner.is_empty() {
                 for item in inner.split(',') {
                     let number = item.trim_matches([' ', '\t']).parse::<f64>().ok()?;
                     args.push(Arg::Expr(Expr::Number(number)));
                 }
-                Some(args)
             }
         }
-    };
-    Some(Call {
-        name: name.to_string(),
-        args,
-        text: value.to_string(),
-    })
+    }
+    Some(())
 }
 
 #[cfg(test)]
@@ -284,6 +455,108 @@ mod tests {
             "X10Y20",
         ] {
             assert!(decoded(line).is_none(), "{line:?}");
+        }
+    }
+
+    /// Refill the buffer with `line`; None when the decoder does not claim it.
+    fn refilled(buffer: &mut BlockBuffer, line: &str) -> Option<Block> {
+        let mut arena = Vec::new();
+        match decode_line(line, 7, &mut arena) {
+            DecodeResult::Trivial(words, label) => Some(
+                buffer
+                    .decode(line, &words, &arena, label.as_deref())
+                    .expect("decoded lines convert")
+                    .clone(),
+            ),
+            DecodeResult::Blank | DecodeResult::NeedsGrammar => None,
+        }
+    }
+
+    #[test]
+    fn a_reused_buffer_keeps_nothing_from_earlier_lines() {
+        let lines: Vec<String> = representative_lines()
+            .into_iter()
+            .filter(|line| decoded(line).is_some())
+            .collect();
+        let single: Vec<&str> = WORDS.iter().copied().filter(|word| decoded(word).is_some()).collect();
+        let mut sequences: Vec<Vec<&str>> = vec![
+            lines.iter().map(String::as_str).collect(),
+            lines.iter().rev().map(String::as_str).collect(),
+        ];
+        // Every single-word shape after every other, then a longer and a shorter line.
+        for first in &single {
+            for second in &single {
+                sequences.push(vec![first, second, "N1 G1 X1 Y2 E=IC(E_M*0.5) F=(2*F_M) ;c", second]);
+            }
+        }
+        for sequence in sequences {
+            let mut buffer = BlockBuffer::new();
+            let mut previous = "";
+            for line in sequence {
+                assert_eq!(
+                    refilled(&mut buffer, line),
+                    decoded(line),
+                    "{line:?} after {previous:?}"
+                );
+                previous = line;
+            }
+        }
+    }
+
+    /// Counts each thread's allocations, so a test can assert that a refill makes none.
+    struct CountingAllocator;
+
+    thread_local! {
+        static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+            std::alloc::System.alloc(layout)
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+            std::alloc::System.dealloc(ptr, layout)
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
+            std::alloc::System.realloc(ptr, layout, new_size)
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: CountingAllocator = CountingAllocator;
+
+    #[test]
+    fn refilling_seen_shapes_allocates_nothing() {
+        let lines = [
+            "N10 G1 X1 E=IC(E_M*0.5) F=(2*F_M) M3 CALL_A(1) ;first",
+            // A comment-only line parks the statements and the block number.
+            ";gap",
+            "N11 G0 X2 E=IC(E_N*0.7) F=(3*F_N) M5 CALL_B(2) ;other",
+            "N12 G0 X3 ;short",
+            "N13 G1 X4 E=IC(0.5*E_M) F=(F_M*2) M3 CALL_A(3) ;again",
+        ];
+        let mut buffer = BlockBuffer::new();
+        // The first pass sizes the buffer; the second must reuse every allocation.
+        for pass in 0..2 {
+            for line in lines {
+                let mut arena = Vec::with_capacity(16);
+                let DecodeResult::Trivial(words, label) = decode_line(line, 7, &mut arena) else {
+                    panic!("{line:?} is not claimed");
+                };
+                let before = ALLOCATIONS.with(|count| count.get());
+                let block = buffer
+                    .decode(line, &words, &arena, label.as_deref())
+                    .expect("decoded lines convert");
+                let allocated = ALLOCATIONS.with(|count| count.get()) - before;
+                if pass == 1 {
+                    assert_eq!(allocated, 0, "{line:?}");
+                }
+                assert_eq!(Some(block.clone()), decoded(line), "{line:?}");
+            }
         }
     }
 
