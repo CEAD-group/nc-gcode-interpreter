@@ -23,25 +23,42 @@ line-level structure forms (`if_head`, `else_kw`, `endif_kw`, `while_head`,
 
 ## Results
 
-Release builds, `nc_to_batches`, best of 3, peak RSS of the process.
+Release builds, `nc_to_batches`, best of 3, peak RSS of the process. The
+first AST column is 561be8a (phase 2), the second the head after phase 3;
+each row was measured back to back in one session, and other sessions on the
+machine moved the default's own time by up to 10% between rows.
 
-| Program | Default | AST path |
-| --- | --- | --- |
-| 100 WHILE loops, 100k lines | 655 ms, 402 MiB | 296 ms, 308 MiB |
-| 50k grammar-bound lines | 235 ms, 171 MiB | 327 ms, 140 MiB |
-| 400k straight lines | 496 ms, 685 MiB | 999 ms, 515 MiB |
-| 112 MB field program, 1.28M lines | 2.66 s, 2.2 GiB | 4.40 s, 1.6 GiB |
-| 5M-line field sample, 252 MB | 6.1 s, 3.2 GiB | 10.9 s, 1.9 GiB |
+| Program | Default | AST path, 561be8a | AST path, phase 3 |
+| --- | --- | --- | --- |
+| 100 WHILE loops, 100k lines | 558 ms, 366 MiB | 239 ms, 330 MiB | 180 ms, 336 MiB |
+| 50k grammar-bound lines | 186 ms, 168 MiB | 266 ms, 142 MiB | 250 ms, 143 MiB |
+| 400k straight lines | 376 ms, 647 MiB | 776 ms, 496 MiB | 504 ms, 491 MiB |
+| 112 MB field program, 1.28M lines | 2.25 s, 2.3 GiB | 3.45 s, 1.7 GiB | 2.48 s, 1.9 GiB |
+| 5M-line field sample, 252 MB | 5.2 s, 2.9 GiB | 8.4 s, 2.1 GiB | 5.5 s, 2.2 GiB |
 
-Both suites pass under `NC_EXEC=ast` (205 lib, 46 parity and 3 CLI tests in
+Both suites pass under `NC_EXEC=ast` (209 lib, 46 parity and 3 CLI tests in
 Rust; 392 passed, 4 skipped in Python) and the CLI output is byte-identical.
 
-Where the straight-line time goes (400k lines, run loop 0.61 s): decoding
-19%, building the owned block 21%, freeing it 25%, executing 36%. Interning
-the names in a scratch copy cut the run to 0.505 s. The pre-pass that makes
-parse errors win over runtime errors decodes every trivial line a second time,
-0.12 s on 400k lines. Decoding is sequential where the fast path decodes in
-parallel.
+Phase 3 made two changes to the straight-line path. A trivial line is
+decoded into one reused block that keeps its statement list, strings and
+product boxes, so a line whose shapes the buffer has seen allocates nothing
+(a counting-allocator test checks it; per output row both paths now make the
+same 8 allocations, all for the row's cells). A program longer than one
+chunk of 4096 lines decodes the four chunks after the running one on Rayon,
+so the run loop no longer decodes on the interpreting thread; lines behind
+the running chunk are decoded again as before.
+
+Where the straight-line time goes now (400k lines, samply, per run): the AST
+path spends 0.40 s interpreting where the default spends 0.24 s, and output
+batching is 0.20 s on both. Of the 0.40 s, executing takes 0.20 s (the
+default's executor 0.17 s, the difference spread over the general executor's
+dispatch, the largest item being G code classification at run time), the
+pre-pass 0.12 s (its decode 0.085 s), loading a prefetched line into the
+reused block 0.04 s, the GOTO scan 0.02 s and the structure scan 0.02 s. The
+pre-pass is the one sequential decode left: in a scratch copy that reads the
+pre-pass's lines from the same prefetched chunks (same rule, same double
+decode), the AST path took 427 ms against 386 ms on 400k lines and 2.15 s
+against 2.31 s on the field program.
 
 ## Verified semantics and decisions (phase 1 notes)
 
