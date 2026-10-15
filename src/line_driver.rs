@@ -43,6 +43,11 @@ pub mod experiments;
 /// of the test suite, most hand-written files) stay single-threaded.
 const PARALLEL_MIN_BYTES: usize = 4 << 20; // 4 MiB
 
+/// Below this many bytes the indexed driver runs jump-free programs: its
+/// retained decode state is small there, and it skips the streaming driver's
+/// second decode. NC_STREAM_MIN_BYTES overrides it (0 streams every program).
+const STREAMING_MIN_BYTES: usize = 64 << 20; // 64 MiB
+
 type Output = crate::output::OutputRows;
 
 /// One word of a decoded trivial line, in source order.
@@ -131,7 +136,7 @@ fn reject_string_variable(key: &str, state: &State, line_no: usize) -> Result<()
 /// `interpret_blocks` for a flat block list: jumps resolve against the
 /// line index; an unresolved jump propagates to the caller.
 pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
-    if preflight_streaming(input, state)? {
+    if input.len() >= streaming_min_bytes() && preflight_streaming(input, state)? {
         return interpret_streaming(input, output, state);
     }
 
@@ -272,7 +277,7 @@ fn preflight_streaming(input: &str, state: &State) -> Result<bool, ParsingError>
 /// First decisive line of a chunk, as an index local to the chunk.
 enum PreflightVerdict {
     ParseError(usize),
-    Jump(usize),
+    Jump,
 }
 
 #[derive(Default)]
@@ -295,7 +300,7 @@ fn preflight_streaming_in(input: &str, state: &State, parts: usize) -> Result<bo
     for (range, scan) in chunks.iter().zip(&scans) {
         match scan.verdict {
             None => {}
-            Some(PreflightVerdict::Jump(_)) => return Ok(false),
+            Some(PreflightVerdict::Jump) => return Ok(false),
             Some(PreflightVerdict::ParseError(local)) => {
                 let line = input[range.clone()].lines().nth(local).expect("preflight error line");
                 // Parse again here so the error carries the preview from `state`.
@@ -343,7 +348,7 @@ fn preflight_chunk(chunk: &str) -> PreflightScan {
             .next()
             .expect("single_line block");
         if block.into_inner().any(|pair| pair.as_rule() == Rule::control) {
-            scan.verdict = Some(PreflightVerdict::Jump(index));
+            scan.verdict = Some(PreflightVerdict::Jump);
             break;
         }
     }
@@ -1237,6 +1242,13 @@ pub fn stage1_enabled() -> bool {
     !std::env::var("NC_STAGE1").is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("off"))
 }
 
+fn streaming_min_bytes() -> usize {
+    std::env::var("NC_STREAM_MIN_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(STREAMING_MIN_BYTES)
+}
+
 /// Differential tests: every program must produce identical output with the
 /// fast path enabled and disabled - the Rust twin of
 /// python/tests/test_stage1.py, focused on the deferred-word (IC/paren
@@ -1285,6 +1297,15 @@ mod tests {
     /// tables (column order ignored, like the python harness) and state.
     fn assert_paths_agree(program: &str, allow_undefined: bool) {
         let _guard = env_lock();
+        // Both line drivers: streaming (threshold 0) and indexed (never streams).
+        for min_bytes in ["0", "18446744073709551615"] {
+            std::env::set_var("NC_STREAM_MIN_BYTES", min_bytes);
+            assert_driver_agrees(program, allow_undefined);
+            std::env::remove_var("NC_STREAM_MIN_BYTES");
+        }
+    }
+
+    fn assert_driver_agrees(program: &str, allow_undefined: bool) {
         let full = run(program, false, allow_undefined);
         let fast = run(program, true, allow_undefined);
         match (full, fast) {
@@ -1614,7 +1635,11 @@ M30
         state.set_input(program);
         let (tx, rx) = std::sync::mpsc::sync_channel(8);
         let mut output = crate::output::OutputRows::stream(tx);
-        let error = super::interpret_lines(program, &mut output, &mut state).unwrap_err();
+        let _guard = env_lock();
+        std::env::set_var("NC_STREAM_MIN_BYTES", "0");
+        let result = super::interpret_lines(program, &mut output, &mut state);
+        std::env::remove_var("NC_STREAM_MIN_BYTES");
+        let error = result.unwrap_err();
         assert!(matches!(error, ParsingError::ParsingContext { line_no: 3, .. }));
         assert!(rx.try_recv().is_err(), "syntax failure must not emit earlier rows");
     }

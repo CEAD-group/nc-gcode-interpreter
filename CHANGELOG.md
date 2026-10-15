@@ -44,14 +44,19 @@ released to PyPI.
 
 ### Changed
 
-- Jump-free programs on the fast path no longer keep every decoded line in
-  memory. A parallel preflight scan validates the whole program first (a parse
-  error anywhere, also after `M30`, is still reported before any row is
-  emitted), then execution decodes and parses one line at a time, so parse
-  storage is bounded by the longest line instead of the program length. Peak
-  RSS of `nc_to_batches` on a 1.28M-line (112 MB) field program drops from
-  about 1.3 GiB to 0.4 GiB; the second decode costs 0 to 20 percent of
-  interpretation time. Programs with a jump keep the indexed path (#73).
+- Jump-free programs of 64 MiB or more on the fast path no longer keep every
+  decoded line in memory. A parallel preflight scan validates the whole
+  program first (a parse error anywhere, also after `M30`, is still reported
+  before any row is emitted), then execution decodes and parses one line at a
+  time, so parse storage is bounded by the longest line instead of the program
+  length. Peak RSS of `nc_to_batches` on a 1.28M-line (112 MB) field program
+  drops from about 1.3 GiB to 0.4 GiB, and on a 22M-line (1.1 GB) one from
+  5.4 GiB to 2.4 GiB; the second decode costs up to about 20 percent of
+  interpretation time. Below 64 MiB the indexed path stays: its retained state
+  is at most about 0.7 GiB there, and the second decode would cost the most
+  relative time. `NC_STREAM_MIN_BYTES` sets the threshold in bytes (0 streams
+  every jump-free program). Programs with a jump keep the indexed path at any
+  size (#73).
 
 - The fast path builds its jump-target index (one `N:` key per block number,
   one `LABEL:` key per label) only when a grammar-bound line mentions GOTO.

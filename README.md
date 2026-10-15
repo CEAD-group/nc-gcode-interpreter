@@ -161,16 +161,18 @@ for line_no, row, variables in nc_to_rows(program, include_variables=True):
 
 Rows are typed and forward-filled like the batch DataFrame (disable with `forward_fill=False`); errors raise from `next()` at the offending row; after exhaustion the iterator's `state` attribute holds the final interpreter state. See `python/example/streaming.py` for a runnable version.
 
-**Memory.** Programs without multi-line control blocks or jumps are validated
-in a parallel preflight scan and then executed one line at a time, so parse
-storage is bounded by the longest line instead of the program length. The input
-text, its diagnostic copy and line-offset index, variable state and any output
-the caller retains still grow with the program, so use `nc_to_batches` with a
-bounded consumer for large files. Programs with jumps keep the indexed fast
-path; control blocks and `NC_STAGE1=0` still use the whole-file parser. On a
-1.28M-line (112 MB) field program the peak RSS of `nc_to_batches` drops from
-about 1.3 GiB to 0.4 GiB, and the second decode during execution costs 0 to 20
-percent of interpretation time. Measure a local program with
+**Memory.** Programs of 64 MiB or more without multi-line control blocks or
+jumps are validated in a parallel preflight scan and then executed one line at a
+time, so parse storage is bounded by the longest line instead of the program
+length. The input text, its diagnostic copy and line-offset index, variable
+state and any output the caller retains still grow with the program, so use
+`nc_to_batches` with a bounded consumer for large files. Smaller programs and
+programs with jumps keep the indexed fast path; `NC_STREAM_MIN_BYTES` sets the
+threshold in bytes (0 streams every jump-free program). Control blocks and
+`NC_STAGE1=0` still use the whole-file parser. On a 1.28M-line (112 MB) field
+program the peak RSS of `nc_to_batches` drops from about 1.3 GiB to 0.4 GiB,
+and the second decode during execution costs up to about 20 percent of
+interpretation time. Measure a local program with
 `python scripts/benchmark.py --input <file> --modes fresh --edits none
 --threads 4 --samples 1 --batch-size 4096 --allow-undefined --axis-index-e 4
 --axis-index-elx 5 --output tmp/memory.json`.

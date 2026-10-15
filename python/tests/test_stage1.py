@@ -11,23 +11,32 @@ from nc_gcode_interpreter import nc_to_dataframe
 from polars.testing import assert_frame_equal
 
 
+def _set_env(name, value):
+    if value is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = value
+
+
 def run_both(program, **kwargs):
-    previous = os.environ.get("NC_STAGE1")
+    """Compare the whole-file parse with both line drivers: the streaming one
+    (NC_STREAM_MIN_BYTES=0) and the indexed one (a threshold no test reaches)."""
+    previous = {name: os.environ.get(name) for name in ("NC_STAGE1", "NC_STREAM_MIN_BYTES")}
     try:
         os.environ["NC_STAGE1"] = "0"
         full_df, full_state = nc_to_dataframe(program, **kwargs)
         os.environ["NC_STAGE1"] = "1"
-        fast_df, fast_state = nc_to_dataframe(program, **kwargs)
+        for min_bytes in ("0", str(2**63)):
+            os.environ["NC_STREAM_MIN_BYTES"] = min_bytes
+            fast_df, fast_state = nc_to_dataframe(program, **kwargs)
+            assert_frame_equal(full_df, fast_df, check_column_order=False)
+            assert full_state["symbol_table"] == fast_state["symbol_table"]
+            assert full_state["axes"] == fast_state["axes"]
+            assert full_state["translation"] == fast_state["translation"]
+            assert full_state["rotation"] == fast_state["rotation"]
     finally:
-        if previous is None:
-            os.environ.pop("NC_STAGE1", None)
-        else:
-            os.environ["NC_STAGE1"] = previous
-    assert_frame_equal(full_df, fast_df, check_column_order=False)
-    assert full_state["symbol_table"] == fast_state["symbol_table"]
-    assert full_state["axes"] == fast_state["axes"]
-    assert full_state["translation"] == fast_state["translation"]
-    assert full_state["rotation"] == fast_state["rotation"]
+        for name, value in previous.items():
+            _set_env(name, value)
     return fast_df
 
 
