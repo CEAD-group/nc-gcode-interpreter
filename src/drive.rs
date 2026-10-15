@@ -446,13 +446,24 @@ struct Chunk<'a> {
     arena: Vec<Word<'a>>,
 }
 
-fn decode_chunk(input: &str, index: usize, offset: usize, chunk_lines: usize) -> Chunk<'_> {
-    let mut chunk = Chunk {
+/// Decode chunk `index` into `recycled`, a retired chunk whose buffers keep
+/// their capacity, or into fresh buffers.
+fn decode_chunk<'a>(
+    input: &'a str,
+    index: usize,
+    offset: usize,
+    chunk_lines: usize,
+    recycled: Option<Chunk<'a>>,
+) -> Chunk<'a> {
+    let mut chunk = recycled.unwrap_or_else(|| Chunk {
         index,
         lines: Vec::with_capacity(chunk_lines),
         // CAM output averages about four words per line; one reservation keeps workers off the allocator.
         arena: Vec::with_capacity(chunk_lines * 4),
-    };
+    });
+    chunk.index = index;
+    chunk.lines.clear();
+    chunk.arena.clear();
     let mut offset = offset;
     for line_no in index * chunk_lines + 1..(index + 1) * chunk_lines + 1 {
         if offset >= input.len() {
@@ -485,6 +496,8 @@ struct Prefetch<'s, 'a> {
     /// The next chunk to spawn.
     next: usize,
     running: Option<Chunk<'a>>,
+    /// Retired chunks, handed to the next decodes so their buffers are not freed and allocated again.
+    spare: Vec<Chunk<'a>>,
 }
 
 impl<'s, 'a> Prefetch<'s, 'a> {
@@ -497,6 +510,7 @@ impl<'s, 'a> Prefetch<'s, 'a> {
             ahead: VecDeque::new(),
             next: 0,
             running: None,
+            spare: Vec::new(),
         }
     }
 
@@ -518,7 +532,7 @@ impl<'s, 'a> Prefetch<'s, 'a> {
 
     /// Make chunk `index` the running one and keep the window after it decoding.
     fn advance(&mut self, index: usize) {
-        self.running = None;
+        self.spare.extend(self.running.take());
         // Chunks a forward jump passed over.
         while self.ahead.front().is_some_and(|(next, _)| *next < index) {
             self.ahead.pop_front();
@@ -539,11 +553,11 @@ impl<'s, 'a> Prefetch<'s, 'a> {
     fn spawn_ahead(&mut self, count: usize) {
         while self.ahead.len() < count && self.next < self.starts.len() {
             let (index, offset) = (self.next, self.starts[self.next]);
-            let (input, chunk_lines) = (self.input, self.pipeline.chunk_lines);
+            let (input, chunk_lines, recycled) = (self.input, self.pipeline.chunk_lines, self.spare.pop());
             let (sender, receiver) = sync_channel(1);
             self.scope.spawn(move |_| {
                 // The run may have ended or jumped past this chunk.
-                let _ = sender.send(decode_chunk(input, index, offset, chunk_lines));
+                let _ = sender.send(decode_chunk(input, index, offset, chunk_lines, recycled));
             });
             self.ahead.push_back((index, receiver));
             self.next += 1;
@@ -1123,6 +1137,38 @@ N60 GOTOB TOP
             assert_eq!(text(&mut prefetch, 50), Some("N50 X50"));
             assert_eq!(text(&mut prefetch, 51), None);
             assert!(prefetch.ahead.len() <= pipeline.window);
+        });
+    }
+
+    #[test]
+    fn recycled_chunks_hold_only_their_own_lines() {
+        // Words per line vary, so a recycled arena holds more words than its next chunk needs.
+        let input: String = (1..=23)
+            .map(|i| format!("N{i} X{i}{}\n", " Y1 Z2 E3 F4".repeat(i % 3)))
+            .collect();
+        let pipeline = Pipeline {
+            chunk_lines: 4,
+            window: 1,
+        };
+        let starts = chunk_starts(&input, pipeline.chunk_lines);
+        rayon::in_place_scope(|scope| {
+            let mut prefetch = Prefetch::new(scope, &input, starts, pipeline);
+            for (index, text) in input.lines().enumerate() {
+                let line_no = index + 1;
+                let (line, arena) = prefetch.line(line_no).expect("ahead");
+                assert_eq!(line.text, text);
+                let DecodeResult::Trivial(decoded, _) = &line.result else {
+                    panic!("{text:?} is not trivial");
+                };
+                let mut own = Vec::new();
+                let DecodeResult::Trivial(fresh, _) = decode_line(text, line_no, &mut own) else {
+                    panic!("{text:?} is not trivial");
+                };
+                assert_eq!(arena[decoded.words.clone()].len(), own[fresh.words].len(), "{text:?}");
+            }
+            assert!(prefetch.line(24).is_none());
+            // Retired chunks wait for the next spawn; they never pile up beyond the window.
+            assert!(prefetch.spare.len() <= pipeline.window + 1, "{}", prefetch.spare.len());
         });
     }
 
