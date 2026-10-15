@@ -287,7 +287,10 @@ fn preflight_streaming_in(input: &str, state: &State, parts: usize) -> Result<bo
     let stats = std::env::var("NC_STAGE1_STATS").is_ok();
     let start = std::time::Instant::now();
     let chunks = chunk_at_newlines(input, parts);
-    let scans: Vec<PreflightScan> = chunks.par_iter().map(|range| preflight_chunk(&input[range.clone()])).collect();
+    let scans: Vec<PreflightScan> = chunks
+        .par_iter()
+        .map(|range| preflight_chunk(&input[range.clone()]))
+        .collect();
     let (mut total, mut non_blank, mut needs_grammar) = (0, 0, 0);
     for (range, scan) in chunks.iter().zip(&scans) {
         match scan.verdict {
