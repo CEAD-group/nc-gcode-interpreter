@@ -94,10 +94,15 @@ fn interpret_ast_with(
                 return Driver::new(program, None).run(state, output);
             }
             rayon::in_place_scope(|scope| {
-                // The pre-pass and the run each decode every line, both a window ahead on Rayon.
-                let mut ahead = Prefetch::new(scope, input, starts.clone(), pipeline);
-                let program = Program::index_with(input, table, Some(&mut ahead), state).map_err(context)?;
-                drop(ahead);
+                // The pre-pass and the run each decode every line, both a window ahead on Rayon;
+                // with one Rayon thread the pre-pass's hand-off costs more than its bookkeeping hides.
+                let program = if rayon::current_num_threads() > 1 {
+                    let mut ahead = Prefetch::new(scope, input, starts.clone(), pipeline);
+                    Program::index_with(input, table, Some(&mut ahead), state)
+                } else {
+                    Program::index_with(input, table, None, state)
+                }
+                .map_err(context)?;
                 let prefetch = Prefetch::new(scope, input, starts, pipeline);
                 Driver::new(program, Some(prefetch)).run(state, output)
             })
