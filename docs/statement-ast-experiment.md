@@ -23,42 +23,68 @@ line-level structure forms (`if_head`, `else_kw`, `endif_kw`, `while_head`,
 
 ## Results
 
-Release builds, `nc_to_batches`, best of 3, peak RSS of the process. The
-first AST column is 561be8a (phase 2), the second the head after phase 3;
-each row was measured back to back in one session, and other sessions on the
-machine moved the default's own time by up to 10% between rows.
+Release builds, `nc_to_batches`, best of 3 runs in each of two or three
+alternating rounds, peak RSS of the process, on the branch rebased onto main
+with #82, #85 and #86 (so the default path includes #82's bounded parse and
+its preflight). Phase 2 is 8e074de with the build fix of 48b3e29; the
+sequential pre-pass column is b4fa96b with the pre-pass decoding on the
+interpreting thread, a scratch build that isolates that change; the head is
+86aaffa. Other sessions kept the load average between 5 and 8, and the
+default's own time varied by up to 10% between rounds.
 
-| Program | Default | AST path, 561be8a | AST path, phase 3 |
-| --- | --- | --- | --- |
-| 100 WHILE loops, 100k lines | 558 ms, 366 MiB | 239 ms, 330 MiB | 180 ms, 336 MiB |
-| 50k grammar-bound lines | 186 ms, 168 MiB | 266 ms, 142 MiB | 250 ms, 143 MiB |
-| 400k straight lines | 376 ms, 647 MiB | 776 ms, 496 MiB | 504 ms, 491 MiB |
-| 112 MB field program, 1.28M lines | 2.25 s, 2.3 GiB | 3.45 s, 1.7 GiB | 2.48 s, 1.9 GiB |
-| 5M-line field sample, 252 MB | 5.2 s, 2.9 GiB | 8.4 s, 2.1 GiB | 5.5 s, 2.2 GiB |
+| Program | Default | AST, phase 2 | AST, sequential pre-pass | AST, head |
+| --- | --- | --- | --- | --- |
+| 100 WHILE loops, 100k lines | 515 ms, 414 MiB | 248 ms, 331 MiB | 160 ms, 320 MiB | 159 ms, 356 MiB |
+| 50k grammar-bound lines | 189 ms, 243 MiB | 258 ms, 143 MiB | 261 ms, 146 MiB | 256 ms, 143 MiB |
+| 400k straight lines | 389 ms, 669 MiB | 797 ms, 497 MiB | 506 ms, 507 MiB | 419 ms, 513 MiB |
+| 112 MB field program, 1.28M lines | 2.24 s, 1.7 GiB | 3.54 s, 1.5 GiB | 2.56 s, 1.6 GiB | 2.10 s, 1.6 GiB |
+| 5M-line field sample, 252 MB | 5.07 s, 2.0 GiB | 8.74 s, 1.8 GiB | 5.87 s, 1.7 GiB | 5.04 s, 2.0 GiB |
 
-Both suites pass under `NC_EXEC=ast` (209 lib, 46 parity and 3 CLI tests in
-Rust; 392 passed, 4 skipped in Python) and the CLI output is byte-identical.
+With `RAYON_NUM_THREADS=1` the head takes 507 ms against 487 ms on 400k
+lines and 2.42 s against 2.60 s on the field program; with 4 threads 437
+against 438 ms and 2.14 against 2.31 s.
 
-Phase 3 made two changes to the straight-line path. A trivial line is
+The pre-pass (every line validated and every grammar-bound line lowered
+before anything runs) on its own, from timing builds through the CLI, best
+of 6 runs at 8 threads and one run at 4 and 1:
+
+| Program | Sequential | Head, 8 threads | Head, 4 threads | Head, 1 thread |
+| --- | --- | --- | --- | --- |
+| 100 WHILE loops, 100k lines | 15 ms | 6 ms | 7 ms | 15 ms |
+| 50k grammar-bound lines | 183 ms | 183 ms | 196 ms | 190 ms |
+| 400k straight lines | 116 ms | 34 ms | 36 ms | 104 ms |
+| 112 MB field program, 1.28M lines | 486 ms | 130 ms | 154 ms | 424 ms |
+
+With one Rayon thread the pre-pass decodes on the interpreting thread. On
+the grammar-bound program its time is the per-line pest parse, which stays
+on the interpreting thread. For comparison, the default path's #82
+preflight takes 62 ms on the field program with 8 threads and 365 ms with
+one.
+
+Both suites pass under `NC_EXEC=ast` (223 lib, 46 parity and 3 CLI tests in
+Rust; 407 passed, 4 skipped in Python) and the CLI output is byte-identical.
+
+Phase 3 changed the straight-line path as follows. A trivial line is
 decoded into one reused block that keeps its statement list, strings and
 product boxes, so a line whose shapes the buffer has seen allocates nothing
-(a counting-allocator test checks it; per output row both paths now make the
-same 8 allocations, all for the row's cells). A program longer than one
-chunk of 4096 lines decodes the four chunks after the running one on Rayon,
-so the run loop no longer decodes on the interpreting thread; lines behind
-the running chunk are decoded again as before.
+(a counting-allocator test checks it). A program longer than one chunk of
+4096 lines decodes the chunks ahead of the running one on Rayon, in the
+pre-pass and again in the run; lines behind the running chunk are decoded
+again on the interpreting thread, and retired chunks are recycled into the
+next decode. The pre-pass's GOTO scan skips the 64-byte blocks that hold no
+O.
 
-Where the straight-line time goes now (400k lines, samply, per run): the AST
-path spends 0.40 s interpreting where the default spends 0.24 s, and output
-batching is 0.20 s on both. Of the 0.40 s, executing takes 0.20 s (the
-default's executor 0.17 s, the difference spread over the general executor's
-dispatch, the largest item being G code classification at run time), the
-pre-pass 0.12 s (its decode 0.085 s), loading a prefetched line into the
-reused block 0.04 s, the GOTO scan 0.02 s and the structure scan 0.02 s. The
-pre-pass is the one sequential decode left: in a scratch copy that reads the
-pre-pass's lines from the same prefetched chunks (same rule, same double
-decode), the AST path took 427 ms against 386 ms on 400k lines and 2.15 s
-against 2.31 s on the field program.
+Where the straight-line time goes now (400k lines, samply, interpreting
+thread, per run): the AST path spends 0.29 s interpreting where the default
+spends 0.24 s, and output batching is 0.20 s on both. Of the 0.29 s,
+executing takes 0.19 s (the default's executor 0.18 s; the largest
+difference is classifying G codes at run time, which the default does while
+decoding on the workers), loading a prefetched line into the reused block
+0.03 s, the pre-pass 0.04 s and the structure scan 0.02 s, the same scan
+the default runs. Per output row both paths make 8 allocations on this
+program; on the field sample the AST path makes 16.4 against 16.1, because
+the decoder uppercases each G code into a new string and the AST path
+decodes every line twice.
 
 ## Verified semantics and decisions (phase 1 notes)
 
