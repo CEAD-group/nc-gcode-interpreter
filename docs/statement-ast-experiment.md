@@ -238,21 +238,24 @@ none either.
 - Inherited scan quirk: `contains_goto_word` also sees GOTO inside a string,
   so `IF MATCH(S,"GOTO")>0` is taken for a single-line jump.
 
-## Pre-existing fast-path divergences (found by the equality test, verified)
+## Fast-path divergences found by the equality test (fixed by #83)
 
-The byte decoder claims these lines with a meaning the grammar does not give
-them, so the default path and NC_STAGE1=0 disagree:
+The byte decoder claimed these lines with a meaning the grammar does not give
+them, so the default path and NC_STAGE1=0 disagreed:
 
 - `N10X5`: decoder N10 + X5; grammar: the call `N10X5` (its `integer` needs a
   non-letter after the digits). `N10LBL: X1` is a parse error in the grammar.
 - `TRANS=5`, `ROT=1` (a frame keyword then `=`): decoder: variable = 5;
   grammar: parse error.
 - `X=5 AND Y1` with AND, OR, XOR, B_AND, B_OR or B_XOR after a constant:
-  decoder: X=5, call "AND ", Y=1; grammar: X = 5 AND Y1. The decoder rejects
-  DIV and MOD for this reason but misses the logic and bit operators.
+  decoder: X=5, call "AND ", Y=1; grammar: X = 5 AND Y1. The decoder rejected
+  DIV and MOD for this reason but missed the logic and bit operators.
 
-Pinned by `decode_ast::tests::known_decoder_divergences`; the equality test
-covers 553 other decoder-claimed lines.
+The fix (PR #85, cherry-picked here) sends all three to the grammar. A seeded
+token-soup test in `line_driver.rs` found no other class.
+`decode_ast::tests::former_decoder_divergences_take_the_grammar` pins that the
+decoder no longer claims them; the equality test covers 553 other
+decoder-claimed lines.
 
 ## Deviations from the brief
 

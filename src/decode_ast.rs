@@ -560,20 +560,20 @@ mod tests {
         }
     }
 
-    /// Lines the decoder claims with a meaning the grammar does not give them;
-    /// a pre-existing fast-path divergence (NC_STAGE1=0 interprets them differently).
+    /// Lines the decoder used to claim with a meaning the grammar does not
+    /// give them (#83); it now leaves them to the grammar, so both entries
+    /// build the block from the same parse.
     #[test]
-    fn known_decoder_divergences() {
-        let state = state();
+    fn former_decoder_divergences_take_the_grammar() {
         for line in [
-            // The decoder ends the block number at the digits; the grammar's
-            // integer needs a non-letter after them, so this is a call N10X5.
+            // The grammar's integer needs a non-letter after the digits, so
+            // this is a call N10X5, not block number 10.
             "N10X5",
             "N10LBL: X1",
             // A frame keyword followed by '=' is a parse error in the grammar.
             "TRANS=5",
             "ROT=1",
-            // Word operators the decoder takes for calls continue the expression.
+            // Word operators continue the expression after a constant.
             "X=5 AND Y1",
             "X=5 OR Y1",
             "X=5 XOR Y1",
@@ -581,10 +581,7 @@ mod tests {
             "X=5 B_OR Y1",
             "X=5 B_XOR Y1",
         ] {
-            let from_decoder = decoded(line).unwrap_or_else(|| panic!("{line:?} is no longer claimed"));
-            if let Ok(from_pest) = crate::lower::parse_line(line, 7, &state) {
-                assert_ne!(from_decoder, from_pest, "{line:?} no longer diverges");
-            }
+            assert!(decoded(line).is_none(), "{line:?} must take the grammar");
         }
     }
 }
