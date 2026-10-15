@@ -254,26 +254,57 @@ pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> R
 }
 
 /// Validate syntax before emitting rows (including source after M30), preserving
-/// the existing parse-before-execute error ordering. Retain only one line's
-/// words/tree. The structure scan has already excluded multi-line controls,
-/// so a remaining control node is a jump and needs the indexed driver.
+/// the existing parse-before-execute error ordering. Each worker retains only
+/// one line's words/tree. The structure scan has already excluded multi-line
+/// controls, so a remaining control node is a jump and needs the indexed driver.
+/// Byte chunks are scanned in parallel; the lowest line that fails to parse or
+/// holds a jump decides, exactly as a sequential scan would.
 fn preflight_streaming(input: &str, state: &State) -> Result<bool, ParsingError> {
-    let mut arena = Vec::new();
+    let threads = rayon::current_num_threads().max(1);
+    let parts = if input.len() < PARALLEL_MIN_BYTES || threads <= 1 {
+        1
+    } else {
+        threads * 8
+    };
+    preflight_streaming_in(input, state, parts)
+}
+
+/// First decisive line of a chunk, as an index local to the chunk.
+enum PreflightVerdict {
+    ParseError(usize),
+    Jump(usize),
+}
+
+#[derive(Default)]
+struct PreflightScan {
+    lines: usize,
+    non_blank: usize,
+    needs_grammar: usize,
+    verdict: Option<PreflightVerdict>,
+}
+
+fn preflight_streaming_in(input: &str, state: &State, parts: usize) -> Result<bool, ParsingError> {
     let stats = std::env::var("NC_STAGE1_STATS").is_ok();
     let start = std::time::Instant::now();
+    let chunks = chunk_at_newlines(input, parts);
+    let scans: Vec<PreflightScan> = chunks.par_iter().map(|range| preflight_chunk(&input[range.clone()])).collect();
     let (mut total, mut non_blank, mut needs_grammar) = (0, 0, 0);
-    for (index, line) in input.lines().enumerate() {
-        total += 1;
-        arena.clear();
-        let decoded = decode_line(line, index + 1, &mut arena);
-        non_blank += usize::from(!matches!(decoded, DecodeResult::Blank));
-        if matches!(decoded, DecodeResult::NeedsGrammar) {
-            needs_grammar += 1;
-            let block = parse_single_line(line, index, state)?;
-            if block.into_inner().any(|pair| pair.as_rule() == Rule::control) {
-                return Ok(false);
+    for (range, scan) in chunks.iter().zip(&scans) {
+        match scan.verdict {
+            None => {}
+            Some(PreflightVerdict::Jump(_)) => return Ok(false),
+            Some(PreflightVerdict::ParseError(local)) => {
+                let line = input[range.clone()].lines().nth(local).expect("preflight error line");
+                // Parse again here so the error carries the preview from `state`.
+                parse_single_line(line, total + local, state)?;
+                return Err(ParsingError::ParseError {
+                    message: format!("Line {} failed to parse in the preflight scan", total + local + 1),
+                });
             }
         }
+        total += scan.lines;
+        non_blank += scan.non_blank;
+        needs_grammar += scan.needs_grammar;
     }
     if stats {
         eprintln!(
@@ -282,6 +313,63 @@ fn preflight_streaming(input: &str, state: &State) -> Result<bool, ParsingError>
         );
     }
     Ok(true)
+}
+
+/// Scan one chunk of whole lines; stops at the first line that decides.
+fn preflight_chunk(chunk: &str) -> PreflightScan {
+    let mut scan = PreflightScan::default();
+    let mut arena = Vec::new();
+    for (index, line) in chunk.lines().enumerate() {
+        scan.lines += 1;
+        arena.clear();
+        // The line number only matters for execution, which this scan discards.
+        let decoded = decode_line(line, index + 1, &mut arena);
+        scan.non_blank += usize::from(!matches!(decoded, DecodeResult::Blank));
+        if !matches!(decoded, DecodeResult::NeedsGrammar) {
+            continue;
+        }
+        scan.needs_grammar += 1;
+        let Ok(mut parsed) = NCParser::parse(Rule::single_line, line) else {
+            scan.verdict = Some(PreflightVerdict::ParseError(index));
+            break;
+        };
+        let block = parsed
+            .next()
+            .expect("single_line entry")
+            .into_inner()
+            .next()
+            .expect("single_line block");
+        if block.into_inner().any(|pair| pair.as_rule() == Rule::control) {
+            scan.verdict = Some(PreflightVerdict::Jump(index));
+            break;
+        }
+    }
+    scan
+}
+
+/// Split `input` into at most `parts` byte ranges that end right after a
+/// newline, so every range holds whole lines and the ranges concatenate to the
+/// input. Line counts per range are not known up front; callers sum them.
+fn chunk_at_newlines(input: &str, parts: usize) -> Vec<Range<usize>> {
+    let bytes = input.as_bytes();
+    let mut ranges = Vec::with_capacity(parts);
+    let mut start = 0;
+    for part in 1..parts {
+        let target = bytes.len() / parts * part;
+        if target <= start {
+            continue;
+        }
+        let Some(newline) = bytes[target..].iter().position(|&b| b == b'\n') else {
+            break;
+        };
+        let end = target + newline + 1;
+        ranges.push(start..end);
+        start = end;
+    }
+    if start < bytes.len() {
+        ranges.push(start..bytes.len());
+    }
+    ranges
 }
 
 /// O(longest line) decoding/parse storage, independent of the number of lines.
@@ -1516,5 +1604,31 @@ M30
         let error = super::interpret_lines(program, &mut output, &mut state).unwrap_err();
         assert!(matches!(error, ParsingError::ParsingContext { line_no: 3, .. }));
         assert!(rx.try_recv().is_err(), "syntax failure must not emit earlier rows");
+    }
+
+    #[test]
+    fn preflight_chunks_agree_with_a_single_chunk() {
+        let mut state = crate::state::State::new(vec!["X".into()], 100, None, false);
+        let body: String = (0..300).map(|i| format!("N{i} X{i} ; café\r\n")).collect();
+        let cases = [
+            (format!("{body}X=SIN(30)\r\n{body}"), Ok(true)),
+            (format!("{body}GOTOF END\r\n{body}END: M30"), Ok(false)),
+            (format!("{body}X=SIN(\r\n{body}GOTOF END\r\n{body}END: M30"), Err(301)),
+            (format!("{body}GOTOF END\r\n{body}X=SIN(\r\n{body}END: M30"), Ok(false)),
+            (format!("{body}{body}X=SIN("), Err(601)),
+        ];
+        for (program, expected) in &cases {
+            state.set_input(program);
+            for parts in [1, 2, 7, 64, 5000] {
+                let got = super::preflight_streaming_in(program, &state, parts).map_err(|e| match e {
+                    ParsingError::ParsingContext { line_no, .. } => line_no,
+                    other => panic!("unexpected error {other:?}"),
+                });
+                assert_eq!(&got, expected, "parts={parts}");
+                let chunks = super::chunk_at_newlines(program, parts);
+                let joined: String = chunks.iter().map(|range| &program[range.clone()]).collect();
+                assert_eq!(joined, *program, "parts={parts}");
+            }
+        }
     }
 }
