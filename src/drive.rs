@@ -8,7 +8,8 @@
 //! which also raises the structure errors of check_structures. Jumps and loop
 //! iterations go to line indices and re-decode the trivial lines they revisit.
 //! A program longer than one chunk decodes the chunks after the running one
-//! on Rayon (`Prefetch`), a bounded window ahead.
+//! on Rayon (`Prefetch`), a bounded window ahead, in the pre-pass and again
+//! in the run.
 //!
 //! Before running, one pass parses and lowers every grammar-bound line with
 //! `lower::parse_line` (so a parse error anywhere wins over a runtime error,
@@ -77,25 +78,52 @@ fn interpret_ast_with(
 ) -> Result<(), ParsingError> {
     state.set_input(input);
     let (shape, table) = scan_structure_table(input)?;
-    let chunk_lines = pipeline.unwrap_or(Pipeline::DEFAULT).chunk_lines;
-    let mut program = Program::index_chunked(input, table, chunk_lines, state).map_err(|error| {
+    let context = |error| {
         if shape.has_block_structures {
             initial_parse_context(error)
         } else {
             error
         }
-    })?;
-    let starts = std::mem::take(&mut program.chunk_starts);
+    };
     match pipeline {
         // On a Rayon worker, waiting for a chunk queued behind this very job could deadlock.
-        Some(pipeline) if starts.len() > 1 && rayon::current_thread_index().is_none() => {
+        Some(pipeline) if rayon::current_thread_index().is_none() => {
+            let starts = chunk_starts(input, pipeline.chunk_lines);
+            if starts.len() <= 1 {
+                let program = Program::index_with(input, table, None, state).map_err(context)?;
+                return Driver::new(program, None).run(state, output);
+            }
             rayon::in_place_scope(|scope| {
+                // The pre-pass and the run each decode every line, both a window ahead on Rayon.
+                let mut ahead = Prefetch::new(scope, input, starts.clone(), pipeline);
+                let program = Program::index_with(input, table, Some(&mut ahead), state).map_err(context)?;
+                drop(ahead);
                 let prefetch = Prefetch::new(scope, input, starts, pipeline);
                 Driver::new(program, Some(prefetch)).run(state, output)
             })
         }
-        _ => Driver::new(program, None).run(state, output),
+        _ => {
+            let program = Program::index_with(input, table, None, state).map_err(context)?;
+            Driver::new(program, None).run(state, output)
+        }
     }
+}
+
+/// Byte offset of the first line of every chunk of `chunk_lines` lines.
+fn chunk_starts(input: &str, chunk_lines: usize) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut offset = 0;
+    let mut line = 0usize;
+    while offset < input.len() {
+        if line.is_multiple_of(chunk_lines) {
+            starts.push(offset);
+        }
+        offset = input[offset..]
+            .find('\n')
+            .map_or(input.len(), |newline| offset + newline + 1);
+        line += 1;
+    }
+    starts
 }
 
 /// A jump scope: the top level, the body of the structure opened on a line
@@ -129,8 +157,6 @@ struct Program<'a> {
     /// The program mentions GOTO; without it no jump can happen, so the jump
     /// index and the scope bookkeeping are skipped, as on the fast path.
     has_jumps: bool,
-    /// Byte offset of the first line of every decode chunk.
-    chunk_starts: Vec<usize>,
 }
 
 /// The line starting at byte `offset` as `str::lines` yields it, and the
@@ -273,21 +299,20 @@ fn describe_role(role: Option<LineRole>) -> String {
 impl<'a> Program<'a> {
     /// The pre-pass: validate every grammar-bound line and every structure
     /// line, record the offsets, and build the per-scope jump index.
-    /// The pre-pass with the default decode chunks.
+    /// The pre-pass decoding every line on this thread.
     #[cfg(test)]
     fn index(input: &'a str, table: StructureTable, state: &State) -> Result<Self, ParsingError> {
-        Self::index_chunked(input, table, Pipeline::DEFAULT.chunk_lines, state)
+        Self::index_with(input, table, None, state)
     }
 
-    /// The pre-pass, also recording where every chunk of `chunk_lines` lines starts.
-    fn index_chunked(
+    /// The pre-pass, taking the decoded lines from `prefetch` when given.
+    fn index_with(
         input: &'a str,
         table: StructureTable,
-        chunk_lines: usize,
+        mut prefetch: Option<&mut Prefetch<'_, 'a>>,
         state: &State,
     ) -> Result<Self, ParsingError> {
         let has_jumps = mentions_goto(input);
-        let mut chunk_starts = Vec::new();
         let mut offsets = HashMap::new();
         let mut grammar = HashMap::default();
         let mut targets: HashMap<Scope, HashMap<String, Vec<usize>>> = HashMap::new();
@@ -295,14 +320,19 @@ impl<'a> Program<'a> {
         let mut arena: Vec<Word> = Vec::new();
         let mut at = Cursor { line: 1, offset: 0 };
         while at.offset < input.len() {
-            if (at.line - 1).is_multiple_of(chunk_lines) {
-                chunk_starts.push(at.offset);
-            }
-            let (text, next_offset) = line_at(input, at.offset);
             let role = table.role(at.line);
-            arena.clear();
+            let sequential;
+            let (text, next_offset, result) = match prefetch.as_mut().and_then(|p| p.line(at.line)) {
+                Some((line, _)) => (line.text, line.next_offset, &line.result),
+                None => {
+                    let (text, next_offset) = line_at(input, at.offset);
+                    arena.clear();
+                    sequential = decode_line(text, at.line, &mut arena);
+                    (text, next_offset, &sequential)
+                }
+            };
             let mut keys: [Option<String>; 2] = [None, None];
-            match decode_line(text, at.line, &mut arena) {
+            match result {
                 DecodeResult::Blank => check_role(at.line, None, role, state)?,
                 DecodeResult::Trivial(decoded, label) => {
                     check_role(at.line, None, role, state)?;
@@ -355,7 +385,6 @@ impl<'a> Program<'a> {
             offsets,
             targets,
             has_jumps,
-            chunk_starts,
         })
     }
 
@@ -1108,6 +1137,45 @@ N60 GOTOB TOP
                     let pipeline = Pipeline { chunk_lines, window };
                     assert_eq!(run_with(program, Some(pipeline)), sequential, "{pipeline:?}\n{program}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn the_decode_pipeline_reports_the_pre_pass_errors_of_sequential_decoding() {
+        let (a, b) = (straight(1), straight(2));
+        let programs = [
+            // A parse error in a later chunk wins over the runtime error before it.
+            format!("{a}GOTOF NOWHERE\n{b}X=\n{b}"),
+            // Two parse errors: the first one is reported.
+            format!("{a}Y=\n{b}X=\n"),
+            // A structure line the scan pairs but the line does not parse as.
+            format!("{a}DEF STRING[8] S=\"A\"\nIF MATCH(S,\"GOTO\")>0\n{b}"),
+        ];
+        for program in &programs {
+            let sequential = run_with(program, None);
+            assert!(sequential.starts_with("Err("), "{sequential}");
+            for chunk_lines in [1, 3, 8] {
+                for window in [1, 4] {
+                    let pipeline = Pipeline { chunk_lines, window };
+                    assert_eq!(run_with(program, Some(pipeline)), sequential, "{pipeline:?}\n{program}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn chunk_starts_follow_line_at() {
+        for input in ["", "a", "a\n", "a\nb", "a\r\nb\r\n\n\nc", "\n\n\n\n\n"] {
+            let mut offsets = Vec::new();
+            let mut offset = 0;
+            while offset < input.len() {
+                offsets.push(offset);
+                offset = line_at(input, offset).1;
+            }
+            for chunk_lines in [1, 2, 3] {
+                let expected: Vec<usize> = offsets.iter().copied().step_by(chunk_lines).collect();
+                assert_eq!(chunk_starts(input, chunk_lines), expected, "{input:?} {chunk_lines}");
             }
         }
     }
