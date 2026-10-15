@@ -225,6 +225,11 @@ pub fn nc_to_batch_stream_with_line_numbers(
 
 /// Interpret a file, pushing rows into `output`.
 fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
+    // Experimental statement-AST path; it sets the input and scans the structure itself.
+    if std::env::var("NC_EXEC").is_ok_and(|v| v == "ast") {
+        return crate::drive::interpret_ast(input, state, output);
+    }
+
     // Store input for error messages
     state.set_input(input);
 
@@ -381,6 +386,19 @@ fn text_from_error_column(error: &pest::error::Error<Rule>) -> Option<String> {
 fn describe_rule(rule: Rule) -> &'static str {
     match rule {
         Rule::file | Rule::blocks | Rule::block => "an NC block",
+        Rule::line | Rule::sparse_line_blocks | Rule::line_block => "an NC block",
+        Rule::line_control => "a control statement",
+        Rule::if_head | Rule::if_kw => "IF",
+        Rule::else_kw => "ELSE",
+        Rule::endif_kw => "ENDIF",
+        Rule::while_head | Rule::while_kw => "WHILE",
+        Rule::endwhile_kw => "ENDWHILE",
+        Rule::for_head | Rule::for_kw => "FOR",
+        Rule::endfor_kw => "ENDFOR",
+        Rule::repeat_kw => "REPEAT",
+        Rule::until_tail | Rule::until_kw => "UNTIL",
+        Rule::loop_kw => "LOOP",
+        Rule::endloop_kw => "ENDLOOP",
         Rule::newline => "a new line",
         Rule::EOI => "the end of the program",
         Rule::comment => "a comment (;...)",
