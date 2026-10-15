@@ -174,10 +174,19 @@ fn line_at(input: &str, offset: usize) -> (&str, usize) {
 
 /// Conservative: a GOTO in a comment or string only builds an unused index.
 fn mentions_goto(input: &str) -> bool {
-    input
-        .as_bytes()
-        .windows(4)
-        .any(|word| word.eq_ignore_ascii_case(b"GOTO"))
+    const BLOCK: usize = 64;
+    let bytes = input.as_bytes();
+    bytes.chunks(BLOCK).enumerate().any(|(index, block)| {
+        // Branch-free so it vectorizes; CAM output rarely holds an O, so most blocks stop here.
+        let has_o = block.iter().fold(false, |found, &byte| found | (byte | 0x20 == b'o'));
+        // The O after the G lies in this block, so the G starts at most one byte before it.
+        has_o
+            && ((index * BLOCK).saturating_sub(1)..index * BLOCK + block.len()).any(|at| {
+                bytes
+                    .get(at..at + 4)
+                    .is_some_and(|word| word.eq_ignore_ascii_case(b"GOTO"))
+            })
+    })
 }
 
 fn block_number_key(digits: &str) -> String {
@@ -990,6 +999,29 @@ mod tests {
             .and_then(|targets| targets.get(key))
             .cloned()
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn mentions_goto_finds_every_spelling_at_every_block_offset() {
+        let reference = |text: &str| {
+            text.as_bytes()
+                .windows(4)
+                .any(|word| word.eq_ignore_ascii_case(b"GOTO"))
+        };
+        for word in ["GOTO", "goto", "GoTo", "gOtO", "GOT", "OTO", "G0TO", "GOTOF"] {
+            for offset in 0..140 {
+                for tail in [0, 1, 3, 70] {
+                    let text = format!("{}{word}{}", "X".repeat(offset), "Y".repeat(tail));
+                    assert_eq!(
+                        mentions_goto(&text),
+                        reference(&text),
+                        "{word} at {offset}, tail {tail}"
+                    );
+                }
+            }
+        }
+        assert!(!mentions_goto(""));
+        assert!(!mentions_goto("O O O O ; MATERIAL_TO_GO"));
     }
 
     #[test]
