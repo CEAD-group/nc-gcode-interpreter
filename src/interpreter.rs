@@ -234,7 +234,8 @@ fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Re
 
     // Stage-1 fast path: structure-free programs (all CAM output) are
     // interpreted line by line - trivial lines through the byte decoder,
-    // the rest through one sparse pest parse. NC_STAGE1=0 disables it.
+    // the rest through pest, retaining one line at a time when there are no
+    // jumps. NC_STAGE1=0 disables it.
     if !shape.has_block_structures && crate::line_driver::stage1_enabled() {
         return match crate::line_driver::interpret_lines(input, output, state)? {
             BlockFlow::Continue | BlockFlow::EndProgram => Ok(()),
@@ -269,9 +270,9 @@ fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Re
     // Experimental: the explicit-stack VM (#47) runs the same structured path
     // when NC_VM=1, for differential parity against the recursive walker.
     let flow = if crate::interpret_rules::vm::vm_enabled() {
-        crate::interpret_rules::vm::run(blocks, output, state)?
+        crate::interpret_rules::vm::run(blocks.into(), output, state)?
     } else {
-        interpret_blocks(blocks, output, state)?
+        interpret_blocks(blocks.into(), output, state)?
     };
     match flow {
         BlockFlow::Continue | BlockFlow::EndProgram => Ok(()),

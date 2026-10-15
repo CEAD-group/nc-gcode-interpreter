@@ -35,7 +35,7 @@ impl<'a> GrammarCache<'a> {
             .next()
             .unwrap();
         Ok(Self {
-            blocks: file.into_inner().next().unwrap(),
+            blocks: file.into_inner().next().unwrap().into(),
         })
     }
     pub fn execute(&self, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
@@ -228,9 +228,15 @@ pub fn observe(
 }
 
 pub fn axis_index_map() -> Option<HashMap<String, usize>> {
-    std::env::var("NC_BENCH_AXIS_E_INDEX")
-        .ok()
-        .map(|value| HashMap::from([("E".into(), value.parse().expect("axis index"))]))
+    let map: HashMap<_, _> = [("E", "NC_BENCH_AXIS_E_INDEX"), ("ELX", "NC_BENCH_AXIS_ELX_INDEX")]
+        .into_iter()
+        .filter_map(|(axis, variable)| {
+            std::env::var(variable)
+                .ok()
+                .map(|value| (axis.into(), value.parse().expect("axis index")))
+        })
+        .collect();
+    (!map.is_empty()).then_some(map)
 }
 pub fn allow_undefined() -> bool {
     std::env::var("NC_BENCH_ALLOW_UNDEFINED").is_ok_and(|v| v == "1")

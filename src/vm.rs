@@ -25,8 +25,8 @@ use super::{
 use crate::errors::ParsingError;
 use crate::output::OutputRows as Output;
 use crate::state::State;
+use crate::types::Pair;
 use crate::types::{Rule, Value};
-use pest::iterators::Pair;
 use std::collections::HashMap;
 
 /// True when `NC_VM=1` selects the experimental cursor VM over the recursive
@@ -572,9 +572,9 @@ mod resume_tests {
             .collect()
     }
 
-    fn parse_blocks(input: &str) -> Pair<Rule> {
+    fn parse_blocks(input: &str) -> Pair<'_, Rule> {
         let file = NCParser::parse(Rule::file, input).expect("parse").next().expect("file");
-        file.into_inner().next().expect("blocks")
+        file.into_inner().next().expect("blocks").into()
     }
 
     fn fresh_state(input: &str) -> State {

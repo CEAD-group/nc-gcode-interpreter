@@ -5,9 +5,9 @@
 //! expressions, no definitions, no control flow. Parsing such a line with
 //! the full grammar costs microseconds and ~40 parse-tree pairs; a byte
 //! scanner decodes it in nanoseconds. This module claims exactly those
-//! trivial lines and hands every other line to pest in one sparse parse
-//! (`sparse_source`), so the full grammar still owns everything
-//! structurally interesting.
+//! trivial lines and hands every other line to pest. Jump-free programs
+//! validate and execute with one line's parse state at a time; programs with
+//! jumps retain the indexed, sparse-parse path.
 //!
 //! Scope: only programs without multi-line control structures
 //! (IF/WHILE/FOR/LOOP/REPEAT blocks) take this path — the structure scan
@@ -131,6 +131,10 @@ fn reject_string_variable(key: &str, state: &State, line_no: usize) -> Result<()
 /// `interpret_blocks` for a flat block list: jumps resolve against the
 /// line index; an unresolved jump propagates to the caller.
 pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
+    if preflight_streaming(input, state)? {
+        return interpret_streaming(input, output, state);
+    }
+
     // Pass 1: decode every line. Words borrow `&str` spans of `input` and are
     // appended to per-chunk arenas; each decoded line only records its
     // half-open range into its chunk's arena, so pass 1 does no per-line/
@@ -223,6 +227,7 @@ pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> R
                         .ok_or_else(|| ParsingError::ParseError {
                             message: format!("Line {} produced no block in the sparse parse", index + 1),
                         })?;
+                    let block = block.into();
                     if has_jumps {
                         for key in scan_jump_targets(std::slice::from_ref(&block)).into_keys() {
                             targets.entry(key).or_default().push(index);
@@ -246,6 +251,83 @@ pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> R
     let result = run_lines(&execs, &chunk_arenas, &targets, output, state);
     state.jump_scopes.pop();
     result
+}
+
+/// Validate syntax before emitting rows (including source after M30), preserving
+/// the existing parse-before-execute error ordering. Retain only one line's
+/// words/tree. The structure scan has already excluded multi-line controls,
+/// so a remaining control node is a jump and needs the indexed driver.
+fn preflight_streaming(input: &str, state: &State) -> Result<bool, ParsingError> {
+    let mut arena = Vec::new();
+    let stats = std::env::var("NC_STAGE1_STATS").is_ok();
+    let start = std::time::Instant::now();
+    let (mut total, mut non_blank, mut needs_grammar) = (0, 0, 0);
+    for (index, line) in input.lines().enumerate() {
+        total += 1;
+        arena.clear();
+        let decoded = decode_line(line, index + 1, &mut arena);
+        non_blank += usize::from(!matches!(decoded, DecodeResult::Blank));
+        if matches!(decoded, DecodeResult::NeedsGrammar) {
+            needs_grammar += 1;
+            let block = parse_single_line(line, index, state)?;
+            if block.into_inner().any(|pair| pair.as_rule() == Rule::control) {
+                return Ok(false);
+            }
+        }
+    }
+    if stats {
+        eprintln!(
+            "STAGE1_STATS mode=streaming non_blank={non_blank} needs_grammar={needs_grammar} total_lines={total} preflight={:.3}s",
+            start.elapsed().as_secs_f64()
+        );
+    }
+    Ok(true)
+}
+
+/// O(longest line) decoding/parse storage, independent of the number of lines.
+/// Input ownership, diagnostic line offsets and the selected output sink are
+/// separate: collecting output still necessarily grows with the program.
+fn interpret_streaming(input: &str, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
+    let mut arena = Vec::new();
+    for (index, line) in input.lines().enumerate() {
+        arena.clear();
+        let flow = match decode_line(line, index + 1, &mut arena) {
+            DecodeResult::Blank => continue,
+            DecodeResult::Trivial(decoded, _) => execute_decoded(&decoded, &arena, output, state)?,
+            DecodeResult::NeedsGrammar => interpret_block(parse_single_line(line, index, state)?, output, state)?,
+        };
+        if !matches!(flow, BlockFlow::Continue) {
+            return Ok(flow);
+        }
+    }
+    Ok(BlockFlow::Continue)
+}
+
+fn parse_single_line<'i>(line: &'i str, offset: usize, state: &State) -> Result<Pair<'i, Rule>, ParsingError> {
+    let mut parsed = NCParser::parse(Rule::single_line, line).map_err(|e| {
+        let (local_line, column) = match e.line_col {
+            pest::error::LineColLocation::Pos(pos) => pos,
+            pest::error::LineColLocation::Span(start, _) => start,
+        };
+        let line_no = offset + local_line;
+        ParsingError::ParsingContext {
+            line_no,
+            column: Some(column),
+            preview: state
+                .get_line(line_no)
+                .unwrap_or("(could not retrieve line)")
+                .to_string(),
+            context: "line parsing".to_string(),
+            message: crate::interpreter::describe_parse_error(&e),
+        }
+    })?;
+    let block = parsed
+        .next()
+        .expect("single_line entry")
+        .into_inner()
+        .next()
+        .expect("single_line block");
+    Ok(Pair::at_line_offset(block, offset))
 }
 
 /// Decode every line into per-chunk word arenas and per-chunk result lists.
@@ -1395,5 +1477,44 @@ M30
         ] {
             assert_paths_agree(program, false);
         }
+    }
+
+    #[test]
+    fn streaming_eligibility_and_nested_error_locations() {
+        let mut state = crate::state::State::new(vec!["X".into()], 100, None, false);
+        for program in [
+            "X1\nLABEL: X=SIN(30)",
+            "X1\nDEF REAL VALUE=2\nTRANS X=VALUE",
+            "DEF STRING TEXT=\"GOTO\"\nX=SIN(30) ; GOTO in a comment",
+        ] {
+            state.set_input(program);
+            assert!(super::preflight_streaming(program, &state).unwrap());
+            assert_paths_agree(program, false);
+        }
+        for program in ["X1\nGOTOF END\nEND: M30", "X1\nIF 1==1 GOTOC UNKNOWN", "GOTOS"] {
+            state.set_input(program);
+            assert!(!super::preflight_streaming(program, &state).unwrap());
+        }
+        for tail in [
+            "X=SIN(MISSING)",
+            "X=1/0",
+            "DEF STRING TEXT=\"abc\"\nTEXT[99]=\"x\"",
+            "TRANS X=MISSING",
+            "ATOL[ELX]=1",
+        ] {
+            assert_paths_agree(&format!("; café\r\n\r\nN10 X1\r\n{tail}"), false);
+        }
+    }
+
+    #[test]
+    fn streaming_validates_syntax_before_emitting_even_after_m30() {
+        let program = "X=SIN(MISSING)\nM30\n  X=";
+        let mut state = crate::state::State::new(vec!["X".into()], 100, None, false);
+        state.set_input(program);
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let mut output = crate::output::OutputRows::stream(tx);
+        let error = super::interpret_lines(program, &mut output, &mut state).unwrap_err();
+        assert!(matches!(error, ParsingError::ParsingContext { line_no: 3, .. }));
+        assert!(rx.try_recv().is_err(), "syntax failure must not emit earlier rows");
     }
 }

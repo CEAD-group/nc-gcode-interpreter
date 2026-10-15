@@ -1,0 +1,151 @@
+{
+  "date": "2026-10-14",
+  "platform": "macOS-15.7.7-arm64-arm-64bit-Mach-O",
+  "baseline_commit": "c18e636",
+  "baseline_adjustment": "Only the benchmark ELX axis-index environment option was backported; interpreter unchanged.",
+  "candidate_source_fingerprint": "2d78746a07233a401d6fb0c7c986993e47fb1980b05671e00f82a987d33b45c6",
+  "settings": {
+    "mode": "fresh",
+    "stage1": 1,
+    "vm": 0,
+    "rayon_threads": 4,
+    "batch_size": 4096,
+    "axis_index_map": {
+      "E": 4,
+      "ELX": 5
+    },
+    "allow_undefined": true,
+    "verify_digest": false,
+    "edit": "none",
+    "cold_runs": 1,
+    "warm_runs": 1
+  },
+  "notes": [
+    "Peak RSS is wait4 ru_maxrss on macOS, in bytes, over both samples including input loading.",
+    "Local field files are not bundled with this report.",
+    "Output row counts match; timing runs do not hash output. Differential correctness tests run separately.",
+    "Single-process exploratory measurements, not statistically established throughput guarantees."
+  ],
+  "results": [
+    {
+      "file": "tmp/FN_FAT_SAT_Boat_V03.mpf",
+      "bytes": 112147022,
+      "lines": 1284781,
+      "sha256": "f1435e7716257895fccb86db0f8d1e80040ff669af7d15f69b27b2bc0eae0e44",
+      "baseline": {
+        "peak_rss_bytes": 1224114176,
+        "samples": [
+          {
+            "sample": 0,
+            "run_ms": 2424.112583,
+            "first_batch_ms": 355.134,
+            "rows": 1284780
+          },
+          {
+            "sample": 1,
+            "run_ms": 2300.20025,
+            "first_batch_ms": 323.891875,
+            "rows": 1284780
+          }
+        ]
+      },
+      "candidate": {
+        "peak_rss_bytes": 285573120,
+        "samples": [
+          {
+            "sample": 0,
+            "run_ms": 2464.41875,
+            "first_batch_ms": 472.083792,
+            "rows": 1284780
+          },
+          {
+            "sample": 1,
+            "run_ms": 2516.351292,
+            "first_batch_ms": 467.737792,
+            "rows": 1284780
+          }
+        ]
+      }
+    },
+    {
+      "file": "test-data/real-world/huge-464mb_marin1b-full.mpf",
+      "bytes": 464258430,
+      "lines": 7195179,
+      "sha256": "0ad31d2dc71d498bf5d042543909d4d75852efb8735c4ca40580eeb6d92ff707",
+      "baseline": {
+        "peak_rss_bytes": 3455844352,
+        "samples": [
+          {
+            "sample": 0,
+            "run_ms": 7327.293542,
+            "first_batch_ms": 1290.110084,
+            "rows": 7195179
+          },
+          {
+            "sample": 1,
+            "run_ms": 7070.515084,
+            "first_batch_ms": 1285.245834,
+            "rows": 7195179
+          }
+        ]
+      },
+      "candidate": {
+        "peak_rss_bytes": 1174765568,
+        "samples": [
+          {
+            "sample": 0,
+            "run_ms": 8402.337875,
+            "first_batch_ms": 1657.61825,
+            "rows": 7195179
+          },
+          {
+            "sample": 1,
+            "run_ms": 8517.62025,
+            "first_batch_ms": 1656.387541,
+            "rows": 7195179
+          }
+        ]
+      }
+    },
+    {
+      "file": "test-data/real-world/huge-1.1gb_dbfone302.mpf",
+      "bytes": 1147038096,
+      "lines": 22221097,
+      "sha256": "09120cac7680967d8e7a1067deec6da8670e5afa413ec0ed8f1818abf976adae",
+      "baseline": {
+        "peak_rss_bytes": 5774770176,
+        "samples": [
+          {
+            "sample": 0,
+            "run_ms": 25195.604083,
+            "first_batch_ms": 5444.545875,
+            "rows": 22216012
+          },
+          {
+            "sample": 1,
+            "run_ms": 24964.108958,
+            "first_batch_ms": 5035.833916,
+            "rows": 22216012
+          }
+        ]
+      },
+      "candidate": {
+        "peak_rss_bytes": 2580267008,
+        "samples": [
+          {
+            "sample": 0,
+            "run_ms": 29218.581459,
+            "first_batch_ms": 5199.279542,
+            "rows": 22216012
+          },
+          {
+            "sample": 1,
+            "run_ms": 28429.088375,
+            "first_batch_ms": 4523.003,
+            "rows": 22216012
+          }
+        ]
+      }
+    }
+  ]
+}

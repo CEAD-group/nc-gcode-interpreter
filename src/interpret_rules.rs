@@ -1962,7 +1962,7 @@ fn interpret_statement_if(
     output: &mut Output,
     state: &mut State,
 ) -> Result<BlockFlow, ParsingError> {
-    let mut pairs = element.into_inner();
+    let mut pairs = element.into_inner().peekable();
 
     // Match the condition
     let condition = pairs
