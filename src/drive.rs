@@ -7,6 +7,8 @@
 //! returns. Nesting comes only from `structure_scan::scan_structure_table`,
 //! which also raises the structure errors of check_structures. Jumps and loop
 //! iterations go to line indices and re-decode the trivial lines they revisit.
+//! A program longer than one chunk decodes the chunks after the running one
+//! on Rayon (`Prefetch`), a bounded window ahead.
 //!
 //! Before running, one pass parses and lowers every grammar-bound line with
 //! `lower::parse_line` (so a parse error anywhere wins over a runtime error,
@@ -39,30 +41,61 @@ use crate::lower;
 use crate::output::OutputRows;
 use crate::state::State;
 use crate::structure_scan::{scan_structure_table, LineRole, Structure, StructureTable};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
+use std::sync::mpsc::{sync_channel, Receiver};
 
 /// Interpret `input` into `output` (the NC_EXEC=ast counterpart of
 /// `interpret_file`): sets the input on `state`, scans the structure, and runs
 /// every line.
 pub(crate) fn interpret_ast(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
+    interpret_ast_with(input, state, output, Some(Pipeline::DEFAULT))
+}
+
+/// How far the run decodes ahead of the line it executes.
+#[derive(Debug, Clone, Copy)]
+struct Pipeline {
+    /// Lines per chunk decoded on Rayon.
+    chunk_lines: usize,
+    /// Chunks decoded ahead of the running one; memory stays O(window * chunk_lines).
+    window: usize,
+}
+
+impl Pipeline {
+    const DEFAULT: Pipeline = Pipeline {
+        chunk_lines: 4096,
+        window: 4,
+    };
+}
+
+/// `interpret_ast` with an explicit decode pipeline; `None` decodes every line on this thread.
+fn interpret_ast_with(
+    input: &str,
+    state: &mut State,
+    output: &mut OutputRows,
+    pipeline: Option<Pipeline>,
+) -> Result<(), ParsingError> {
     state.set_input(input);
     let (shape, table) = scan_structure_table(input)?;
-    let program = Program::index(input, table, state).map_err(|error| {
+    let chunk_lines = pipeline.unwrap_or(Pipeline::DEFAULT).chunk_lines;
+    let mut program = Program::index_chunked(input, table, chunk_lines, state).map_err(|error| {
         if shape.has_block_structures {
             initial_parse_context(error)
         } else {
             error
         }
     })?;
-    Driver {
-        program,
-        arena: Vec::new(),
-        buffer: BlockBuffer::new(),
-        stack: Vec::new(),
-        top_jumps: 0,
+    let starts = std::mem::take(&mut program.chunk_starts);
+    match pipeline {
+        // On a Rayon worker, waiting for a chunk queued behind this very job could deadlock.
+        Some(pipeline) if starts.len() > 1 && rayon::current_thread_index().is_none() => {
+            rayon::in_place_scope(|scope| {
+                let prefetch = Prefetch::new(scope, input, starts, pipeline);
+                Driver::new(program, Some(prefetch)).run(state, output)
+            })
+        }
+        _ => Driver::new(program, None).run(state, output),
     }
-    .run(state, output)
 }
 
 /// A jump scope: the top level, the body of the structure opened on a line
@@ -96,6 +129,8 @@ struct Program<'a> {
     /// The program mentions GOTO; without it no jump can happen, so the jump
     /// index and the scope bookkeeping are skipped, as on the fast path.
     has_jumps: bool,
+    /// Byte offset of the first line of every decode chunk.
+    chunk_starts: Vec<usize>,
 }
 
 /// The line starting at byte `offset` as `str::lines` yields it, and the
@@ -238,8 +273,21 @@ fn describe_role(role: Option<LineRole>) -> String {
 impl<'a> Program<'a> {
     /// The pre-pass: validate every grammar-bound line and every structure
     /// line, record the offsets, and build the per-scope jump index.
+    /// The pre-pass with the default decode chunks.
+    #[cfg(test)]
     fn index(input: &'a str, table: StructureTable, state: &State) -> Result<Self, ParsingError> {
+        Self::index_chunked(input, table, Pipeline::DEFAULT.chunk_lines, state)
+    }
+
+    /// The pre-pass, also recording where every chunk of `chunk_lines` lines starts.
+    fn index_chunked(
+        input: &'a str,
+        table: StructureTable,
+        chunk_lines: usize,
+        state: &State,
+    ) -> Result<Self, ParsingError> {
         let has_jumps = mentions_goto(input);
+        let mut chunk_starts = Vec::new();
         let mut offsets = HashMap::new();
         let mut grammar = HashMap::default();
         let mut targets: HashMap<Scope, HashMap<String, Vec<usize>>> = HashMap::new();
@@ -247,6 +295,9 @@ impl<'a> Program<'a> {
         let mut arena: Vec<Word> = Vec::new();
         let mut at = Cursor { line: 1, offset: 0 };
         while at.offset < input.len() {
+            if (at.line - 1).is_multiple_of(chunk_lines) {
+                chunk_starts.push(at.offset);
+            }
             let (text, next_offset) = line_at(input, at.offset);
             let role = table.role(at.line);
             arena.clear();
@@ -304,6 +355,7 @@ impl<'a> Program<'a> {
             offsets,
             targets,
             has_jumps,
+            chunk_starts,
         })
     }
 
@@ -336,6 +388,126 @@ impl<'a> Program<'a> {
     }
 }
 
+/// One line of a decoded chunk.
+struct ChunkLine<'a> {
+    offset: usize,
+    text: &'a str,
+    next_offset: usize,
+    result: DecodeResult<'a>,
+}
+
+/// The decoded lines `index * chunk_lines + 1 ..`; their word ranges index `arena`.
+struct Chunk<'a> {
+    index: usize,
+    lines: Vec<ChunkLine<'a>>,
+    arena: Vec<Word<'a>>,
+}
+
+fn decode_chunk(input: &str, index: usize, offset: usize, chunk_lines: usize) -> Chunk<'_> {
+    let mut chunk = Chunk {
+        index,
+        lines: Vec::with_capacity(chunk_lines),
+        // CAM output averages about four words per line; one reservation keeps workers off the allocator.
+        arena: Vec::with_capacity(chunk_lines * 4),
+    };
+    let mut offset = offset;
+    for line_no in index * chunk_lines + 1..(index + 1) * chunk_lines + 1 {
+        if offset >= input.len() {
+            break;
+        }
+        let (text, next_offset) = line_at(input, offset);
+        let result = decode_line(text, line_no, &mut chunk.arena);
+        chunk.lines.push(ChunkLine {
+            offset,
+            text,
+            next_offset,
+            result,
+        });
+        offset = next_offset;
+    }
+    chunk
+}
+
+/// Decodes the chunks after the running one on Rayon, at most `window` ahead.
+/// Lines behind the running chunk (a loop pass, a backward jump) are not
+/// kept; the driver decodes them again itself.
+struct Prefetch<'s, 'a> {
+    scope: &'s rayon::Scope<'a>,
+    input: &'a str,
+    /// Byte offset of the first line of every chunk.
+    starts: Vec<usize>,
+    pipeline: Pipeline,
+    /// Spawned chunks in order, each delivered through its own channel.
+    ahead: VecDeque<(usize, Receiver<Chunk<'a>>)>,
+    /// The next chunk to spawn.
+    next: usize,
+    running: Option<Chunk<'a>>,
+}
+
+impl<'s, 'a> Prefetch<'s, 'a> {
+    fn new(scope: &'s rayon::Scope<'a>, input: &'a str, starts: Vec<usize>, pipeline: Pipeline) -> Self {
+        Prefetch {
+            scope,
+            input,
+            starts,
+            pipeline,
+            ahead: VecDeque::new(),
+            next: 0,
+            running: None,
+        }
+    }
+
+    /// Line `line_no` decoded, with its chunk's word arena; `None` when it is
+    /// behind the running chunk.
+    fn line(&mut self, line_no: usize) -> Option<(&ChunkLine<'a>, &[Word<'a>])> {
+        let index = (line_no - 1) / self.pipeline.chunk_lines;
+        let running = self.running.as_ref().map(|chunk| chunk.index);
+        if running.is_some_and(|running| running > index) {
+            return None;
+        }
+        if running != Some(index) {
+            self.advance(index);
+        }
+        let chunk = self.running.as_ref()?;
+        let line = chunk.lines.get(line_no - 1 - index * self.pipeline.chunk_lines)?;
+        Some((line, &chunk.arena))
+    }
+
+    /// Make chunk `index` the running one and keep the window after it decoding.
+    fn advance(&mut self, index: usize) {
+        self.running = None;
+        // Chunks a forward jump passed over.
+        while self.ahead.front().is_some_and(|(next, _)| *next < index) {
+            self.ahead.pop_front();
+        }
+        if self.ahead.front().is_none_or(|(next, _)| *next != index) {
+            // A jump beyond the window: decode from where it lands.
+            self.ahead.clear();
+            self.next = index;
+        }
+        self.spawn_ahead(1);
+        if let Some((_, chunk)) = self.ahead.pop_front() {
+            // A decode that panicked sends nothing: its lines decode here, the panic surfaces at scope end.
+            self.running = chunk.recv().ok();
+        }
+        self.spawn_ahead(self.pipeline.window);
+    }
+
+    fn spawn_ahead(&mut self, count: usize) {
+        while self.ahead.len() < count && self.next < self.starts.len() {
+            let (index, offset) = (self.next, self.starts[self.next]);
+            let (input, chunk_lines) = (self.input, self.pipeline.chunk_lines);
+            let (sender, receiver) = sync_channel(1);
+            self.scope.spawn(move |_| {
+                // The run may have ended or jumped past this chunk.
+                let _ = sender.send(decode_chunk(input, index, offset, chunk_lines));
+            });
+            self.ahead.push_back((index, receiver));
+            self.next += 1;
+        }
+    }
+}
+
 /// A loaded line: blank, decoded into the driver's buffer, or kept from the pre-pass.
 enum Loaded {
     Blank,
@@ -362,8 +534,10 @@ struct Frame {
     counter: Option<(String, f64)>,
 }
 
-struct Driver<'a> {
+struct Driver<'s, 'a> {
     program: Program<'a>,
+    /// Decodes the lines ahead in parallel; `None` decodes every line here.
+    prefetch: Option<Prefetch<'s, 'a>>,
     arena: Vec<Word<'a>>,
     /// The block of the decoded trivial line being run.
     buffer: BlockBuffer,
@@ -372,7 +546,18 @@ struct Driver<'a> {
     top_jumps: usize,
 }
 
-impl<'a> Driver<'a> {
+impl<'s, 'a> Driver<'s, 'a> {
+    fn new(program: Program<'a>, prefetch: Option<Prefetch<'s, 'a>>) -> Self {
+        Driver {
+            program,
+            prefetch,
+            arena: Vec::new(),
+            buffer: BlockBuffer::new(),
+            stack: Vec::new(),
+            top_jumps: 0,
+        }
+    }
+
     fn run(mut self, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
         self.program.enter_scope(Scope::Top, state);
         let mut at = Cursor { line: 1, offset: 0 };
@@ -411,19 +596,35 @@ impl<'a> Driver<'a> {
         Ok(())
     }
 
-    /// Decode the line at `at` into the buffer, or take its kept block.
+    /// Decode the line at `at` into the buffer (or take it from the prefetched
+    /// chunk), or take its kept block.
     fn load(&mut self, at: Cursor, state: &State) -> Result<(Loaded, Cursor), ParsingError> {
         let input: &'a str = self.program.input;
-        let (text, next_offset) = line_at(input, at.offset);
+        let sequential;
+        let (text, next_offset, result, arena) = match self.prefetch.as_mut().and_then(|p| p.line(at.line)) {
+            Some((line, arena)) if line.offset == at.offset => (line.text, line.next_offset, &line.result, arena),
+            Some(_) => {
+                return Err(structure_mismatch(
+                    at.line,
+                    state,
+                    "the decoded chunk disagrees with the line position".to_string(),
+                ))
+            }
+            None => {
+                let (text, next_offset) = line_at(input, at.offset);
+                self.arena.clear();
+                sequential = decode_line(text, at.line, &mut self.arena);
+                (text, next_offset, &sequential, self.arena.as_slice())
+            }
+        };
         let next = Cursor {
             line: at.line + 1,
             offset: next_offset,
         };
-        self.arena.clear();
-        let loaded = match decode_line(text, at.line, &mut self.arena) {
+        let loaded = match result {
             DecodeResult::Blank => Loaded::Blank,
             DecodeResult::Trivial(decoded, label) => {
-                self.buffer.decode(text, &decoded, &self.arena, label.as_deref())?;
+                self.buffer.decode(text, decoded, arena, label.as_deref())?;
                 Loaded::Decoded
             }
             DecodeResult::NeedsGrammar => match self.program.grammar.get(&at.line) {
@@ -818,6 +1019,93 @@ N60 GOTOB TOP
         let (_, table) = scan_structure_table(program).expect("valid structure");
         let error = Program::index(program, table, &state).err().expect("parse error");
         assert_eq!(error.location().map(|l| l.line), Some(3), "{error}");
+    }
+
+    fn text<'a>(prefetch: &mut Prefetch<'_, 'a>, line_no: usize) -> Option<&'a str> {
+        prefetch.line(line_no).map(|(line, _)| line.text)
+    }
+
+    #[test]
+    fn prefetch_serves_lines_ahead_and_none_behind() {
+        let input: String = (1..=50).map(|i| format!("N{i} X{i}\n")).collect();
+        let pipeline = Pipeline {
+            chunk_lines: 4,
+            window: 2,
+        };
+        let starts: Vec<usize> = (0..50)
+            .step_by(4)
+            .map(|line| input.lines().take(line).map(|text| text.len() + 1).sum())
+            .collect();
+        rayon::in_place_scope(|scope| {
+            let mut prefetch = Prefetch::new(scope, &input, starts, pipeline);
+            for line_no in 1..=10 {
+                assert_eq!(
+                    text(&mut prefetch, line_no),
+                    Some(format!("N{line_no} X{line_no}").as_str())
+                );
+            }
+            // Line 10 runs chunk 2; earlier chunks are gone, its own lines stay.
+            assert_eq!(text(&mut prefetch, 3), None);
+            assert_eq!(text(&mut prefetch, 9), Some("N9 X9"));
+            // A jump beyond the window decodes from where it lands.
+            assert_eq!(text(&mut prefetch, 45), Some("N45 X45"));
+            assert_eq!(text(&mut prefetch, 20), None);
+            assert_eq!(text(&mut prefetch, 50), Some("N50 X50"));
+            assert_eq!(text(&mut prefetch, 51), None);
+            assert!(prefetch.ahead.len() <= pipeline.window);
+        });
+    }
+
+    /// Lines of every kind, with labels unique to `copy`.
+    fn straight(copy: usize) -> String {
+        (1..=40)
+            .map(|i| match i % 7 {
+                0 => "\n".to_string(),
+                1 => format!("; comment {i}\n"),
+                2 => format!("R{i}=SIN({i})\n"),
+                3 => format!("LBL_{copy}_{i}: X{i}\n"),
+                _ => format!("N{i} G1 X{i} Y{} E=IC(E_M*0.5) F=(F_M*2) ;c{i}\n", i * 2),
+            })
+            .collect()
+    }
+
+    /// Rows, final variables and axes of a run, or its error.
+    fn run_with(program: &str, pipeline: Option<Pipeline>) -> String {
+        let mut state = crate::interpreter::build_state(None, None, 100, None, true);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1 << 16);
+        let mut output = OutputRows::stream(sender);
+        let result = interpret_ast_with(program, &mut state, &mut output, pipeline).and_then(|()| output.finish());
+        let rows: Vec<String> = receiver.try_iter().map(|row| format!("{row:?}")).collect();
+        let mut symbols: Vec<String> = state.symbol_table.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        symbols.sort();
+        let mut axes: Vec<String> = state.axes.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        axes.sort();
+        format!("{:?}\n{}\n{symbols:?}\n{axes:?}", result.map(|_| ()), rows.join("\n"))
+    }
+
+    #[test]
+    fn the_decode_pipeline_runs_what_sequential_decoding_runs() {
+        let head = "E_M=1\nF_M=2\nR90=0\nR91=0\n";
+        let (a, b) = (straight(1), straight(2));
+        let programs = [
+            format!("{head}{a}M30\n"),
+            // A forward jump past the window, then backward jumps across chunks.
+            format!("{head}GOTOF FAR\n{a}FAR: R90=R90+1\n{b}IF R90<3 GOTOB FAR\nM30\n"),
+            format!("{head}WHILE R91<3\n{a}R91=R91+1\nENDWHILE\nFOR R92=1 TO 2\n{b}ENDFOR\n"),
+            format!("{head}{a}M30\n{b}"),
+            // A runtime error in a later chunk.
+            format!("{head}{a}GOTOF NOWHERE\n{b}"),
+        ];
+        for program in &programs {
+            let sequential = run_with(program, None);
+            assert!(sequential.lines().count() > 40, "{sequential}");
+            for chunk_lines in [1, 2, 3, 5, 8] {
+                for window in [1, 2, 4] {
+                    let pipeline = Pipeline { chunk_lines, window };
+                    assert_eq!(run_with(program, Some(pipeline)), sequential, "{pipeline:?}\n{program}");
+                }
+            }
+        }
     }
 
     #[test]
