@@ -161,43 +161,19 @@ for line_no, row, variables in nc_to_rows(program, include_variables=True):
 
 Rows are typed and forward-filled like the batch DataFrame (disable with `forward_fill=False`); errors raise from `next()` at the offending row; after exhaustion the iterator's `state` attribute holds the final interpreter state. See `python/example/streaming.py` for a runnable version.
 
-**Memory.** With the default fast path, programs without multi-line control
-blocks or jumps validate and execute one line at a time, retaining
-O(longest line) decoded words and grammar state. This includes definitions,
-expressions, frame operations and labels without jumps. Syntax is checked
-through the end of the source before any rows are emitted. The complete input
-text, a diagnostic copy and its line-offset index remain resident; variable
-state and caller-retained output can also grow. Use `nc_to_batches` with a
+**Memory.** Programs without multi-line control blocks or jumps are validated
+in a parallel preflight scan and then executed one line at a time, so parse
+storage is bounded by the longest line instead of the program length. The input
+text, its diagnostic copy and line-offset index, variable state and any output
+the caller retains still grow with the program, so use `nc_to_batches` with a
 bounded consumer for large files. Programs with jumps keep the indexed fast
-path; control blocks and `NC_STAGE1=0` still use the whole-file parser.
-
-The #73 field-file measurements are recorded in
-[`docs/benchmarks/memory-73.json`](docs/benchmarks/memory-73.json), comparing
-`c18e636` (with only the ELX harness option backported) with this bounded path. Both runs use the release batch-streaming
-harness, 4 Rayon threads, 4,096-row batches, E=4 and ELX=5 axis mappings, and
-undefined variables allowed. Each process does one cold run and one warm
-rerun; these are exploratory measurements on one macOS ARM64 host, not
-latency guarantees. Output row counts agree; output hashing was disabled for
-timing, with correctness checked separately by differential tests.
-
-| Field program | Peak RSS before → after (GiB) | Warm interpretation before → after (s) |
-| --- | ---: | ---: |
-| 1.28M lines / 112 MB | 1.14 → 0.27 | 2.30 → 2.52 |
-| 7.20M lines / 464 MB | 3.22 → 1.09 | 7.07 → 8.52 |
-| 22.22M lines / 1147 MB | 5.38 → 2.40 | 24.96 → 28.43 |
-
-The validation pass preserves syntax-error ordering and checks source after
-`M30`, but decodes the source a second time during execution. This trades
-throughput for bounded parse storage. These interpreter timings do not measure
-#72's transport, toolpath derivation or viewer update stages.
-
-Reproduce a candidate measurement with a locally available field file:
-
-```bash
-python scripts/benchmark.py --input test-data/real-world/huge-1.1gb_dbfone302.mpf \
-  --modes fresh --edits none --threads 4 --samples 1 --batch-size 4096 \
-  --allow-undefined --axis-index-e 4 --axis-index-elx 5 --output tmp/memory.json
-```
+path; control blocks and `NC_STAGE1=0` still use the whole-file parser. On a
+1.28M-line (112 MB) field program the peak RSS of `nc_to_batches` drops from
+about 1.3 GiB to 0.4 GiB, and the second decode during execution costs 0 to 20
+percent of interpretation time. Measure a local program with
+`python scripts/benchmark.py --input <file> --modes fresh --edits none
+--threads 4 --samples 1 --batch-size 4096 --allow-undefined --axis-index-e 4
+--axis-index-elx 5 --output tmp/memory.json`.
 
 **Cancellation.** Dropping the iterator is the supported way to cancel a `nc_to_rows`/`nc_to_batches` run — leaving a `for` loop early or `del`-ing it drops it immediately; relying on garbage collection works too but only whenever the runtime happens to collect it, so it is not prompt on all interpreters: the background interpreter thread's next attempt to send a row hits a closed channel and returns internally via `ParsingError::StreamClosed`, so the thread unwinds promptly instead of running the rest of the program to completion. No explicit `.close()`/`.cancel()` call is needed or provided — drop is the whole contract, and downstreams (e.g. ribweaver's `/sim` live-edit reinterpret) rely on it for latest-wins cancellation.
 
