@@ -142,6 +142,17 @@ released to PyPI.
   program with about 12,000 such lines the Python batch API went from 24.3 s
   and 3.0 GiB peak RSS (whole-file parse) to 2.2 s and 1.3 GiB.
 
+- The line fast path no longer gives three line shapes a different meaning
+  than the grammar does (#83). `N10X5` (a block number glued to the next word)
+  was read as block 10 plus `X5`, where the grammar reads one call named
+  `N10X5` and warns about the glued word; `TRANS=5` (a frame keyword before
+  `=`) was stored as a variable, where the grammar rejects the line; and
+  `X=5 AND Y1` (likewise `OR`, `XOR`, `B_AND`, `B_OR`, `B_XOR` after a
+  constant) became `X=5`, a call `AND` and `Y1`, where the grammar evaluates
+  `5 AND Y1`. The decoder now hands these lines to the grammar, so the result
+  no longer depends on which path a program takes. A seeded random-line test
+  compares every line the decoder claims against the grammar.
+
 ## [v0.2.7] - 2026-09-08
 
 ### Changed
