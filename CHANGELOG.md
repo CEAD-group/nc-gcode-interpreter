@@ -68,6 +68,17 @@ released to PyPI.
   different inputs or, when both were recorded with `--verify-digest`, with
   differing row counts or output/state digests in any matched case (#76).
 
+- A control-structure keyword must stand alone in its block (#84). The
+  grammar accepted statements on the same line and ran them as part of the
+  body: `WHILE R1<3 X1` (likewise after `LOOP`, `REPEAT`, `FOR ... TO ...` and
+  `ELSE`) ran `X1` as the first body block of every pass, and a mid-line
+  `X1 ELSE X2` ended the true branch. The NC programming manual (4.1.7) shows
+  every structure keyword in a block of its own and does not say a control
+  accepts more, so these forms are now parse errors that name the text to
+  move. A comment after the keyword and a block number before it are still
+  allowed. A closer after other content (`X1 ENDIF`) is reported at the closer
+  instead of as "IF is never closed".
+
 ### Fixed
 
 - Flattened `BSPLINE` samples now carry the line number of the control-point

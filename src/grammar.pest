@@ -19,7 +19,13 @@ comment             = @{ ";" ~ (!newline ~ ANY)* }
 // therefore can never parse as a statement. definition and frame_op must
 // stay in front: DEF/TRANS/... are not reserved words, so a statement would
 // otherwise swallow them as function calls or assignments.
-block               =  { block_number_set? ~ label_def? ~ (definition | frame_op | statement+ | control)? ~ comment? }
+block               =  { block_number_set? ~ label_def? ~ ((definition | frame_op | statement+ | control) ~ !body_end_kw)? ~ comment? }
+// A body ends only at a line that starts with ELSE or a closer: a closer
+// after other content (`X1 ENDIF`, `X1 ELSE X2`) must not end the body.
+body_end_kw         = @{ (^"ELSE" | ^"ENDIF" | ^"ENDWHILE" | ^"ENDFOR" | ^"ENDLOOP" | ^"UNTIL") ~ !(ASCII_ALPHANUMERIC | "_") }
+// A structure head is alone on its line (manual 4.1.7); only a comment may
+// follow it, and that comment parses as the first body block.
+head_end            = _{ &(comment? ~ newline) }
 block_number_set    = _{ "N" ~ block_number }
 control             =  {
     gotos_statement
@@ -57,11 +63,11 @@ of_kw                  = @{ ^"OF" ~ !(ASCII_ALPHANUMERIC | "_") }
 case_arm               =  { value ~ goto_statement }
 case_default           =  { default_kw ~ goto_statement }
 default_kw             = @{ ^"DEFAULT" ~ !(ASCII_ALPHANUMERIC | "_") }
-if_statement           =  { ^"IF" ~ condition ~ comment? ~ newline ~ blocks ~ (^"ELSE" ~ blocks)? ~ ^"ENDIF" }
-loop_statement         =  { ^"LOOP" ~ blocks ~ ^"ENDLOOP" }
-for_statement          =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ blocks ~ ^"ENDFOR" }
-while_statement        =  { ^"WHILE" ~ condition ~ blocks ~ ^"ENDWHILE" }
-repeat_until_statement =  { ^"REPEAT" ~ blocks ~ ^"UNTIL" ~ condition }
+if_statement           =  { ^"IF" ~ condition ~ comment? ~ newline ~ blocks ~ (^"ELSE" ~ head_end ~ blocks)? ~ ^"ENDIF" }
+loop_statement         =  { ^"LOOP" ~ head_end ~ blocks ~ ^"ENDLOOP" }
+for_statement          =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ head_end ~ blocks ~ ^"ENDFOR" }
+while_statement        =  { ^"WHILE" ~ condition ~ head_end ~ blocks ~ ^"ENDWHILE" }
+repeat_until_statement =  { ^"REPEAT" ~ head_end ~ blocks ~ ^"UNTIL" ~ condition }
 block_number           =  { integer }
 // A condition is just an expression: comparison and logic operators are
 // expression operators (manual 4.1.3.3 "Priority of the operations"), so

@@ -77,6 +77,56 @@ def test_unmatched_structures_point_at_the_cause(program, expected_line, expecte
     assert f"line {expected_line}" in message
 
 
+@pytest.mark.parametrize(
+    "program, expected_line, expected_message",
+    [
+        ("WHILE R1<3 X1\nR1=R1+1\nENDWHILE", 1, "unexpected text 'X1' on the WHILE line"),
+        ("LOOP X1\nENDLOOP", 1, "unexpected text 'X1' on the LOOP line"),
+        ("REPEAT X1\nUNTIL R1>=0", 1, "unexpected text 'X1' on the REPEAT line"),
+        ("FOR R2=1 TO 3 X=R2\nENDFOR", 1, "unexpected text 'X=R2' on the FOR line"),
+        ("IF R1==1\nX1\nELSE X2\nENDIF", 3, "unexpected text 'X2' on the ELSE line"),
+        ("IF R1==1\nX1 ELSE X2\nENDIF", 2, "ELSE must start its own block"),
+        ("IF R1==1\nX1 ELSE\nX2\nENDIF", 2, "ELSE must start its own block"),
+        ("IF R1==0\nX1 ENDIF", 2, "ENDIF must start its own block"),
+        ("WHILE R1<3\nR1=R1+1 ENDWHILE", 2, "ENDWHILE must start its own block"),
+        ("X1 ELSE", 1, "ELSE must start its own block"),
+    ],
+    ids=[
+        "statement-after-WHILE",
+        "statement-after-LOOP",
+        "statement-after-REPEAT",
+        "statement-after-FOR",
+        "statement-after-ELSE",
+        "mid-line-ELSE",
+        "trailing-ELSE",
+        "mid-line-ENDIF",
+        "mid-line-ENDWHILE",
+        "mid-line-ELSE-without-structures",
+    ],
+)
+def test_statements_on_structure_lines_are_rejected(program, expected_line, expected_message):
+    """A control-structure keyword stands alone in its block (manual 4.1.7).
+    These forms used to run silently, `WHILE R1<3 X1` with X1 as the first
+    body block on every pass and `X1 ELSE X2` as an ELSE in mid-line (#84)."""
+    with pytest.raises(ValueError) as excinfo:
+        nc_to_dataframe(program)
+    message = str(excinfo.value)
+    assert expected_message in message
+    assert f"line {expected_line}" in message
+
+
+def test_structure_lines_keep_comments_and_block_numbers():
+    """A comment after a structure keyword and a block number before one are
+    still allowed; the head comment stays on the first body row of each pass."""
+    df, _state = nc_to_dataframe(
+        "R1=0\nN10 WHILE R1<2 ; head\nR1=R1+1\nX=R1\nN20 ENDWHILE\nIF R1==2 ; check\nY1\nELSE ; other\nY2\nENDIF"
+    )
+    assert df["X"].drop_nulls().to_list()[-1] == 2.0
+    assert df["Y"].drop_nulls().to_list() == [1.0]
+    assert df["comment"].drop_nulls().to_list() == ["; head", "; head", "; check"]
+    assert df["N"].drop_nulls().to_list()[-1] == 20
+
+
 def test_single_line_conditional_jump_is_not_an_opener():
     df, _state = nc_to_dataframe("R1=1\nIF R1>0 GOTOF DONE\nX999\nDONE: X1")
     assert df["X"].drop_nulls().to_list() == [1.0]
