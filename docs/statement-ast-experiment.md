@@ -162,7 +162,9 @@ equal blocks.
 
 The whole-file grammar splits a structure line into parts that run at
 different times. The AST keeps the line as one `Block`; the executor contract
-(exec.rs doc) assigns the parts.
+(exec.rs doc) assigns the parts. Since #86 a label on a structure line is a
+parse error on every path, so the `L:` parts below no longer occur; the block
+number and comment parts still do.
 
 - `[N] [L:] IF c [;cm]`: N and label are the IF block (the label is in the
   enclosing scope). The comment goes into the IF row before the condition is
@@ -189,12 +191,13 @@ different times. The AST keeps the line as one `Block`; the executor contract
 
 ## Not represented: rejected loudly by the `line` entry
 
-The whole-file grammar and the structure scan accept these, the `line` entry
-does not (a parse error with the line):
+Before #86 the whole-file grammar and the structure scan accepted these while
+the `line` entry rejected them; #86 made them parse errors on every path, on
+the manual's authority (#84):
 
 - A body on the head line: `WHILE c X1`, `LOOP X1`, `REPEAT X1`,
-  `FOR I=1 TO 3 X=I`, `WHILE c GOTOF L`, `ELSE X2`. The old grammar runs X1 as
-  the first body block of every pass (verified for WHILE).
+  `FOR I=1 TO 3 X=I`, `WHILE c GOTOF L`, `ELSE X2`. The old grammar ran X1 as
+  the first body block of every pass (verified for WHILE before #86).
 - A mid-line ELSE: `X1 ELSE`, `X1 ELSE X2`. The scan only reads first words
   and ELSE does not change its stack, so it passes; the grammar ends the true
   branch at ELSE (verified).
@@ -238,7 +241,7 @@ none either.
 - Inherited scan quirk: `contains_goto_word` also sees GOTO inside a string,
   so `IF MATCH(S,"GOTO")>0` is taken for a single-line jump.
 
-## Fast-path divergences found by the equality test (fixed by #83)
+## Fast-path divergences found by the equality test (#83, fixed by #85)
 
 The byte decoder claimed these lines with a meaning the grammar does not give
 them, so the default path and NC_STAGE1=0 disagreed:
@@ -251,7 +254,7 @@ them, so the default path and NC_STAGE1=0 disagreed:
   decoder: X=5, call "AND ", Y=1; grammar: X = 5 AND Y1. The decoder rejected
   DIV and MOD for this reason but missed the logic and bit operators.
 
-The fix (PR #85, cherry-picked here) sends all three to the grammar. A seeded
+The fix (PR #85, on main) sends all three to the grammar. A seeded
 token-soup test in `line_driver.rs` found no other class.
 `decode_ast::tests::former_decoder_divergences_take_the_grammar` pins that the
 decoder no longer claims them; the equality test covers 553 other

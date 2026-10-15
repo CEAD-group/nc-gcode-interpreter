@@ -989,6 +989,10 @@ mod tests {
     /// Accepted deviation: the AST keeps the operator, not its spelling, so the message quotes it uppercase.
     #[test]
     fn lowercase_bit_operator_message_is_uppercase() {
+        // Under NC_EXEC=ast the reference path is this executor, so there is no walker to compare with.
+        if std::env::var("NC_EXEC").is_ok_and(|v| v == "ast") {
+            return;
+        }
         let program = "R1=1.5 b_and 1";
         let Outcome::Err(ast) = ours(program, &Opts::default()) else {
             panic!("{program} does not fail");

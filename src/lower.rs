@@ -1231,10 +1231,12 @@ mod tests {
         });
         assert_eq!(control("LOOP"), Control::LoopHead);
         assert_eq!(control("ENDLOOP"), Control::EndLoop);
-        let head = block("N10 LBL: WHILE R1 ; c");
+        let head = block("N10 WHILE R1 ; c");
         assert_eq!(head.block_number.as_deref(), Some("10"));
-        assert_eq!(head.label.as_deref(), Some("LBL"));
+        assert_eq!(head.label, None);
         assert_eq!(head.comment.as_deref(), Some("; c"));
+        // A label on a structure line is a parse error since #86.
+        assert!(parse_line("N10 LBL: WHILE R1 ; c", 1, &state_for("")).is_err());
     }
 
     #[test]

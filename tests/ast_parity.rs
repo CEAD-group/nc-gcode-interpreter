@@ -541,8 +541,9 @@ OUT: X0
 }
 
 #[test]
-fn jump_to_a_label_on_a_closer_or_else_line() {
-    parity("R1=0\nWHILE R1<3\n  R1=R1+1\n  GOTOF LAST\n  X999\nLAST: ENDWHILE\nX1\n");
+fn jump_to_a_block_number_on_a_closer_or_else_line() {
+    // A label on a structure line is a parse error since #86; block numbers stay.
+    parity("R1=0\nWHILE R1<3\n  R1=R1+1\n  GOTOF N50\n  X999\nN50 ENDWHILE\nX1\n");
     parity("IF 1\n  X1\n  GOTOF N30\n  X999\nN30 ELSE ;e\n  X2\nN40 ENDIF\nX3\n");
     parity("IF 0\n  X1\nELSE\n  GOTOF N40\n  X999\nN40 ENDIF ;c\nX3\n");
 }
@@ -552,11 +553,11 @@ fn jump_back_to_a_structure_head_reenters_it() {
     parity(
         "\
 R1=0 R2=0
-TOP: WHILE R1<3 ;head
+N5 WHILE R1<3 ;head
   R1=R1+1
   IF R1==2
     R2=R2+1
-    IF R2<3 GOTOB TOP
+    IF R2<3 GOTOB N5
   ENDIF
 ENDWHILE
 X=R2
@@ -795,9 +796,9 @@ FOR R2=1 TO 2 ;for head
 ENDFOR ;for tail
 LOOP ;loop head
   R1=R1+1
-  IF R1>4 GOTOF OUT
+  IF R1>4 GOTOF N99
 ENDLOOP ;loop tail
-OUT: REPEAT ;repeat head
+N99 REPEAT ;repeat head
   R1=R1-1
 UNTIL R1<=0 ;until tail
 IF R1==0 ;if head
@@ -816,13 +817,13 @@ ENDIF ;endif 2
 }
 
 #[test]
-fn block_numbers_and_labels_on_closer_lines() {
+fn block_numbers_on_structure_lines() {
     parity(
         "\
 R1=0
-N10 TOP: WHILE R1<2
+N10 WHILE R1<2
   R1=R1+1
-N20 W_END: ENDWHILE
+N20 ENDWHILE
 N30 FOR R2=1 TO 2
 N40 ENDFOR
 N50 LOOP

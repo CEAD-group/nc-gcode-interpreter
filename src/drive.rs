@@ -974,9 +974,12 @@ mod tests {
 
     #[test]
     fn targets_belong_to_the_scope_the_walker_gives_them() {
+        // A label on a structure line is a parse error since #86, so the
+        // labels stand on their own lines before the head and the closer.
         let program = "\
 N10 X1
-TOP: WHILE R1<2 ; head
+TOP:
+WHILE R1<2 ; head
   N20 X2
   IF R1==1
     INNER: X3
@@ -984,21 +987,22 @@ TOP: WHILE R1<2 ; head
     N40 X4
   N50 ENDIF
   R1=R1+1
-LAST: ENDWHILE
+LAST:
+ENDWHILE
 N60 GOTOB TOP
 ";
         let program = index(program);
         assert!(program.has_jumps);
         assert_eq!(lines_of(&program, Scope::Top, "N:10"), vec![1]);
         assert_eq!(lines_of(&program, Scope::Top, "LABEL:TOP"), vec![2]);
-        assert_eq!(lines_of(&program, Scope::Top, "N:60"), vec![11]);
-        assert_eq!(lines_of(&program, Scope::Body(2), "N:20"), vec![3]);
-        assert_eq!(lines_of(&program, Scope::Body(2), "LABEL:LAST"), vec![10]);
-        assert_eq!(lines_of(&program, Scope::Body(4), "LABEL:INNER"), vec![5]);
-        assert_eq!(lines_of(&program, Scope::Body(4), "N:30"), vec![6]);
-        assert_eq!(lines_of(&program, Scope::Else(4), "N:40"), vec![7]);
-        assert_eq!(lines_of(&program, Scope::Else(4), "N:50"), vec![8]);
-        for line in [2, 4, 6, 8, 10] {
+        assert_eq!(lines_of(&program, Scope::Top, "N:60"), vec![13]);
+        assert_eq!(lines_of(&program, Scope::Body(3), "N:20"), vec![4]);
+        assert_eq!(lines_of(&program, Scope::Body(3), "LABEL:LAST"), vec![11]);
+        assert_eq!(lines_of(&program, Scope::Body(5), "LABEL:INNER"), vec![6]);
+        assert_eq!(lines_of(&program, Scope::Body(5), "N:30"), vec![7]);
+        assert_eq!(lines_of(&program, Scope::Else(5), "N:40"), vec![8]);
+        assert_eq!(lines_of(&program, Scope::Else(5), "N:50"), vec![9]);
+        for line in [3, 5, 7, 9, 12] {
             assert!(program.offsets.contains_key(&line), "structure line {line}");
         }
     }
