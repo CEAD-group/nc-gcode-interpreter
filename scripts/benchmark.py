@@ -116,6 +116,9 @@ def measure(binary, case, args):
     env.pop("NC_BENCH_AXIS_E_INDEX", None)
     if args.axis_index_e is not None:
         env["NC_BENCH_AXIS_E_INDEX"] = str(args.axis_index_e)
+    env.pop("NC_BENCH_AXIS_ELX_INDEX", None)
+    if args.axis_index_elx is not None:
+        env["NC_BENCH_AXIS_ELX_INDEX"] = str(args.axis_index_elx)
     cmd = [
         binary,
         case["mode"],
@@ -188,6 +191,7 @@ def main():
     )
     parser.add_argument("--allow-undefined", action="store_true")
     parser.add_argument("--axis-index-e", type=int)
+    parser.add_argument("--axis-index-elx", type=int)
     parser.add_argument("--lines", type=int, nargs="+", default=[10_000, 100_000])
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument(

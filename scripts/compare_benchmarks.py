@@ -68,6 +68,7 @@ def main():
         "cancel",
         "allow_undefined",
         "axis_index_e",
+        "axis_index_elx",
         "verify_digest",
     ):
         if baseline["arguments"].get(field) != candidate["arguments"].get(field):

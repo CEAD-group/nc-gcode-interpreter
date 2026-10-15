@@ -23,7 +23,7 @@ The **NC-GCode-Interpreter** offers a streamlined and efficient solution for int
 
 ### Additional Functionality
 
-- **Streaming interpretation**: `nc_to_rows(program)` yields `(line_no, row)` tuples lazily while the interpreter runs on a background thread — constant memory, early exit by dropping the iterator (breaking out of a `for` loop over an anonymous iterator does this; a stored iterator keeps the run alive until it is deleted or garbage-collected), and source-line numbers for mapping trace rows back to the program. With `include_variables=True` it yields `(line_no, row, variables)` instead, exposing every variable assignment (`R1=R1+1`, `DEF`, FOR counters) as it happens — including blocks that only assign variables, which are invisible in the batch DataFrame.
+- **Streaming interpretation**: `nc_to_rows(program)` yields `(line_no, row)` tuples lazily while the interpreter runs on a background thread — bounded output buffering, early exit by dropping the iterator (breaking out of a `for` loop over an anonymous iterator does this; a stored iterator keeps the run alive until it is deleted or garbage-collected), and source-line numbers for mapping trace rows back to the program. With `include_variables=True` it yields `(line_no, row, variables)` instead, exposing every variable assignment (`R1=R1+1`, `DEF`, FOR counters) as it happens — including blocks that only assign variables, which are invisible in the batch DataFrame.
 
 - **Curve flattening**: pass `flatten_tolerance` (Python) or `--flatten-tolerance` (CLI) to convert curved motions — `G2`/`G3` arcs (`I`/`J`/`K` centre offsets or `CR=` radius form, `G17`/`G18`/`G19` planes, helical third axis with `TURN=` multi-turn support, full circles) and `ASPLINE`/`BSPLINE`/`CSPLINE` splines (including `PW` weights and `SD` degree) — into runs of plain `G1` rows in the same table format. `CIP`/`CT`/`POLY`/thread/involute blocks pass through unchanged with a warning; spline start/end conditions (`BAUTO`/`BNAT`/... ) are approximated by natural (CSPLINE) / Akima (ASPLINE) boundaries — see the `flatten` module docs for the full list of checked approximations. The single tolerance is the maximum deviation between the emitted polyline and the true curve, in path units: arcs use the exact sagitta bound, splines adaptive subdivision. The interpolation addresses (`I`/`J`/`K`/`CR`/`PW`/`SD`/`PL`) are consumed and do not appear in the output; sampled rows keep the source block's line number, and its other cells (`F`, `M`, comments, ...) ride on the first sample so modal behavior is preserved. Generated samples carry a `flattened = 1` marker column (never forward-filled); programmed positions stay null there, so filtering on null recovers the original toolpath points.
 - **Toolpath visualization** (optional): with the `viz` extra (`pip install 'nc-gcode-interpreter[viz]'`), `nc_gcode_interpreter.viz.view_toolpath(df)` renders an interpreted toolpath in [threejs-viewer](https://pypi.org/project/threejs-viewer/) as an extruded bead tube with a draw-range animation replaying the program at feed-rate-proportional speed. Combined with `flatten_tolerance`, programmed points render orange and flattener-generated samples blue. The extra also installs the `nc-view` command: `nc-view part.mpf` interprets, flattens (default tolerance 0.1, `--no-flatten` to skip) and opens the animated toolpath in the browser; `--speed` sets the time-lapse factor (default 60 = one machine-minute per second).
@@ -160,6 +160,22 @@ for line_no, row, variables in nc_to_rows(program, include_variables=True):
 ```
 
 Rows are typed and forward-filled like the batch DataFrame (disable with `forward_fill=False`); errors raise from `next()` at the offending row; after exhaustion the iterator's `state` attribute holds the final interpreter state. See `python/example/streaming.py` for a runnable version.
+
+**Memory.** Programs of 64 MiB or more without multi-line control blocks or
+jumps are validated in a parallel preflight scan and then executed one line at a
+time, so parse storage is bounded by the longest line instead of the program
+length. The input text, its diagnostic copy and line-offset index, variable
+state and any output the caller retains still grow with the program, so use
+`nc_to_batches` with a bounded consumer for large files. Smaller programs and
+programs with jumps keep the indexed fast path; `NC_STREAM_MIN_BYTES` sets the
+threshold in bytes (0 streams every jump-free program). Control blocks and
+`NC_STAGE1=0` still use the whole-file parser. On a 1.28M-line (112 MB) field
+program the peak RSS of `nc_to_batches` drops from about 1.3 GiB to 0.4 GiB,
+and the second decode during execution costs up to about 20 percent of
+interpretation time. Measure a local program with
+`python scripts/benchmark.py --input <file> --modes fresh --edits none
+--threads 4 --samples 1 --batch-size 4096 --allow-undefined --axis-index-e 4
+--axis-index-elx 5 --output tmp/memory.json`.
 
 **Cancellation.** Dropping the iterator is the supported way to cancel a `nc_to_rows`/`nc_to_batches` run — leaving a `for` loop early or `del`-ing it drops it immediately; relying on garbage collection works too but only whenever the runtime happens to collect it, so it is not prompt on all interpreters: the background interpreter thread's next attempt to send a row hits a closed channel and returns internally via `ParsingError::StreamClosed`, so the thread unwinds promptly instead of running the rest of the program to completion. No explicit `.close()`/`.cancel()` call is needed or provided — drop is the whole contract, and downstreams (e.g. ribweaver's `/sim` live-edit reinterpret) rely on it for latest-wins cancellation.
 

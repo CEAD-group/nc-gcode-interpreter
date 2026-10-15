@@ -1,4 +1,5 @@
 file                =  { SOI ~ blocks ~ newline? ~ EOI }
+single_line         =  { SOI ~ block ~ EOI }
 // Entry point for the line fast path (stage-1 triage): a copy of the program
 // in which only the lines that need the grammar keep their text and every
 // other line is empty. Blank runs are consumed by `newline+` without
