@@ -1033,10 +1033,11 @@ fn both_paths(program: &str, options: &Options) -> (Outcome, Outcome) {
     (run_path(program, options, false), run_path(program, options, true))
 }
 
+/// Was a divergence until #86: the whole-file grammar ran X1 as the first body block.
 #[test]
-fn expected_divergence_body_on_a_head_line() {
+fn body_on_a_head_line_fails_on_both_paths() {
     let (default, ast) = both_paths("R1=0\nWHILE R1<2 X1\nR1=R1+1\nENDWHILE\n", &Options::default());
-    assert!(matches!(default, Outcome::Done { .. }), "{default:?}");
+    assert_fails_at(&default, "parse error", 2);
     assert_fails_at(&ast, "parse error", 2);
 }
 
