@@ -77,6 +77,20 @@ released to PyPI.
   different inputs or, when both were recorded with `--verify-digest`, with
   differing row counts or output/state digests in any matched case (#76).
 
+- A control-structure keyword must stand alone in its block (#84). The
+  grammar accepted statements on the same line and ran them as part of the
+  body: `WHILE R1<3 X1` (likewise after `LOOP`, `REPEAT`, `FOR ... TO ...` and
+  `ELSE`) ran `X1` as the first body block of every pass, and a mid-line
+  `X1 ELSE X2` ended the true branch. The NC programming manual (4.1.7) shows
+  every structure keyword in a block of its own and does not say a control
+  accepts more, so these forms are now parse errors that name the text to
+  move. A comment after the keyword and a block number before it are still
+  allowed. A closer after other content (`X1 ENDIF`) is reported at the closer
+  instead of as "IF is never closed". A jump label on a structure line
+  (`LB: WHILE R1<3`, `LB: ENDIF`) is rejected too, as a real control does with
+  alarm 12630; a conditional jump (`LB: IF R1<3 GOTOB LB`) is no structure and
+  keeps its label.
+
 ### Fixed
 
 - Flattened `BSPLINE` samples now carry the line number of the control-point
@@ -136,6 +150,17 @@ released to PyPI.
   blocks. On a 112 MB, 1.28M-line CAM
   program with about 12,000 such lines the Python batch API went from 24.3 s
   and 3.0 GiB peak RSS (whole-file parse) to 2.2 s and 1.3 GiB.
+
+- The line fast path no longer gives three line shapes a different meaning
+  than the grammar does (#83). `N10X5` (a block number glued to the next word)
+  was read as block 10 plus `X5`, where the grammar reads one call named
+  `N10X5` and warns about the glued word; `TRANS=5` (a frame keyword before
+  `=`) was stored as a variable, where the grammar rejects the line; and
+  `X=5 AND Y1` (likewise `OR`, `XOR`, `B_AND`, `B_OR`, `B_XOR` after a
+  constant) became `X=5`, a call `AND` and `Y1`, where the grammar evaluates
+  `5 AND Y1`. The decoder now hands these lines to the grammar, so the result
+  no longer depends on which path a program takes. A seeded random-line test
+  compares every line the decoder claims against the grammar.
 
 ## [v0.2.7] - 2026-09-08
 

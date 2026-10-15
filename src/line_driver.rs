@@ -766,6 +766,17 @@ const RESERVED_WORDS: &[&str] = &[
     "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP",
 ];
 
+/// The grammar's word operators (op_int_div .. op_or). After a constant
+/// they continue the expression (`X=5 AND Y1`), so the fast path never
+/// claims one as a call.
+const WORD_OPERATORS: &[&str] = &["DIV", "MOD", "AND", "OR", "XOR", "B_AND", "B_OR", "B_XOR"];
+
+fn is_frame_keyword(word: &str) -> bool {
+    crate::interpret_rules::FRAME_KEYWORDS
+        .iter()
+        .any(|kw| kw.eq_ignore_ascii_case(word))
+}
+
 fn is_reserved_word(word: &str) -> bool {
     RESERVED_WORDS.iter().any(|kw| kw.eq_ignore_ascii_case(word))
 }
@@ -861,9 +872,9 @@ fn decode_ic_word(line: &str, start: usize) -> Option<(Option<&str>, f64, usize)
 /// and unary minus) at `*i`, advancing past it. Folding is safe at decode
 /// time because every operand is a literal; the evaluation order replicates
 /// `evaluate_additive` / `evaluate_multiplicative` / `evaluate_unary`
-/// bit-for-bit (left-associative, `* /` binding tighter than `+ -`). The
-/// word operators DIV and MOD, parentheses, variables and anything else stop
-/// the fold; if the fold stops mid-operator the caller's next-token scan
+/// bit-for-bit (left-associative, `* /` binding tighter than `+ -`). Word
+/// operators (DIV, MOD, AND, ...), parentheses, variables and anything else
+/// stop the fold; if the fold stops mid-operator the caller's next-token scan
 /// rejects the line to the grammar.
 fn fold_const_expr(line: &str, i: &mut usize) -> Option<f64> {
     let bytes = line.as_bytes();
@@ -983,6 +994,11 @@ fn decode_line_inner<'a>(
         while i < n_len && bytes[i].is_ascii_digit() {
             i += 1;
         }
+        // The grammar's integer needs a non-letter after the digits, so
+        // `N10X5` is a call there, not a block number.
+        if i < n_len && bytes[i].is_ascii_alphabetic() {
+            return DecodeResult::NeedsGrammar;
+        }
         n = Some(&line[start..i]);
         skip_ws(&mut i);
     }
@@ -1089,9 +1105,10 @@ fn decode_line_inner<'a>(
             let mut eq = i;
             skip_ws(&mut eq);
             if eq < n_len && bytes[eq] == b'=' {
-                // A reserved word is not an `identifier`, so `IF=5` is a
-                // parse error in the full grammar, not an assignment.
-                if is_reserved_word(word) {
+                // A reserved word is not an `identifier` (`IF=5`) and a frame
+                // keyword takes frame_op at block start (`TRANS=5`), so both
+                // are parse errors in the full grammar, not assignments.
+                if is_reserved_word(word) || is_frame_keyword(word) {
                     return DecodeResult::NeedsGrammar;
                 }
                 i = eq + 1;
@@ -1138,11 +1155,7 @@ fn decode_line_inner<'a>(
                     // Frame keywords must go through frame_op / the frame
                     // guard; TRUE/FALSE etc. are not commands. Only claim
                     // plain keyword commands.
-                    Some((group, _modal))
-                        if !crate::interpret_rules::FRAME_KEYWORDS
-                            .iter()
-                            .any(|kw| kw.eq_ignore_ascii_case(word)) =>
-                    {
+                    Some((group, _modal)) if !is_frame_keyword(word) => {
                         arena.push(Word::GCommand(group, word));
                     }
                     Some(_) => return DecodeResult::NeedsGrammar,
@@ -1151,16 +1164,13 @@ fn decode_line_inner<'a>(
                         // call in the full grammar - unless it is reserved
                         // (control flow), a frame keyword (frame_op at block
                         // start, a loud error mid-block), DEF (opens a
-                        // definition), or the word operators DIV/MOD (which
-                        // would continue a preceding expression, e.g.
+                        // definition), or a word operator (which would
+                        // continue a preceding expression, e.g.
                         // `X=5 DIV R1`); those take the full grammar.
                         if is_reserved_word(word)
-                            || crate::interpret_rules::FRAME_KEYWORDS
-                                .iter()
-                                .any(|kw| kw.eq_ignore_ascii_case(word))
+                            || is_frame_keyword(word)
                             || word.eq_ignore_ascii_case("DEF")
-                            || word.eq_ignore_ascii_case("DIV")
-                            || word.eq_ignore_ascii_case("MOD")
+                            || WORD_OPERATORS.iter().any(|op| op.eq_ignore_ascii_case(word))
                         {
                             return DecodeResult::NeedsGrammar;
                         }
@@ -1632,6 +1642,84 @@ M30
                 let joined: String = chunks.iter().map(|range| &program[range.clone()]).collect();
                 assert_eq!(joined, *program, "parts={parts}");
             }
+        }
+    }
+
+    #[test]
+    fn decoder_declines_lines_the_grammar_reads_differently() {
+        // #83: the decoder used to claim these with a meaning the grammar
+        // does not give them (N10X5 is a call there, TRANS=5 a parse error,
+        // AND continues the expression).
+        for line in [
+            "N10X5",
+            "N10LBL: X1",
+            "TRANS=5",
+            "ROT = 1",
+            "X=5 AND Y1",
+            "X=5 or Y1",
+            "X=5 XOR Y1",
+            "X=5 B_AND Y1",
+            "X=5 B_OR Y1",
+            "X=5 B_XOR Y1",
+        ] {
+            assert!(
+                matches!(
+                    super::decode_line(line, 1, &mut Vec::new()),
+                    super::DecodeResult::NeedsGrammar
+                ),
+                "{line:?} must take the grammar"
+            );
+        }
+        for program in [
+            "G0 X0\nN10X5",
+            "G0 X0\nN10LBL: X1",
+            "G0 X0\nTRANS=5\nX1",
+            "R1=3\nX=5 AND Y1",
+            "R1=3\nX=6 B_AND R1\nY=0 OR R1",
+        ] {
+            assert_paths_agree(program, true);
+            assert_paths_agree(program, false);
+        }
+    }
+
+    #[test]
+    fn decoded_random_lines_match_the_grammar() {
+        // Token soup with and without separators: every line the decoder
+        // claims must give the grammar's result. Found the three #83 classes.
+        let tokens = [
+            "N10", "N", "10", "X5", "X", "Y1", "=", "5", "-3", "2.5", ".5", "AND", "OR", "XOR", "B_AND", "B_OR",
+            "B_XOR", "DIV", "MOD", "NOT", "TRANS", "ROT", "SCALE", "MIRROR", "RPL", "DEF", "IC(2)", "(3*R1)", "(", ")",
+            "*", "+", "/", "LBL:", ";c", "G1", "M3", "R1", "_V", "SIN(30)", "E", "F100", "IF", "GOTOF", "X1=", "T",
+            "\"s\"", "[", ",", "<", "x5", "n10", "SET", "$P",
+        ];
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..20_000 {
+            let mut line = String::new();
+            for _ in 0..1 + next(5) {
+                line.push_str(tokens[next(tokens.len())]);
+                if next(3) != 0 {
+                    line.push(' ');
+                }
+            }
+            let line = line.trim_end().to_string();
+            if !seen.insert(line.clone())
+                || !matches!(
+                    super::decode_line(&line, 2, &mut Vec::new()),
+                    super::DecodeResult::Trivial(..)
+                )
+            {
+                continue;
+            }
+            let program = format!("G0 X0\n{line}");
+            assert_paths_agree(&program, true);
+            assert_paths_agree(&program, false);
         }
     }
 }

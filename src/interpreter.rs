@@ -288,8 +288,19 @@ fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Re
 /// rule names like `gg08_work_offset`.
 pub(crate) fn describe_parse_error(error: &pest::error::Error<Rule>) -> String {
     use pest::error::ErrorVariant;
+    // `X1 ELSE X2` fails deep inside the statement rules ("expected a
+    // number" for the E of ELSE); the misplaced keyword is the real cause.
+    if let Some((keyword, _)) = crate::structure_scan::misplaced_structure_keyword(error.line()) {
+        return crate::structure_scan::misplaced_keyword_message(&keyword);
+    }
+    if let Some((label, keyword, _)) = crate::structure_scan::labelled_structure_keyword(error.line()) {
+        return crate::structure_scan::labelled_structure_message(&label, &keyword);
+    }
     match &error.variant {
         ErrorVariant::ParsingError { positives, .. } if !positives.is_empty() => {
+            if let Some(message) = describe_structure_head_text(error, positives) {
+                return message;
+            }
             if let Some(message) = describe_trailing_text(error, positives) {
                 return message;
             }
@@ -324,6 +335,32 @@ fn describe_trailing_text(error: &pest::error::Error<Rule>, positives: &[Rule]) 
     if !only_block_terminators {
         return None;
     }
+    let shown = text_from_error_column(error)?;
+    Some(format!(
+        "unexpected text '{shown}' after a complete block: only a comment (;...) or the end of the line may follow here. If this is a second statement, put it on its own line"
+    ))
+}
+
+/// Text after a structure head (`WHILE R1<3 X1`, `LOOP X1`, `ELSE X2`): the
+/// grammar wants a comment or the line end there, because the keyword stands
+/// alone in its block (#84).
+fn describe_structure_head_text(error: &pest::error::Error<Rule>, positives: &[Rule]) -> Option<String> {
+    if !positives.contains(&Rule::comment) {
+        return None;
+    }
+    let keyword = crate::structure_scan::first_structure_word(error.line())?;
+    if !matches!(keyword.as_str(), "WHILE" | "FOR" | "LOOP" | "REPEAT" | "ELSE") {
+        return None;
+    }
+    let shown = text_from_error_column(error)?;
+    Some(format!(
+        "unexpected text '{shown}' on the {keyword} line: a control-structure keyword stands alone in its block and only a comment (;...) may follow it. If this is a statement of the body, put it on the next line"
+    ))
+}
+
+/// The rest of the error line from the error column, trimmed and cut to 40
+/// characters; None when nothing follows.
+fn text_from_error_column(error: &pest::error::Error<Rule>) -> Option<String> {
     let column = match error.line_col {
         pest::error::LineColLocation::Pos((_, col)) | pest::error::LineColLocation::Span((_, col), _) => col,
     };
@@ -338,9 +375,7 @@ fn describe_trailing_text(error: &pest::error::Error<Rule>, positives: &[Rule]) 
     } else {
         ""
     };
-    Some(format!(
-        "unexpected text '{shown}{ellipsis}' after a complete block: only a comment (;...) or the end of the line may follow here. If this is a second statement, put it on its own line"
-    ))
+    Some(format!("{shown}{ellipsis}"))
 }
 
 fn describe_rule(rule: Rule) -> &'static str {
@@ -371,6 +406,7 @@ fn describe_rule(rule: Rule) -> &'static str {
         Rule::data_type => "a data type (REAL/INT/BOOL)",
         Rule::control => "a control statement",
         Rule::condition => "a condition",
+        Rule::body_end_kw => "a control-structure keyword (ELSE/ENDIF/...)",
         Rule::relational_operator => "a comparison operator",
         Rule::if_statement | Rule::if_goto_statement => "IF",
         Rule::while_statement => "WHILE",
@@ -1463,5 +1499,38 @@ mod tests {
         );
 
         assert_eq!(floats(&table, "CR"), &[None, Some(20.0), None]);
+    }
+
+    #[test]
+    fn grammar_keeps_structure_keywords_alone_in_their_block() {
+        // The structure scan reports these first; the grammar must reject
+        // them on its own too, so every entry rule agrees (#84).
+        for program in [
+            "WHILE R1<3 X1\nENDWHILE",
+            "LOOP X1\nENDLOOP",
+            "REPEAT X1\nUNTIL R1>0",
+            "FOR R2=1 TO 3 X=R2\nENDFOR",
+            "IF R1==1\nX1\nELSE X2\nENDIF",
+            "IF R1==1\nX1 ELSE X2\nENDIF",
+            "IF R1==1\nX1 ENDIF",
+            "LB: WHILE R1<3\nENDWHILE",
+            "WHILE R1<3\nX1\nLB: ENDWHILE",
+            "IF R1==1\nX1\nN10 LB: ELSE\nX2\nENDIF",
+            "LB: IF R1==1\nX1\nENDIF",
+        ] {
+            assert!(
+                NCParser::parse(Rule::file, program).is_err(),
+                "{program:?} must not parse"
+            );
+        }
+        for program in [
+            "WHILE R1<3 ; head\nX1\nN20 ENDWHILE",
+            "IF R1==1 ; c\nX1\nELSE ; c\nX2\nENDIF",
+            "LB: IF R1>0 GOTOB LB",
+            "WHILE R1<3\nLB:\nENDWHILE",
+            "LB: X1\nIF R1==1\nX2\nENDIF",
+        ] {
+            assert!(NCParser::parse(Rule::file, program).is_ok(), "{program:?} must parse");
+        }
     }
 }
