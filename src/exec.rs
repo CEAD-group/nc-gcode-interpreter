@@ -1011,7 +1011,7 @@ mod tests {
             .next()
             .expect("file pair");
         let blocks = file.into_inner().next().expect("blocks pair");
-        match interpret_blocks(blocks, output, state)? {
+        match interpret_blocks(blocks.into(), output, state)? {
             BlockFlow::Continue | BlockFlow::EndProgram => Ok(()),
             BlockFlow::Jump(request) => Err(request.into_not_found_error(state)),
         }

@@ -10,8 +10,10 @@ use crate::ast::{
 };
 use crate::errors::ParsingError;
 use crate::state::State;
-use crate::types::{NCParser, Pair, Rule};
-use pest::iterators::Pairs;
+use crate::types::{NCParser, Rule};
+// Lowering reads the pest pairs of its own single-line parse, so it needs no
+// line-offset wrapper (`types::Pair` exists for the whole-file consumers).
+use pest::iterators::{Pair, Pairs};
 use pest::Parser;
 
 /// Parse one source line with the `line` entry and lower it. Errors carry the
