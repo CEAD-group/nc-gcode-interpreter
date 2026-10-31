@@ -1,5 +1,6 @@
 use crate::errors::ParsingError;
 use crate::frame::{self, Matrix3, Plane};
+use crate::interpreter::SourceText;
 use crate::output::CellMap;
 use crate::types::Value;
 use std::collections::{HashMap, HashSet};
@@ -114,9 +115,9 @@ pub struct State {
     /// Store line offsets for efficient error reporting. Shared (`Arc`) to
     /// avoid re-copying the offset table when the state is cloned.
     line_offsets: Arc<[usize]>,
-    /// Store the input text for error messages. Shared (`Arc`) so cloning the
-    /// state does not copy the (up to gigabyte) program buffer.
-    input: Arc<str>,
+    /// The program text, for error messages. Shared with the driver that runs
+    /// it, so neither cloning the state nor storing it copies the program.
+    input: SourceText,
     /// Registry resolving an assignment key (axis or block address) to its
     /// interned `&'static str` output-column name, so output rows carry `Copy`
     /// keys with no per-row allocation. Keyed by the uppercased name; the
@@ -197,7 +198,7 @@ impl State {
             arc_offset_keys,
             warned_unpositioned: [false; 3],
             line_offsets: Arc::from(Vec::new()),
-            input: Arc::from(""),
+            input: SourceText::from(""),
             output_keys,
         }
     }
@@ -240,15 +241,22 @@ impl State {
         self.jump_scopes.iter().any(|scope| scope.contains(key))
     }
 
-    /// Sets the input text and pre-calculates line offsets for efficient access.
-    /// `Arc::from(&str)` copies the program once into the `Arc<str>` (making
-    /// later `State` clones cheap). Taking `&str` lets the caller pass its
-    /// existing borrow directly; the previous `set_input(input.to_string())`
-    /// call first materialized a throwaway `String` - a second full copy of the
-    /// whole program, a wasted gigabyte on the largest inputs.
+    /// Sets the input text (copied once) and pre-calculates line offsets.
+    #[cfg(any(test, feature = "bench-experiments"))]
     pub fn set_input(&mut self, input: &str) {
-        self.line_offsets = input.match_indices('\n').map(|(i, _)| i).collect::<Vec<_>>().into();
-        self.input = Arc::from(input);
+        self.set_source(SourceText::from(input));
+    }
+
+    /// Shares the program text with the caller (no copy) and pre-calculates
+    /// line offsets for efficient access.
+    pub fn set_source(&mut self, source: SourceText) {
+        self.line_offsets = source
+            .as_str()
+            .match_indices('\n')
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>()
+            .into();
+        self.input = source;
     }
 
     /// Gets a line from the input by line number (1-based indexing)
@@ -261,8 +269,9 @@ impl State {
         } else {
             self.line_offsets.get(line_no - 2).map(|&i| i + 1)?
         };
-        let end = self.line_offsets.get(line_no - 1).copied().unwrap_or(self.input.len());
-        Some(&self.input[start..end])
+        let input = self.input.as_str();
+        let end = self.line_offsets.get(line_no - 1).copied().unwrap_or(input.len());
+        Some(&input[start..end])
     }
 
     /// Checks if a given key is a valid axis identifier

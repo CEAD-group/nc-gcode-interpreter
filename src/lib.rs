@@ -22,6 +22,7 @@ pub use line_driver::experiments;
 mod python_bindings {
     use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
+    use pyo3::pybacked::PyBackedStr;
     use pyo3::types::PyCapsule;
     use pyo3::types::{PyDict, PyList};
     use pyo3::wrap_pyfunction;
@@ -64,7 +65,7 @@ mod python_bindings {
     use std::sync::{mpsc, Mutex};
 
     use crate::errors::ErrorLocation;
-    use crate::interpreter::{nc_to_batch_stream_with_line_numbers, nc_to_row_stream};
+    use crate::interpreter::{nc_to_batch_stream_with_line_numbers, nc_to_row_stream, SourceText};
     use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table, VariableEvents};
     use crate::state::FinalState;
     use crate::types::Value;
@@ -206,11 +207,23 @@ mod python_bindings {
         })
     }
 
+    /// The program for a run: the file at `input` when `input_is_path`, else
+    /// the Python str itself, shared without a copy.
+    fn source_text(input: PyBackedStr, input_is_path: bool) -> PyResult<SourceText> {
+        if input_is_path {
+            let text = std::fs::read_to_string(&*input)
+                .map_err(|e| PyErr::new::<PyValueError, _>(format!("Error reading input file '{}': {}", input, e)))?;
+            Ok(SourceText::from(text))
+        } else {
+            Ok(SourceText::new(input))
+        }
+    }
+
     /// Spawn the interpreter on a worker thread, pushing finished rows into a
     /// bounded channel. Shared by the row and batch streaming iterators.
     #[allow(clippy::too_many_arguments)]
     fn spawn_stream(
-        input: String,
+        input: SourceText,
         initial_state: Option<String>,
         axis_identifiers: Option<Vec<String>>,
         extra_axes: Option<Vec<String>>,
@@ -230,7 +243,7 @@ mod python_bindings {
             .name("nc-interpreter".to_string())
             .spawn(move || {
                 let outcome = nc_to_row_stream(
-                    &input,
+                    input,
                     initial_state.as_deref(),
                     axis_identifiers,
                     extra_axes,
@@ -258,7 +271,7 @@ mod python_bindings {
     /// another is consumed). Used by `nc_to_batches`.
     #[allow(clippy::too_many_arguments)]
     fn spawn_batch_stream(
-        input: String,
+        input: SourceText,
         batch_size: usize,
         initial_state: Option<String>,
         axis_identifiers: Option<Vec<String>>,
@@ -290,7 +303,7 @@ mod python_bindings {
             .name("nc-interpreter".to_string())
             .spawn(move || {
                 let outcome = nc_to_batch_stream_with_line_numbers(
-                    &input,
+                    input,
                     initial_state.as_deref(),
                     axis_identifiers,
                     extra_axes,
@@ -491,7 +504,7 @@ mod python_bindings {
     #[pyo3(signature = (input, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, forward_fill = true, include_variables = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_rows(
-        input: String,
+        input: PyBackedStr,
         initial_state: Option<String>,
         axis_identifiers: Option<Vec<String>>,
         extra_axes: Option<Vec<String>>,
@@ -504,15 +517,10 @@ mod python_bindings {
         flatten_tolerance: Option<f64>,
     ) -> PyResult<NcRowIterator> {
         // When `input_is_path` is set, `input` is a filesystem path: read the
-        // program here (once) instead of copying a 1.1 GB Python str across the
-        // PyO3 boundary. Reading before the worker spawns surfaces a missing
-        // file as an immediate, clean error.
-        let input = if input_is_path {
-            std::fs::read_to_string(&input)
-                .map_err(|e| PyErr::new::<PyValueError, _>(format!("Error reading input file '{}': {}", input, e)))?
-        } else {
-            input
-        };
+        // program here, before the worker spawns, so a missing file surfaces
+        // as an immediate, clean error. Otherwise the worker borrows the
+        // Python str's UTF-8 buffer for the run instead of copying it.
+        let input = source_text(input, input_is_path)?;
         let (row_receiver, result_receiver, handle) = spawn_stream(
             input,
             initial_state,
@@ -668,7 +676,7 @@ mod python_bindings {
     #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_batches(
-        input: String,
+        input: PyBackedStr,
         batch_size: usize,
         initial_state: Option<String>,
         axis_identifiers: Option<Vec<String>>,
@@ -686,12 +694,7 @@ mod python_bindings {
             return Err(PyErr::new::<PyValueError, _>("batch_size must be greater than 0"));
         }
         // Read the program here when given a path (see nc_to_rows).
-        let input = if input_is_path {
-            std::fs::read_to_string(&input)
-                .map_err(|e| PyErr::new::<PyValueError, _>(format!("Error reading input file '{}': {}", input, e)))?
-        } else {
-            input
-        };
+        let input = source_text(input, input_is_path)?;
         let (batch_receiver, result_receiver, events_receiver, handle) = spawn_batch_stream(
             input,
             batch_size,
