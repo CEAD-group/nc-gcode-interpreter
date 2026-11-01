@@ -80,7 +80,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
+          args: --release --out dist -i python3.12 -i python3.13 -i python3.14 -i python3.14t -i python3.15 -i python3.15t
           sccache: 'true'
           manylinux: auto
       - name: Upload wheels
@@ -156,8 +156,8 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          # Named interpreters: --find-interpreter also picks up the image's PyPy,
-          # which pyo3-ffi 0.29.0 fails to compile for.
+          # Every wheel job names its interpreters (the set 0.2.8 shipped per platform):
+          # --find-interpreter picks up whatever the image has, e.g. PyPy, which fails.
           args: --release --out dist -i python3.12 -i python3.13 -i python3.14 -i python3.14t
           sccache: 'true'
           manylinux: auto
@@ -216,7 +216,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
+          args: --release --out dist -i python3.12 -i python3.13 -i python3.14
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -256,7 +256,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
+          args: --release --out dist -i python3.12 -i python3.13 -i python3.14 -i python3.15
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -305,7 +305,7 @@ jobs:
       contents: write
       attestations: write
     steps:
-      # Do NOT use `merge-multiple: true`. With `--find-interpreter`, every
+      # Do NOT use `merge-multiple: true`. With a shared interpreter list, every
       # build matrix leg (py3.12 AND py3.13) produces cp312/cp313/cp314 wheels
       # with identical filenames but non-identical bytes (sccache makes builds
       # nondeterministic). Merging them into one directory makes
