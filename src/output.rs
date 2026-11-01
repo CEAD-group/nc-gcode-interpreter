@@ -18,6 +18,7 @@ use std::sync::{Mutex, OnceLock};
 /// `fill`, per column per batch) — trusted `&'static str` keys, no need for
 /// SipHash's DoS resistance. See [`crate::state::FxMap`].
 type FxMap<K, V> = HashMap<K, V, rustc_hash::FxBuildHasher>;
+type FxSet<T> = HashSet<T, rustc_hash::FxBuildHasher>;
 
 /// Intern a column name to a process-stable `&'static str`.
 ///
@@ -111,6 +112,12 @@ impl CellMap {
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (&&'static str, &Value)> {
         self.entries.iter().map(|(k, v)| (k, v))
+    }
+
+    /// Move every cell out, leaving the map empty with its allocation kept.
+    #[inline]
+    pub(crate) fn drain(&mut self) -> impl Iterator<Item = (&'static str, Value)> + '_ {
+        self.entries.drain(..)
     }
 
     /// Iterate the column keys, mirroring `HashMap::keys` (yields `&&'static str`
@@ -303,11 +310,11 @@ impl BatchStreamSink {
             return Ok(());
         }
         // Take the buffered rows out to build the batch, then recycle their
-        // allocations: `build_batch` only borrows the rows (it copies each cell
-        // value into the columnar builders), so once it returns the row buffers
-        // are free to be cleared and pooled rather than dropped.
+        // allocations: `build_batch_owned` moves each cell value into the
+        // columnar builders, so once it returns the row buffers are free to be
+        // cleared and pooled rather than dropped.
         let mut rows = std::mem::take(&mut self.buffer);
-        let table = self.builder.build_batch(&rows);
+        let table = self.builder.build_batch_owned(&mut rows);
         self.recycle.reserve(rows.len());
         for mut row in rows.drain(..) {
             row.reset_for_reuse();
@@ -761,7 +768,7 @@ pub const LINE_NO_COLUMN: &str = "line_no";
 /// names are `&'static str` (constant vocabulary or interned row keys), so the
 /// order is comparison-by-content and independent of which `&'static str`
 /// instance carries a given name.
-fn canonical_order(present: &HashSet<&'static str>) -> Vec<&'static str> {
+fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
     let mut ordered: Vec<&'static str> = Vec::new();
     let push_if_present = |name: &'static str, ordered: &mut Vec<&'static str>| {
         if present.contains(name) && !ordered.contains(&name) {
@@ -850,17 +857,34 @@ impl BatchBuilder {
     pub fn build_batch(&mut self, rows: &[Row]) -> Table {
         // Skip rows that carry no output values (blocks that only affected
         // internal state, e.g. definitions - their variable_changes are a
-        // streaming-only concern). Keep the whole `Row` so the source line
-        // number is available alongside the cells when `emit_line_no` is set.
-        let kept: Vec<&Row> = rows.iter().filter(|r| !r.cells.is_empty()).collect();
-        let cells: Vec<&CellMap> = kept.iter().map(|r| &r.cells).collect();
+        // streaming-only concern). Keep the source line number alongside the
+        // cells for when `emit_line_no` is set.
+        self.build(
+            rows.iter()
+                .filter(|r| !r.cells.is_empty())
+                .map(|r| (r.line_no, BatchCells::Shared(&r.cells)))
+                .collect(),
+        )
+    }
 
+    /// As [`build_batch`](Self::build_batch), but moves the cell values out of
+    /// `rows` (left empty) instead of cloning their strings.
+    pub(crate) fn build_batch_owned(&mut self, rows: &mut [Row]) -> Table {
+        self.build(
+            rows.iter_mut()
+                .filter(|r| !r.cells.is_empty())
+                .map(|r| (r.line_no, BatchCells::Owned(&mut r.cells)))
+                .collect(),
+        )
+    }
+
+    fn build(&mut self, mut kept: Vec<(usize, BatchCells)>) -> Table {
         // Union of every column seen so far with those present in this batch.
-        let mut present: HashSet<&'static str> = self.columns.iter().copied().collect();
-        present.extend(cells.iter().flat_map(|r| r.keys().copied()));
+        let mut present: FxSet<&'static str> = self.columns.iter().copied().collect();
+        present.extend(kept.iter().flat_map(|(_, cells)| cells.keys()));
         self.columns = canonical_order(&present);
 
-        let height = cells.len();
+        let height = kept.len();
         // One typed builder per column, in canonical order, each pre-filled
         // with `height` nulls. A name->position index lets each cell find its
         // builder in O(1).
@@ -877,12 +901,12 @@ impl BatchBuilder {
         // hits; the `if let` is defensive only. FxHash beat a linear scan of
         // `self.columns` here (~22 keys need content compare — interning does
         // NOT guarantee pointer identity across all column sources).
-        for (row_index, cell) in cells.iter().enumerate() {
-            for (&key, value) in cell.iter() {
+        for (row_index, (_, cells)) in kept.iter_mut().enumerate() {
+            cells.for_each(|key, value| {
                 if let Some(&position) = index_of.get(key) {
                     builders[position].set(row_index, value);
                 }
-            }
+            });
         }
 
         // Opt-in (default off): the source line number leads every batch, one
@@ -892,7 +916,7 @@ impl BatchBuilder {
         let extra = usize::from(self.emit_line_no);
         let mut columns: Vec<(String, Column)> = Vec::with_capacity(self.columns.len() + extra);
         if self.emit_line_no {
-            let line_no_column = Column::Int(kept.iter().map(|r| Some(r.line_no as i64)).collect());
+            let line_no_column = Column::Int(kept.iter().map(|&(line_no, _)| Some(line_no as i64)).collect());
             columns.push((LINE_NO_COLUMN.to_string(), line_no_column));
         }
         for (&name, builder) in self.columns.iter().zip(builders) {
@@ -908,6 +932,30 @@ impl BatchBuilder {
             columns.push((name.to_string(), column));
         }
         Table { columns }
+    }
+}
+
+/// One kept row's cells for [`BatchBuilder::build`]: borrowed (values are
+/// cloned) or owned by a row about to be recycled (values are moved out).
+enum BatchCells<'a> {
+    Shared(&'a CellMap),
+    Owned(&'a mut CellMap),
+}
+
+impl BatchCells<'_> {
+    fn keys(&self) -> impl Iterator<Item = &'static str> + '_ {
+        let cells = match self {
+            BatchCells::Shared(cells) => &**cells,
+            BatchCells::Owned(cells) => &**cells,
+        };
+        cells.keys().copied()
+    }
+
+    fn for_each(&mut self, mut f: impl FnMut(&'static str, Value)) {
+        match self {
+            BatchCells::Shared(cells) => cells.iter().for_each(|(&key, value)| f(key, value.clone())),
+            BatchCells::Owned(cells) => cells.drain().for_each(|(key, value)| f(key, value)),
+        }
     }
 }
 
@@ -935,7 +983,7 @@ impl ColumnBuilder {
         }
     }
 
-    fn set(&mut self, row_index: usize, value: &Value) {
+    fn set(&mut self, row_index: usize, value: Value) {
         match self {
             ColumnBuilder::Int(column) => {
                 // Block numbers: original integer lexeme, float fallback.
@@ -944,27 +992,27 @@ impl ColumnBuilder {
                         .parse::<i64>()
                         .ok()
                         .or_else(|| s.parse::<f64>().ok().map(|v| v as i64)),
-                    Value::Float(f) => Some(*f as i64),
+                    Value::Float(f) => Some(f as i64),
                     _ => None,
                 };
             }
             ColumnBuilder::StrList(column) => {
                 column[row_index] = match value {
-                    Value::StrList(l) => Some(l.clone()),
-                    Value::Str(s) => Some(vec![s.clone()]),
+                    Value::StrList(l) => Some(l),
+                    Value::Str(s) => Some(vec![s]),
                     _ => None,
                 };
             }
             ColumnBuilder::Str(column) => {
                 column[row_index] = match value {
-                    Value::Str(s) => Some(s.clone()),
+                    Value::Str(s) => Some(s),
                     Value::Float(f) => Some(f.to_string()),
                     _ => None,
                 };
             }
             ColumnBuilder::Float(column) => {
                 column[row_index] = match value {
-                    Value::Float(f) => Some(*f),
+                    Value::Float(f) => Some(f),
                     Value::Str(s) => s.parse::<f64>().ok(),
                     _ => None,
                 };
@@ -1034,4 +1082,43 @@ pub fn write_csv<W: std::io::Write>(table: &Table, writer: W) -> Result<(), std:
     }
     w.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Moving cell values out of recycled rows builds the same batches as
+    /// cloning them, forward-fill carry included.
+    #[test]
+    fn owned_batches_match_borrowed_batches() {
+        let mut rows: Vec<Row> = (0..6)
+            .map(|i| {
+                let mut row = Row {
+                    line_no: i + 1,
+                    ..Row::default()
+                };
+                if i != 2 {
+                    row.cells.insert(intern_column("X"), Value::Float(i as f64));
+                }
+                if i % 2 == 0 {
+                    row.cells
+                        .insert(intern_column("gg01_motion"), Value::Str(format!("G{}", i % 4)));
+                }
+                if i == 3 {
+                    row.cells.insert("M", Value::StrList(vec!["M3".into(), "M8".into()]));
+                    row.cells.insert("N", Value::Str("30".into()));
+                }
+                row
+            })
+            .collect();
+        let mut shared = BatchBuilder::new(false).with_line_numbers(true);
+        let mut owned = BatchBuilder::new(false).with_line_numbers(true);
+        for batch in rows.chunks_mut(4) {
+            let expected = shared.build_batch(batch);
+            let got = owned.build_batch_owned(batch);
+            assert_eq!(expected.columns, got.columns);
+            assert!(batch.iter().all(|row| row.cells.is_empty()));
+        }
+    }
 }

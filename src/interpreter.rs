@@ -6,6 +6,54 @@ use crate::state::{self, State};
 use crate::types::{NCParser, Rule};
 use pest::Parser;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Program text shared between the driver that interprets it and the state's
+/// diagnostics, so a run holds a single copy of the source. Converting from a
+/// `&str` copies once; an owned `String`, an `Arc<str>` or any other
+/// [`SourceText::new`] buffer is shared as is.
+#[derive(Clone)]
+pub struct SourceText(Arc<dyn AsRef<str> + Send + Sync>);
+
+impl SourceText {
+    pub fn new<T: AsRef<str> + Send + Sync + 'static>(text: T) -> Self {
+        SourceText(Arc::new(text))
+    }
+
+    pub fn as_str(&self) -> &str {
+        (*self.0).as_ref()
+    }
+}
+
+impl std::fmt::Debug for SourceText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceText").field("len", &self.as_str().len()).finish()
+    }
+}
+
+impl From<&str> for SourceText {
+    fn from(text: &str) -> Self {
+        SourceText(Arc::new(Box::<str>::from(text)))
+    }
+}
+
+impl From<&String> for SourceText {
+    fn from(text: &String) -> Self {
+        SourceText::from(text.as_str())
+    }
+}
+
+impl From<String> for SourceText {
+    fn from(text: String) -> Self {
+        SourceText::new(text)
+    }
+}
+
+impl From<Arc<str>> for SourceText {
+    fn from(text: Arc<str>) -> Self {
+        SourceText::new(text)
+    }
+}
 
 const DEFAULT_AXIS_IDENTIFIERS: &[&str] = &[
     "N", "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V", "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
@@ -13,7 +61,7 @@ const DEFAULT_AXIS_IDENTIFIERS: &[&str] = &[
 
 /// Main function: interpret the input program into a sanitized output table.
 pub fn nc_to_table(
-    input: &str,
+    input: impl Into<SourceText>,
     initial_state: Option<&str>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
@@ -41,7 +89,7 @@ pub fn nc_to_table(
     // Now interpret the main input using the axis_index_map from state
     let mut output = OutputRows::collect();
     install_flattener(&mut output, &state, flatten_tolerance)?;
-    interpret_file(input, &mut state, &mut output)?;
+    interpret_source(input.into(), &mut state, &mut output)?;
     let rows = output.finish()?;
 
     let table = Table::from_rows(&rows, disable_forward_fill);
@@ -104,7 +152,7 @@ fn install_flattener(
 #[allow(clippy::too_many_arguments)]
 #[allow(dead_code)] // used by the python-feature bindings, not the bin
 pub fn nc_to_row_stream(
-    input: &str,
+    input: impl Into<SourceText>,
     initial_state: Option<&str>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
@@ -127,7 +175,7 @@ pub fn nc_to_row_stream(
     }
     let mut output = OutputRows::stream(sender);
     install_flattener(&mut output, &state, flatten_tolerance)?;
-    interpret_file(input, &mut state, &mut output)?;
+    interpret_source(input.into(), &mut state, &mut output)?;
     output.finish()?;
     Ok(state)
 }
@@ -145,7 +193,7 @@ pub fn nc_to_row_stream(
 #[allow(dead_code)] // used by the python-feature bindings, not the bin
 #[allow(clippy::too_many_arguments)]
 pub fn nc_to_batch_stream(
-    input: &str,
+    input: impl Into<SourceText>,
     initial_state: Option<&str>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
@@ -183,7 +231,7 @@ pub fn nc_to_batch_stream(
 /// callers.
 #[allow(clippy::too_many_arguments)]
 pub fn nc_to_batch_stream_with_line_numbers(
-    input: &str,
+    input: impl Into<SourceText>,
     initial_state: Option<&str>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
@@ -218,15 +266,20 @@ pub fn nc_to_batch_stream_with_line_numbers(
         emit_line_no,
     );
     install_flattener(&mut output, &state, flatten_tolerance)?;
-    interpret_file(input, &mut state, &mut output)?;
+    interpret_source(input.into(), &mut state, &mut output)?;
     output.finish()?;
     Ok(state)
 }
 
 /// Interpret a file, pushing rows into `output`.
 fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
-    // Store input for error messages
-    state.set_input(input);
+    interpret_source(SourceText::from(input), state, output)
+}
+
+/// As [`interpret_file`], sharing `source` with the state's diagnostics.
+fn interpret_source(source: SourceText, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
+    state.set_source(source.clone());
+    let input = source.as_str();
 
     // Validate control-structure nesting first: a PEG reports an unclosed
     // IF/WHILE at the end of the file; the line scan reports the opener.
@@ -696,6 +749,32 @@ mod tests {
                 other => panic!("column {name} is not an int column: {other:?}"),
             })
             .unwrap_or_else(|| panic!("column {name} missing; have {:?}", column_names(table)))
+    }
+
+    /// An owned program is shared with the state's diagnostics, not copied.
+    #[test]
+    fn owned_source_is_shared_with_diagnostics() {
+        let program = String::from("G1 X0 Y0 F100\nX10 Y=\n");
+        let ptr = program.as_ptr();
+        let source = SourceText::from(program);
+        assert_eq!(source.as_str().as_ptr(), ptr);
+        let mut state = build_state(None, None, 10000, None, false);
+        state.set_source(source.clone());
+        assert_eq!(state.get_line(2), Some("X10 Y="));
+        assert_eq!(state.get_line(2).unwrap().as_ptr(), source.as_str()[14..].as_ptr());
+        let err = nc_to_table(
+            String::from("G1 X0\nX10 Y=\n"),
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            false,
+            None,
+        )
+        .expect_err("a dangling assignment does not parse");
+        assert!(err.to_string().contains("X10 Y="), "{err}");
     }
 
     /// `include_line_numbers` (default off) prepends a `line_no` column: one

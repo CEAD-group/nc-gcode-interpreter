@@ -4,6 +4,31 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [v0.2.9] - 2026-11-01
+
+### Changed
+
+- `nc_to_batches` and `nc_to_rows` borrow the Python str's UTF-8 buffer for
+  the run instead of copying it twice (once into a Rust `String`, once more
+  for error messages). On a 5M-line, 322 MB program the peak footprint of
+  `nc_to_batches` drops from 1.28 to 0.72 GiB. The Rust entry points
+  (`nc_to_table`, `nc_to_row_stream`, `nc_to_batch_stream*`) take
+  `impl Into<SourceText>`: a `&str` still works and is copied once, an owned
+  `String` or `Arc<str>` is shared without a copy (#89).
+
+- Every jump-free program now runs on the streaming line driver, not only
+  those of 64 MiB or more, and the streaming driver decodes ahead on a second
+  thread instead of decoding inline. On a 1M-line, 63 MB program
+  `nc_to_batches` peaks at 0.21 GiB instead of 0.60 GiB and takes 1.02 s
+  instead of 1.24 s; at 5M lines it takes 5.1 s instead of 6.3 s. Programs
+  with jumps keep the indexed driver; `NC_STREAM_MIN_BYTES` still sets a size
+  threshold (#89).
+
+- Less work per output row on the interpreter thread: the batch builder moves
+  string cells out of the rows it recycles instead of cloning them, and the
+  per-row column set and the flattener's position maps hash with FxHash. At
+  5M lines `nc_to_batches` takes 4.4 s instead of 5.2 s (#89).
+
 ## [v0.2.8] - 2026-10-15
 
 ### Added
