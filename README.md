@@ -178,7 +178,7 @@ Measure a local program with
 --threads 4 --samples 1 --batch-size 4096 --allow-undefined --axis-index-e 4
 --axis-index-elx 5 --output tmp/memory.json`.
 
-**Cancellation.** Dropping the iterator is the supported way to cancel a `nc_to_rows`/`nc_to_batches` run — leaving a `for` loop early or `del`-ing it drops it immediately; relying on garbage collection works too but only whenever the runtime happens to collect it, so it is not prompt on all interpreters: the background interpreter thread's next attempt to send a row hits a closed channel and returns internally via `ParsingError::StreamClosed`, so the thread unwinds promptly instead of running the rest of the program to completion. No explicit `.close()`/`.cancel()` call is needed or provided — drop is the whole contract, and downstreams (e.g. ribweaver's `/sim` live-edit reinterpret) rely on it for latest-wins cancellation.
+**Cancellation.** Dropping the iterator is the supported way to cancel a `nc_to_rows`/`nc_to_batches` run — leaving a `for` loop early or `del`-ing it drops it immediately; relying on garbage collection works too but only whenever the runtime happens to collect it, so it is not prompt on all interpreters: the background interpreter thread's next attempt to send a row hits a closed channel and returns internally via `ParsingError::StreamClosed`, so the thread unwinds promptly instead of running the rest of the program to completion. No explicit `.close()`/`.cancel()` call is needed or provided — drop is the whole contract, and downstreams (for example a live-edit re-interpret in an editor) rely on it for latest-wins cancellation.
 
 Additionally, conversion from a Polars DataFrame back to an MPF (NC) program is also supported:
 
