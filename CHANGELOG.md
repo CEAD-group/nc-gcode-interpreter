@@ -16,6 +16,14 @@ released to PyPI.
   `impl Into<SourceText>`: a `&str` still works and is copied once, an owned
   `String` or `Arc<str>` is shared without a copy (#89).
 
+- Every jump-free program now runs on the streaming line driver, not only
+  those of 64 MiB or more, and the streaming driver decodes ahead on a second
+  thread instead of decoding inline. On a 1M-line, 63 MB program
+  `nc_to_batches` peaks at 0.21 GiB instead of 0.60 GiB and takes 1.02 s
+  instead of 1.24 s; at 5M lines it takes 5.1 s instead of 6.3 s. Programs
+  with jumps keep the indexed driver; `NC_STREAM_MIN_BYTES` still sets a size
+  threshold (#89).
+
 ## [v0.2.8] - 2026-10-15
 
 ### Added
