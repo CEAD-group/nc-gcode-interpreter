@@ -126,11 +126,13 @@ const G19: Plane = Plane {
 /// One buffered block of an active spline: either a point-bearing row (its
 /// geometric axis cells define the next spline point / control point) or any
 /// other row that arrived mid-spline and is re-emitted in place.
+#[derive(Clone)]
 enum SplineItem {
     Point(Row),
     Other(Row),
 }
 
+#[derive(Clone)]
 pub struct Flattener {
     tolerance: f64,
     /// Geometric axis columns (configured axis identifiers minus the
@@ -261,6 +263,12 @@ impl Flattener {
         if self.buffering_spline() {
             self.flush_spline(out);
         }
+    }
+
+    /// No spline is buffered, so the state is just positions and modes: a
+    /// checkpoint may clone it.
+    pub(crate) fn is_idle(&self) -> bool {
+        !self.buffering_spline()
     }
 
     fn buffering_spline(&self) -> bool {

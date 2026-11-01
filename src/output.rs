@@ -244,8 +244,12 @@ pub struct BatchStreamSink {
     /// finish. Unbounded so the send never blocks the worker (the events are
     /// small and only read after the batch stream is drained).
     events_sender: std::sync::mpsc::Sender<VariableEvents>,
-    /// Growing sparse event log, sent whole at finish.
+    /// Growing sparse event log, sent whole at finish. `names` is always
+    /// complete; the event columns hold only what followed the last checkpoint.
     events: VariableEvents,
+    /// Event columns sealed at each checkpoint (`names` empty), shared with
+    /// the checkpoints so taking one copies no events.
+    frozen_events: Vec<std::sync::Arc<VariableEvents>>,
     /// Interned variable-name -> `name_id`, stable across the run.
     name_ids: HashMap<String, u32>,
     /// Count of cell-bearing (output) rows emitted so far - the `row_idx` a
@@ -298,8 +302,28 @@ impl BatchStreamSink {
     /// not recording. Best-effort: a hung-up consumer just misses the events.
     fn send_events(&mut self) {
         if self.record_variables {
-            let _ = self.events_sender.send(std::mem::take(&mut self.events));
+            let mut events = std::mem::take(&mut self.events);
+            if !self.frozen_events.is_empty() {
+                let total = self.event_count() + events.row_idx.len();
+                let mut joined = VariableEvents {
+                    row_idx: Vec::with_capacity(total),
+                    name_id: Vec::with_capacity(total),
+                    value: Vec::with_capacity(total),
+                    names: std::mem::take(&mut events.names),
+                };
+                for chunk in self.frozen_events.iter().map(|c| &**c).chain(std::iter::once(&events)) {
+                    joined.row_idx.extend_from_slice(&chunk.row_idx);
+                    joined.name_id.extend_from_slice(&chunk.name_id);
+                    joined.value.extend_from_slice(&chunk.value);
+                }
+                events = joined;
+            }
+            let _ = self.events_sender.send(events);
         }
+    }
+
+    fn event_count(&self) -> usize {
+        self.frozen_events.iter().map(|c| c.row_idx.len()).sum::<usize>() + self.events.row_idx.len()
     }
 
     /// Build and send the buffered rows as one [`Table`], threading the
@@ -345,6 +369,9 @@ pub struct OutputRows {
     flattener: Option<crate::flatten::Flattener>,
     /// Whether the once-per-run G91 warning has fired (see `flush`).
     warned_g91: bool,
+    /// Takes resume checkpoints at line boundaries (batch sink only, see
+    /// [`crate::checkpoint`]). `None` on every other run.
+    checkpointer: Option<Box<crate::checkpoint::Checkpointer>>,
 }
 
 impl OutputRows {
@@ -355,6 +382,7 @@ impl OutputRows {
             record_variables: false,
             flattener: None,
             warned_g91: false,
+            checkpointer: None,
         }
     }
 
@@ -366,6 +394,7 @@ impl OutputRows {
             record_variables: true,
             flattener: None,
             warned_g91: false,
+            checkpointer: None,
         }
     }
 
@@ -416,6 +445,7 @@ impl OutputRows {
                 record_variables,
                 events_sender,
                 events: VariableEvents::default(),
+                frozen_events: Vec::new(),
                 name_ids: HashMap::new(),
                 output_row_count: 0,
             }),
@@ -424,6 +454,7 @@ impl OutputRows {
             record_variables,
             flattener: None,
             warned_g91: false,
+            checkpointer: None,
         }
     }
 
@@ -431,6 +462,119 @@ impl OutputRows {
     /// its way to the sink (arcs and splines come out as sampled G1 runs).
     pub fn set_flattener(&mut self, flattener: crate::flatten::Flattener) {
         self.flattener = Some(flattener);
+    }
+
+    /// Take resume checkpoints at line boundaries on this (batch) output.
+    pub(crate) fn set_checkpointer(&mut self, checkpointer: crate::checkpoint::Checkpointer) {
+        self.checkpointer = Some(Box::new(checkpointer));
+    }
+
+    /// Record which driver the run took (see [`crate::checkpoint::Resumability`]).
+    pub(crate) fn set_resumable(&self, resumable: bool) {
+        if let Some(checkpointer) = &self.checkpointer {
+            checkpointer.set_resumable(resumable);
+        }
+    }
+
+    /// Whether the line driver must report line boundaries.
+    #[inline]
+    pub(crate) fn checkpointing(&self) -> bool {
+        self.checkpointer.is_some()
+    }
+
+    /// Called by the streaming line driver before it executes the line at
+    /// 0-based `line_index`, which starts at `byte_offset` of the program.
+    /// Takes a checkpoint when one is due and the output is at a clean
+    /// boundary: the in-flight row is flushed, no spline is buffered, and the
+    /// partial batch is emitted so no batch straddles the checkpoint.
+    pub(crate) fn line_boundary(
+        &mut self,
+        line_index: usize,
+        byte_offset: usize,
+        state: &crate::state::State,
+    ) -> Result<(), ParsingError> {
+        let (Some(checkpointer), RowSink::Batch(sink)) = (&self.checkpointer, &self.sink) else {
+            return Ok(());
+        };
+        // Count the in-flight row too, so the checkpoint lands on the row the
+        // interval ends at and a full batch is not split.
+        let rows = sink.output_row_count as usize + usize::from(!self.current.cells.is_empty());
+        if !checkpointer.due(line_index, rows) {
+            return Ok(());
+        }
+        // Flushing early is what `start_row` of this line would do anyway.
+        self.flush()?;
+        if self.flattener.as_ref().is_some_and(|f| !f.is_idle()) {
+            return Ok(());
+        }
+        let RowSink::Batch(sink) = &mut self.sink else {
+            unreachable!("checked above")
+        };
+        sink.emit()?;
+        if sink.record_variables && !sink.events.row_idx.is_empty() {
+            let sealed = VariableEvents {
+                row_idx: std::mem::take(&mut sink.events.row_idx),
+                name_id: std::mem::take(&mut sink.events.name_id),
+                value: std::mem::take(&mut sink.events.value),
+                names: Vec::new(),
+            };
+            sink.frozen_events.push(std::sync::Arc::new(sealed));
+        }
+        let snapshot = crate::checkpoint::OutputSnapshot {
+            builder: sink.builder.clone(),
+            output_row_count: sink.output_row_count,
+            frozen_events: sink.frozen_events.clone(),
+            names: sink.events.names.clone(),
+            name_ids: sink.name_ids.clone(),
+            flattener: self.flattener.clone(),
+            warned_g91: self.warned_g91,
+        };
+        let event_idx = sink.event_count();
+        let row_idx = sink.output_row_count as usize;
+        self.checkpointer.as_mut().expect("checked above").record(
+            line_index,
+            byte_offset,
+            row_idx,
+            event_idx,
+            state,
+            snapshot,
+        );
+        Ok(())
+    }
+
+    /// A batch-streaming output that continues from a checkpoint: the
+    /// builder's forward-fill carry and column set, the row and event counts,
+    /// the interned variable names, the flattener and the warn latches.
+    pub(crate) fn resume_batch_stream(
+        sender: std::sync::mpsc::SyncSender<Table>,
+        batch_size: usize,
+        record_variables: bool,
+        events_sender: std::sync::mpsc::Sender<VariableEvents>,
+        snapshot: &crate::checkpoint::OutputSnapshot,
+    ) -> Self {
+        OutputRows {
+            current: Row::default(),
+            sink: RowSink::Batch(BatchStreamSink {
+                sender,
+                builder: snapshot.builder.clone(),
+                buffer: Vec::new(),
+                recycle: Vec::new(),
+                batch_size,
+                record_variables,
+                events_sender,
+                events: VariableEvents {
+                    names: snapshot.names.clone(),
+                    ..VariableEvents::default()
+                },
+                frozen_events: snapshot.frozen_events.clone(),
+                name_ids: snapshot.name_ids.clone(),
+                output_row_count: snapshot.output_row_count,
+            }),
+            record_variables,
+            flattener: snapshot.flattener.clone(),
+            warned_g91: snapshot.warned_g91,
+            checkpointer: None,
+        }
     }
 
     /// Number of committed rows in a `Collect` sink (0 for streaming sinks).
@@ -461,6 +605,7 @@ impl OutputRows {
                 record_variables: self.record_variables,
                 flattener: None,
                 warned_g91: self.warned_g91,
+                checkpointer: None,
             }),
             _ => None,
         }
@@ -815,6 +960,7 @@ fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
 /// table. A fresh builder handed all rows in a single call reproduces the old
 /// whole-table `Table::from_rows` byte-for-byte - which is exactly how
 /// `from_rows` is now implemented.
+#[derive(Clone)]
 pub struct BatchBuilder {
     disable_forward_fill: bool,
     /// Prepend the `line_no` source-line column to every batch (opt-in).
