@@ -120,7 +120,7 @@ pub(crate) fn build_state(
 /// Install the curve flattener on the output when a tolerance was given
 /// (see [`crate::flatten`]): G2/G3 arcs and spline blocks come out as runs
 /// of G1 rows sampled within `flatten_tolerance` of the true curve.
-fn install_flattener(
+pub(crate) fn install_flattener(
     output: &mut OutputRows,
     state: &State,
     flatten_tolerance: Option<f64>,
@@ -272,12 +272,16 @@ pub fn nc_to_batch_stream_with_line_numbers(
 }
 
 /// Interpret a file, pushing rows into `output`.
-fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
+pub(crate) fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
     interpret_source(SourceText::from(input), state, output)
 }
 
 /// As [`interpret_file`], sharing `source` with the state's diagnostics.
-fn interpret_source(source: SourceText, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
+pub(crate) fn interpret_source(
+    source: SourceText,
+    state: &mut State,
+    output: &mut OutputRows,
+) -> Result<(), ParsingError> {
     state.set_source(source.clone());
     let input = source.as_str();
 

@@ -6,6 +6,8 @@ use clap::{Arg, ArgAction, Command};
 use std::collections::HashMap;
 use std::io::{self};
 
+#[allow(dead_code)] // the resumable batch runs serve the Python bindings
+mod checkpoint;
 mod errors;
 mod flatten;
 mod frame;

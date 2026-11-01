@@ -57,4 +57,62 @@ def nc_to_batches(
     ``row_idx`` / ``name_id`` / ``value``) and ``variable_names`` (list[str]).
     """
 
-__all__ = ["nc_to_batches", "nc_to_rows"]
+class NotResumable(ValueError):
+    """A checkpoint cannot resume with the given program."""
+
+    #: One of ``"prefix_changed"``, ``"structured"``, ``"jumps"``,
+    #: ``"foreign_checkpoint"``, ``"disabled"``.
+    reason: str
+
+class Checkpoint:
+    """Opaque resume point of an :class:`NcSession` run."""
+
+    @property
+    def line_no(self) -> int: ...
+    @property
+    def row_idx(self) -> int: ...
+    @property
+    def event_idx(self) -> int: ...
+    @property
+    def byte_offset(self) -> int: ...
+
+class NcBatchIterator(Iterator[Any]):
+    def __next__(self) -> Any: ...
+    @property
+    def state(self) -> dict[str, Any] | None: ...
+    @property
+    def variable_events(self) -> Any: ...
+    @property
+    def variable_names(self) -> list[str] | None: ...
+    @property
+    def start_row(self) -> int: ...
+    @property
+    def start_line(self) -> int: ...
+    @property
+    def resumed_from(self) -> Checkpoint | None: ...
+
+class NcSession:
+    def __init__(
+        self,
+        *,
+        batch_size: int = 500_000,
+        initial_state: str | None = None,
+        axis_identifiers: list[str] | None = None,
+        extra_axes: list[str] | None = None,
+        iteration_limit: int = 10000,
+        disable_forward_fill: bool = False,
+        axis_index_map: dict[str, int] | None = None,
+        allow_undefined_variables: bool = False,
+        flatten_tolerance: float | None = None,
+        include_line_numbers: bool = False,
+        include_variables: bool = False,
+        checkpoint_every_rows: int | None = 100_000,
+        checkpoint_every_lines: int | None = None,
+    ) -> None: ...
+    def run(self, input: str, input_is_path: bool = False) -> NcBatchIterator: ...
+    def checkpoints(self) -> list[Checkpoint]: ...
+    def checkpoint_for(self, line_no: int) -> Checkpoint | None: ...
+    def resume(self, checkpoint: Checkpoint, input: str, input_is_path: bool = False) -> NcBatchIterator: ...
+    def edit(self, input: str, input_is_path: bool = False) -> NcBatchIterator: ...
+
+__all__ = ["Checkpoint", "NcSession", "NotResumable", "nc_to_batches", "nc_to_rows"]

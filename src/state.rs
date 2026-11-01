@@ -259,6 +259,34 @@ impl State {
         self.input = source;
     }
 
+    /// As [`State::set_source`] for a program whose bytes before
+    /// `byte_offset` (a line start) equal the current one's: the line offsets
+    /// of that prefix are reused and only the rest is scanned.
+    pub(crate) fn set_source_with_prefix(&mut self, source: SourceText, byte_offset: usize) {
+        let kept = self.line_offsets.partition_point(|&i| i < byte_offset);
+        let mut offsets = Vec::with_capacity(kept + (self.line_offsets.len() - kept));
+        offsets.extend_from_slice(&self.line_offsets[..kept]);
+        offsets.extend(
+            source.as_str()[byte_offset..]
+                .match_indices('\n')
+                .map(|(i, _)| byte_offset + i),
+        );
+        self.line_offsets = offsets.into();
+        self.input = source;
+    }
+
+    /// Report lines from `other`'s program, which equals this one's before
+    /// every line this state will still report.
+    pub(crate) fn share_source(&mut self, other: &State) {
+        self.line_offsets = other.line_offsets.clone();
+        self.input = other.input.clone();
+    }
+
+    /// The program text this state reports lines from.
+    pub(crate) fn source(&self) -> &SourceText {
+        &self.input
+    }
+
     /// Gets a line from the input by line number (1-based indexing)
     pub fn get_line(&self, line_no: usize) -> Option<&str> {
         if line_no == 0 {

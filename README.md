@@ -180,6 +180,35 @@ Measure a local program with
 
 **Cancellation.** Dropping the iterator is the supported way to cancel a `nc_to_rows`/`nc_to_batches` run — leaving a `for` loop early or `del`-ing it drops it immediately; relying on garbage collection works too but only whenever the runtime happens to collect it, so it is not prompt on all interpreters: the background interpreter thread's next attempt to send a row hits a closed channel and returns internally via `ParsingError::StreamClosed`, so the thread unwinds promptly instead of running the rest of the program to completion. No explicit `.close()`/`.cancel()` call is needed or provided — drop is the whole contract, and downstreams (e.g. ribweaver's `/sim` live-edit reinterpret) rely on it for latest-wins cancellation.
 
+#### Resuming after an edit
+
+`NcSession` interprets a program repeatedly as it is edited and re-runs only
+the part after the edit. It takes the `nc_to_batches` keyword arguments, fixed
+for the session, plus `checkpoint_every_rows` (default 100 000) or
+`checkpoint_every_lines`:
+
+```python
+from nc_gcode_interpreter import NcSession, NotResumable
+
+session = NcSession(batch_size=100_000, checkpoint_every_rows=100_000)
+frames = list(session.run(program))      # a full run, taking checkpoints
+batches = session.edit(edited_program)   # resumes before the first changed byte
+batches.start_row                        # global index of its first row
+suffix = list(batches)                   # the rows from start_row on
+```
+
+`session.checkpoints()` lists the checkpoints taken so far (`line_no`,
+`row_idx`, `event_idx`), and `session.resume(checkpoint, text)` resumes from
+a chosen one, raising `NotResumable` (with a `reason`) when the text before it
+changed. The resumed rows, the whole-program `variable_events` and the final
+`state` equal those of a full run of the edited program; warnings of the
+unchanged prefix are not repeated. Only programs without control structures
+and jumps take checkpoints (option A of #47); for others `checkpoints()` stays
+empty and `edit` runs in full. A batch never straddles a checkpoint, so keep
+`checkpoint_every_rows` a multiple of `batch_size`. On a 1M-line (63 MB)
+generated program a full run takes 0.5 s and an edit of the last line resumes
+in 0.04 s with `checkpoint_every_rows=10_000` (0.12 s with 100 000).
+
 Additionally, conversion from a Polars DataFrame back to an MPF (NC) program is also supported:
 
 ```bash

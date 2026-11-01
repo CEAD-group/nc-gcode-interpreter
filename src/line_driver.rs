@@ -142,8 +142,8 @@ fn reject_string_variable(key: &str, state: &State, line_no: usize) -> Result<()
 /// `interpret_blocks` for a flat block list: jumps resolve against the
 /// line index; an unresolved jump propagates to the caller.
 pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
-    if input.len() >= streaming_min_bytes() && preflight_streaming(input, state)? {
-        return interpret_streaming(input, output, state);
+    if streams(input) && preflight_streaming(input, 0, state)? {
+        return interpret_streaming(input, 0, 0, output, state);
     }
 
     // Pass 1: decode every line. Words borrow `&str` spans of `input` and are
@@ -270,14 +270,44 @@ pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> R
 /// controls, so a remaining control node is a jump and needs the indexed driver.
 /// Byte chunks are scanned in parallel; the lowest line that fails to parse or
 /// holds a jump decides, exactly as a sequential scan would.
-fn preflight_streaming(input: &str, state: &State) -> Result<bool, ParsingError> {
+/// `first_line` is the 0-based line `input` starts at in the program.
+fn preflight_streaming(input: &str, first_line: usize, state: &State) -> Result<bool, ParsingError> {
     let threads = rayon::current_num_threads().max(1);
     let parts = if input.len() < STREAM_PARALLEL_MIN_BYTES || threads <= 1 {
         1
     } else {
         threads * 8
     };
-    preflight_streaming_in(input, state, parts)
+    preflight_streaming_in(input, first_line, state, parts)
+}
+
+/// Whether a jump-free program of this size takes the streaming driver.
+pub(crate) fn streams(input: &str) -> bool {
+    input.len() >= streaming_min_bytes()
+}
+
+/// Preflight the part of `input` from `byte_offset` (the start of 0-based
+/// line `first_line`) on: `Ok(false)` when it holds a jump.
+pub(crate) fn preflight_suffix(
+    input: &str,
+    byte_offset: usize,
+    first_line: usize,
+    state: &State,
+) -> Result<bool, ParsingError> {
+    preflight_streaming(&input[byte_offset..], first_line, state)
+}
+
+/// Stream `input` from `byte_offset` (the start of 0-based line
+/// `first_line`) on; the caller restored the state and output of a
+/// checkpoint taken there and ran [`preflight_suffix`].
+pub(crate) fn resume_streaming(
+    input: &str,
+    byte_offset: usize,
+    first_line: usize,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<BlockFlow, ParsingError> {
+    interpret_streaming(input, byte_offset, first_line, output, state)
 }
 
 /// First decisive line of a chunk, as an index local to the chunk.
@@ -294,7 +324,7 @@ struct PreflightScan {
     verdict: Option<PreflightVerdict>,
 }
 
-fn preflight_streaming_in(input: &str, state: &State, parts: usize) -> Result<bool, ParsingError> {
+fn preflight_streaming_in(input: &str, first_line: usize, state: &State, parts: usize) -> Result<bool, ParsingError> {
     let stats = std::env::var("NC_STAGE1_STATS").is_ok();
     let start = std::time::Instant::now();
     let chunks = chunk_at_newlines(input, parts);
@@ -302,7 +332,7 @@ fn preflight_streaming_in(input: &str, state: &State, parts: usize) -> Result<bo
         .par_iter()
         .map(|range| preflight_chunk(&input[range.clone()]))
         .collect();
-    let (mut total, mut non_blank, mut needs_grammar) = (0, 0, 0);
+    let (mut total, mut non_blank, mut needs_grammar) = (first_line, 0, 0);
     for (range, scan) in chunks.iter().zip(&scans) {
         match scan.verdict {
             None => {}
@@ -322,7 +352,8 @@ fn preflight_streaming_in(input: &str, state: &State, parts: usize) -> Result<bo
     }
     if stats {
         eprintln!(
-            "STAGE1_STATS mode=streaming non_blank={non_blank} needs_grammar={needs_grammar} total_lines={total} preflight={:.3}s",
+            "STAGE1_STATS mode=streaming non_blank={non_blank} needs_grammar={needs_grammar} total_lines={} preflight={:.3}s",
+            total - first_line,
             start.elapsed().as_secs_f64()
         );
     }
@@ -389,10 +420,28 @@ fn chunk_at_newlines(input: &str, parts: usize) -> Vec<Range<usize>> {
 /// O(chunk) decoding/parse storage, independent of the number of lines.
 /// Input ownership, diagnostic line offsets and the selected output sink are
 /// separate: collecting output still necessarily grows with the program.
-fn interpret_streaming(input: &str, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
+///
+/// Runs `program` from `byte_offset`, the start of 0-based line `first_line`
+/// (0 and 0 for a whole program). When the output takes checkpoints, every
+/// line boundary is reported to it before the line executes.
+fn interpret_streaming(
+    program: &str,
+    byte_offset: usize,
+    first_line: usize,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<BlockFlow, ParsingError> {
+    let input = &program[byte_offset..];
+    let checkpointing = output.checkpointing();
+    // Lines are subslices of `program`, so their offset is pointer distance.
+    let offset_of = |line: &str| line.as_ptr() as usize - program.as_ptr() as usize;
     if input.len() < STREAM_PARALLEL_MIN_BYTES || rayon::current_num_threads() <= 1 {
         let mut arena = Vec::new();
         for (index, line) in input.lines().enumerate() {
+            let index = first_line + index;
+            if checkpointing {
+                output.line_boundary(index, offset_of(line), state)?;
+            }
             arena.clear();
             let decoded = decode_line(line, index + 1, &mut arena);
             let flow = execute_streamed(&decoded, line, index, &arena, output, state)?;
@@ -406,10 +455,13 @@ fn interpret_streaming(input: &str, output: &mut Output, state: &mut State) -> R
     // for the decode the indexed driver runs in parallel.
     std::thread::scope(|scope| {
         let (sender, receiver) = std::sync::mpsc::sync_channel::<DecodedChunk>(2);
-        scope.spawn(move || decode_chunks(input, sender));
+        scope.spawn(move || decode_chunks(input, first_line, sender));
         // Returning early drops `receiver`, which stops the decode thread.
         for chunk in receiver {
             for (offset, (decoded, line)) in chunk.results.iter().zip(&chunk.lines).enumerate() {
+                if checkpointing {
+                    output.line_boundary(chunk.first_line + offset, offset_of(line), state)?;
+                }
                 let flow = execute_streamed(decoded, line, chunk.first_line + offset, &chunk.arena, output, state)?;
                 if !matches!(flow, BlockFlow::Continue) {
                     return Ok(flow);
@@ -432,9 +484,9 @@ struct DecodedChunk<'a> {
     arena: Vec<Word<'a>>,
 }
 
-fn decode_chunks<'a>(input: &'a str, sender: std::sync::mpsc::SyncSender<DecodedChunk<'a>>) {
+fn decode_chunks<'a>(input: &'a str, first_line: usize, sender: std::sync::mpsc::SyncSender<DecodedChunk<'a>>) {
     let mut lines = input.lines().peekable();
-    let mut first_line = 0;
+    let mut first_line = first_line;
     while lines.peek().is_some() {
         let mut chunk = DecodedChunk {
             first_line,
@@ -1681,12 +1733,12 @@ M30
             "DEF STRING TEXT=\"GOTO\"\nX=SIN(30) ; GOTO in a comment",
         ] {
             state.set_input(program);
-            assert!(super::preflight_streaming(program, &state).unwrap());
+            assert!(super::preflight_streaming(program, 0, &state).unwrap());
             assert_paths_agree(program, false);
         }
         for program in ["X1\nGOTOF END\nEND: M30", "X1\nIF 1==1 GOTOC UNKNOWN", "GOTOS"] {
             state.set_input(program);
-            assert!(!super::preflight_streaming(program, &state).unwrap());
+            assert!(!super::preflight_streaming(program, 0, &state).unwrap());
         }
         for tail in [
             "X=SIN(MISSING)",
@@ -1761,7 +1813,7 @@ M30
         for (program, expected) in &cases {
             state.set_input(program);
             for parts in [1, 2, 7, 64, 5000] {
-                let got = super::preflight_streaming_in(program, &state, parts).map_err(|e| match e {
+                let got = super::preflight_streaming_in(program, 0, &state, parts).map_err(|e| match e {
                     ParsingError::ParsingContext { line_no, .. } => line_no,
                     other => panic!("unexpected error {other:?}"),
                 });

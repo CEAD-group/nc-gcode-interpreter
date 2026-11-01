@@ -3,6 +3,7 @@
 extern crate pest_derive;
 mod types;
 
+pub mod checkpoint;
 mod errors;
 pub mod flatten;
 mod frame;
@@ -64,6 +65,10 @@ mod python_bindings {
     }
     use std::sync::{mpsc, Mutex};
 
+    use crate::checkpoint::{
+        common_prefix_len, plan_resume, resume_checkpointed, run_checkpointed, Checkpoint, CheckpointList,
+        SessionConfig,
+    };
     use crate::errors::ErrorLocation;
     use crate::interpreter::{nc_to_batch_stream_with_line_numbers, nc_to_row_stream, SourceText};
     use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table, VariableEvents};
@@ -283,12 +288,46 @@ mod python_bindings {
         flatten_tolerance: Option<f64>,
         emit_line_no: bool,
         include_variables: bool,
-    ) -> PyResult<(
+    ) -> PyResult<BatchWorker> {
+        spawn_batch_worker(move |batch_sender, events_sender| {
+            nc_to_batch_stream_with_line_numbers(
+                input,
+                initial_state.as_deref(),
+                axis_identifiers,
+                extra_axes,
+                iteration_limit,
+                disable_forward_fill,
+                axis_index_map,
+                allow_undefined_variables,
+                flatten_tolerance,
+                batch_size,
+                emit_line_no,
+                batch_sender,
+                include_variables,
+                events_sender,
+            )
+        })
+    }
+
+    type BatchWorker = (
         mpsc::Receiver<Table>,
         mpsc::Receiver<Result<FinalState, ErrInfo>>,
         mpsc::Receiver<VariableEvents>,
         std::thread::JoinHandle<()>,
-    )> {
+    );
+
+    /// Spawn `run` on a worker thread with the batch, result and event
+    /// channels `NcBatchIterator` drains. Shared by `nc_to_batches` and
+    /// `NcSession`.
+    fn spawn_batch_worker<F>(run: F) -> PyResult<BatchWorker>
+    where
+        F: FnOnce(
+                mpsc::SyncSender<Table>,
+                mpsc::Sender<VariableEvents>,
+            ) -> Result<crate::state::State, crate::errors::ParsingError>
+            + Send
+            + 'static,
+    {
         // A cap of 3 lets the worker build one batch ahead while the consumer
         // converts the previous one to a polars DataFrame, without unbounded
         // buffering.
@@ -302,22 +341,7 @@ mod python_bindings {
         let handle = std::thread::Builder::new()
             .name("nc-interpreter".to_string())
             .spawn(move || {
-                let outcome = nc_to_batch_stream_with_line_numbers(
-                    input,
-                    initial_state.as_deref(),
-                    axis_identifiers,
-                    extra_axes,
-                    iteration_limit,
-                    disable_forward_fill,
-                    axis_index_map,
-                    allow_undefined_variables,
-                    flatten_tolerance,
-                    batch_size,
-                    emit_line_no,
-                    batch_sender,
-                    include_variables,
-                    events_sender,
-                );
+                let outcome = run(batch_sender, events_sender);
                 let message = match outcome {
                     Ok(state) => Ok(state.final_state()),
                     // The consumer hung up: nothing to report to nobody.
@@ -562,6 +586,34 @@ mod python_bindings {
         /// The sparse variable-change side-table, available once exhausted.
         /// `None` unless `include_variables` was set.
         variable_events: Option<VariableEvents>,
+        /// Global index of the first row and 1-based first line this iterator
+        /// covers: 0 and 1 unless it resumes from `resumed_from`.
+        start_row: usize,
+        start_line: usize,
+        resumed_from: Option<Arc<Checkpoint>>,
+    }
+
+    impl NcBatchIterator {
+        fn new(worker: BatchWorker, include_variables: bool, resumed_from: Option<Arc<Checkpoint>>) -> Self {
+            let (batch_receiver, result_receiver, events_receiver, handle) = worker;
+            NcBatchIterator {
+                batches: Some(Mutex::new(batch_receiver)),
+                result: Some(Mutex::new(result_receiver)),
+                // Only hold the events receiver when recording; otherwise leave it
+                // `None` so `.variable_events` stays `None`.
+                events: if include_variables {
+                    Some(Mutex::new(events_receiver))
+                } else {
+                    None
+                },
+                handle: Some(handle),
+                state: None,
+                variable_events: None,
+                start_row: resumed_from.as_ref().map_or(0, |c| c.row_idx),
+                start_line: resumed_from.as_ref().map_or(1, |c| c.line_no),
+                resumed_from,
+            }
+        }
     }
 
     impl NcBatchIterator {
@@ -665,6 +717,24 @@ mod python_bindings {
         fn variable_names(&self) -> Option<Vec<String>> {
             self.variable_events.as_ref().map(|ev| ev.names.clone())
         }
+
+        /// Global index of the first output row this iterator yields.
+        #[getter]
+        fn start_row(&self) -> usize {
+            self.start_row
+        }
+
+        /// 1-based source line this iterator starts executing at.
+        #[getter]
+        fn start_line(&self) -> usize {
+            self.start_line
+        }
+
+        /// The checkpoint this run resumed from, or None for a full run.
+        #[getter]
+        fn resumed_from(&self) -> Option<PyCheckpoint> {
+            self.resumed_from.clone().map(|inner| PyCheckpoint { inner })
+        }
     }
 
     /// Interpret an NC program lazily into columnar batches: returns an iterator
@@ -695,7 +765,7 @@ mod python_bindings {
         }
         // Read the program here when given a path (see nc_to_rows).
         let input = source_text(input, input_is_path)?;
-        let (batch_receiver, result_receiver, events_receiver, handle) = spawn_batch_stream(
+        let worker = spawn_batch_stream(
             input,
             batch_size,
             initial_state,
@@ -709,21 +779,264 @@ mod python_bindings {
             include_line_numbers,
             include_variables,
         )?;
+        Ok(NcBatchIterator::new(worker, include_variables, None))
+    }
 
-        Ok(NcBatchIterator {
-            batches: Some(Mutex::new(batch_receiver)),
-            result: Some(Mutex::new(result_receiver)),
-            // Only hold the events receiver when recording; otherwise leave it
-            // `None` so `.variable_events` stays `None`.
-            events: if include_variables {
-                Some(Mutex::new(events_receiver))
-            } else {
-                None
-            },
-            handle: Some(handle),
-            state: None,
-            variable_events: None,
-        })
+    pyo3::create_exception!(
+        _internal,
+        NotResumable,
+        PyValueError,
+        "A checkpoint cannot resume with the given program; run it in full. \
+         `reason` is one of 'prefix_changed', 'structured', 'jumps', \
+         'foreign_checkpoint', 'disabled'."
+    );
+
+    fn not_resumable(py: Python<'_>, why: crate::checkpoint::NotResumable, checkpoint: &Checkpoint) -> PyErr {
+        let err = NotResumable::new_err(why.message(checkpoint));
+        let _ = err.value(py).setattr("reason", why.reason());
+        err
+    }
+
+    /// An opaque resume point of an `NcSession` run. Holds the interpreter
+    /// state at a line boundary; only its position is visible.
+    #[pyclass(frozen, from_py_object, name = "Checkpoint")]
+    #[derive(Clone)]
+    struct PyCheckpoint {
+        inner: Arc<Checkpoint>,
+    }
+
+    #[pymethods]
+    impl PyCheckpoint {
+        /// 1-based number of the first line a resume executes.
+        #[getter]
+        fn line_no(&self) -> usize {
+            self.inner.line_no
+        }
+
+        /// Output rows before the checkpoint: the global index of the first
+        /// row a resume yields.
+        #[getter]
+        fn row_idx(&self) -> usize {
+            self.inner.row_idx
+        }
+
+        /// Variable events recorded before the checkpoint.
+        #[getter]
+        fn event_idx(&self) -> usize {
+            self.inner.event_idx
+        }
+
+        /// Byte offset of `line_no` in the program text.
+        #[getter]
+        fn byte_offset(&self) -> usize {
+            self.inner.byte_offset
+        }
+
+        fn __repr__(&self) -> String {
+            format!(
+                "Checkpoint(line_no={}, row_idx={}, event_idx={})",
+                self.inner.line_no, self.inner.row_idx, self.inner.event_idx
+            )
+        }
+    }
+
+    static NEXT_SESSION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+    /// Batch runs of one program as it is edited: `run` interprets it in full
+    /// taking checkpoints, `resume` and `edit` re-run only the part after a
+    /// checkpoint. The configuration is fixed per session because checkpoints
+    /// are only valid under the configuration that took them.
+    #[pyclass]
+    struct NcSession {
+        id: u64,
+        config: SessionConfig,
+        /// The text of the latest run; the checkpoints in `list` belong to it.
+        current: Option<SourceText>,
+        list: CheckpointList,
+    }
+
+    impl NcSession {
+        fn start(&mut self, input: SourceText, list: Vec<Arc<Checkpoint>>) -> CheckpointList {
+            self.current = Some(input);
+            self.list = Arc::new(Mutex::new(list));
+            self.list.clone()
+        }
+
+        fn snapshot(&self) -> Vec<Arc<Checkpoint>> {
+            self.list.lock().expect("checkpoint list mutex poisoned").clone()
+        }
+
+        fn full_run(&mut self, input: SourceText) -> PyResult<NcBatchIterator> {
+            let list = self.start(input.clone(), Vec::new());
+            let (config, id) = (self.config.clone(), self.id);
+            let worker = spawn_batch_worker(move |sender, events_sender| {
+                run_checkpointed(input, &config, id, list, sender, events_sender)
+            })?;
+            Ok(NcBatchIterator::new(worker, self.config.include_variables, None))
+        }
+
+        /// Resume `checkpoint` with `input`, keeping the session's checkpoints
+        /// that the unchanged prefix still covers. `common` is the common
+        /// prefix length of the session's text and `input`, if already known.
+        fn resume_from(
+            &mut self,
+            py: Python<'_>,
+            checkpoint: Arc<Checkpoint>,
+            input: SourceText,
+            common: Option<usize>,
+        ) -> PyResult<NcBatchIterator> {
+            if checkpoint.session_id != self.id {
+                return Err(not_resumable(
+                    py,
+                    crate::checkpoint::NotResumable::ForeignCheckpoint,
+                    &checkpoint,
+                ));
+            }
+            let current = self.current.clone();
+            let existing = self.snapshot();
+            let (plan, kept) = py
+                .detach(|| {
+                    let common = match (&current, common) {
+                        (Some(_), Some(common)) => common,
+                        (Some(current), None) => common_prefix_len(current.as_str(), input.as_str()),
+                        (None, _) => 0,
+                    };
+                    let known = current.as_ref().map(|c| (c.as_str(), common));
+                    let plan = plan_resume(&checkpoint, &input, known)?;
+                    let mut kept: Vec<Arc<Checkpoint>> = existing
+                        .iter()
+                        .filter(|c| c.byte_offset <= common && c.byte_offset < checkpoint.byte_offset)
+                        .map(|c| plan.rebase(c))
+                        .collect();
+                    kept.push(plan.rebase(&checkpoint));
+                    Ok((plan, kept))
+                })
+                .map_err(|why| not_resumable(py, why, &checkpoint))?;
+            let list = self.start(input.clone(), kept);
+            let config = self.config.clone();
+            let from = checkpoint.clone();
+            let worker = spawn_batch_worker(move |sender, events_sender| {
+                resume_checkpointed(&from, plan, input, &config, list, sender, events_sender)
+            })?;
+            Ok(NcBatchIterator::new(
+                worker,
+                self.config.include_variables,
+                Some(checkpoint),
+            ))
+        }
+    }
+
+    #[pymethods]
+    impl NcSession {
+        #[new]
+        #[pyo3(signature = (*, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false, checkpoint_every_rows = Some(100_000), checkpoint_every_lines = None))]
+        #[allow(clippy::too_many_arguments)]
+        fn new(
+            batch_size: usize,
+            initial_state: Option<String>,
+            axis_identifiers: Option<Vec<String>>,
+            extra_axes: Option<Vec<String>>,
+            iteration_limit: usize,
+            disable_forward_fill: bool,
+            axis_index_map: Option<HashMap<String, usize>>,
+            allow_undefined_variables: bool,
+            flatten_tolerance: Option<f64>,
+            include_line_numbers: bool,
+            include_variables: bool,
+            checkpoint_every_rows: Option<usize>,
+            checkpoint_every_lines: Option<usize>,
+        ) -> PyResult<Self> {
+            if batch_size == 0 {
+                return Err(PyErr::new::<PyValueError, _>("batch_size must be greater than 0"));
+            }
+            let every_rows = checkpoint_every_rows.unwrap_or(0);
+            let every_lines = checkpoint_every_lines.unwrap_or(0);
+            if every_rows == 0 && every_lines == 0 {
+                return Err(PyErr::new::<PyValueError, _>(
+                    "set checkpoint_every_rows or checkpoint_every_lines to a positive number",
+                ));
+            }
+            Ok(NcSession {
+                id: NEXT_SESSION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                config: SessionConfig {
+                    initial_state,
+                    axis_identifiers,
+                    extra_axes,
+                    iteration_limit,
+                    disable_forward_fill,
+                    axis_index_map,
+                    allow_undefined_variables,
+                    flatten_tolerance,
+                    batch_size,
+                    emit_line_no: include_line_numbers,
+                    include_variables,
+                    every_rows,
+                    every_lines,
+                },
+                current: None,
+                list: CheckpointList::default(),
+            })
+        }
+
+        /// Interpret `input` in full, taking checkpoints as the iterator is
+        /// consumed. Replaces the session's text and checkpoints.
+        #[pyo3(signature = (input, input_is_path = false))]
+        fn run(&mut self, input: PyBackedStr, input_is_path: bool) -> PyResult<NcBatchIterator> {
+            let input = source_text(input, input_is_path)?;
+            self.full_run(input)
+        }
+
+        /// The checkpoints of the session's text taken so far, in order.
+        fn checkpoints(&self) -> Vec<PyCheckpoint> {
+            self.snapshot()
+                .into_iter()
+                .map(|inner| PyCheckpoint { inner })
+                .collect()
+        }
+
+        /// The latest checkpoint at or before 1-based `line_no`, if any.
+        fn checkpoint_for(&self, line_no: usize) -> Option<PyCheckpoint> {
+            self.snapshot()
+                .into_iter()
+                .rev()
+                .find(|c| c.line_no <= line_no)
+                .map(|inner| PyCheckpoint { inner })
+        }
+
+        /// Run `input` from `checkpoint` on. Raises `NotResumable` when the
+        /// text before the checkpoint changed, the program has control
+        /// structures or a jump, or the checkpoint is another session's.
+        #[pyo3(signature = (checkpoint, input, input_is_path = false))]
+        fn resume(
+            &mut self,
+            py: Python<'_>,
+            checkpoint: PyCheckpoint,
+            input: PyBackedStr,
+            input_is_path: bool,
+        ) -> PyResult<NcBatchIterator> {
+            let input = source_text(input, input_is_path)?;
+            self.resume_from(py, checkpoint.inner, input, None)
+        }
+
+        /// Interpret an edited version of the session's text: resume from the
+        /// latest checkpoint before the first changed byte, or run in full
+        /// when there is none or the program cannot resume.
+        #[pyo3(signature = (input, input_is_path = false))]
+        fn edit(&mut self, py: Python<'_>, input: PyBackedStr, input_is_path: bool) -> PyResult<NcBatchIterator> {
+            let input = source_text(input, input_is_path)?;
+            let Some(current) = self.current.clone() else {
+                return self.full_run(input);
+            };
+            let common = py.detach(|| common_prefix_len(current.as_str(), input.as_str()));
+            let best = self.snapshot().into_iter().rev().find(|c| c.byte_offset <= common);
+            if let Some(checkpoint) = best {
+                match self.resume_from(py, checkpoint, input.clone(), Some(common)) {
+                    Err(err) if err.is_instance_of::<NotResumable>(py) => {}
+                    other => return other,
+                }
+            }
+            self.full_run(input)
+        }
     }
 
     /// Define the Python module
@@ -734,6 +1047,9 @@ mod python_bindings {
         m.add_class::<NcRowIterator>()?;
         m.add_class::<NcBatchIterator>()?;
         m.add("NcError", m.py().get_type::<NcError>())?;
+        m.add_class::<NcSession>()?;
+        m.add_class::<PyCheckpoint>()?;
+        m.add("NotResumable", m.py().get_type::<NotResumable>())?;
         Ok(())
     }
 }

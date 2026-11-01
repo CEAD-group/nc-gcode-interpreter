@@ -7,9 +7,12 @@ from typing import Any, Protocol, TypedDict
 import polars as pl
 
 from ._internal import (
+    Checkpoint,
     NcError,
+    NotResumable,
     __doc__,  # noqa: F401
 )
+from ._internal import NcSession as _NcSession
 from ._internal import nc_to_batches as _nc_to_batches
 from ._internal import nc_to_rows as _nc_to_rows
 
@@ -20,7 +23,10 @@ class TextFileLike(Protocol):
 
 
 __all__ = [
+    "Checkpoint",
     "NcError",
+    "NcSession",
+    "NotResumable",
     "dataframe_to_nc",
     "nc_to_batches",
     "nc_to_dataframe",
@@ -604,3 +610,113 @@ def nc_to_batches(
         include_variables,
     )
     return _BatchIterator(inner)
+
+
+class SessionBatches(_BatchIterator):
+    """Batch iterator of an :class:`NcSession` run, resume or edit.
+
+    Behaves like the iterator :func:`nc_to_batches` returns; a resumed run
+    yields only the rows from :attr:`start_row` on, while ``state``,
+    ``variable_events`` and ``variable_names`` describe the whole program.
+    """
+
+    @property
+    def start_row(self) -> int:
+        """Global index of the first row this iterator yields."""
+        return self._inner.start_row
+
+    @property
+    def start_line(self) -> int:
+        """1-based source line this iterator starts executing at."""
+        return self._inner.start_line
+
+    @property
+    def resumed_from(self) -> Checkpoint | None:
+        """The checkpoint this run resumed from, or None for a full run."""
+        return self._inner.resumed_from
+
+
+class NcSession:
+    """Interpret a program repeatedly as it is edited, re-running only the
+    part after the edit.
+
+    :meth:`run` interprets a program in full like :func:`nc_to_batches` and
+    takes a :class:`Checkpoint` at a line boundary every
+    ``checkpoint_every_rows`` output rows (or ``checkpoint_every_lines``
+    source lines). :meth:`resume` runs an edited program from a checkpoint
+    whose preceding text is unchanged; :meth:`edit` picks the latest such
+    checkpoint itself and falls back to a full run. Rows, variable events and
+    the final state equal those of a full run of the edited program.
+
+    Only structure-free, jump-free programs take checkpoints (the CAM output
+    the streaming driver runs); for others :meth:`checkpoints` stays empty
+    and :meth:`resume` raises :class:`NotResumable`. A batch never straddles
+    a checkpoint: the partial batch is emitted there, so a
+    ``checkpoint_every_rows`` that is a multiple of ``batch_size`` keeps
+    batches full. The keyword arguments mean what they mean for
+    :func:`nc_to_batches` and are fixed for the session.
+    """
+
+    def __init__(
+        self,
+        *,
+        batch_size: int = 500_000,
+        initial_state: TextFileLike | str | None = None,
+        axis_identifiers: list[str] | None = None,
+        extra_axes: list[str] | None = None,
+        iteration_limit: int = 10000,
+        disable_forward_fill: bool = False,
+        axis_index_map: dict[str, int] | None = None,
+        allow_undefined_variables: bool = False,
+        flatten_tolerance: float | None = None,
+        include_line_numbers: bool = False,
+        include_variables: bool = False,
+        checkpoint_every_rows: int | None = 100_000,
+        checkpoint_every_lines: int | None = None,
+    ) -> None:
+        if initial_state is not None and not isinstance(initial_state, str):
+            initial_state = initial_state.read()
+        self._inner = _NcSession(
+            batch_size=batch_size,
+            initial_state=initial_state,
+            axis_identifiers=axis_identifiers,
+            extra_axes=extra_axes,
+            iteration_limit=iteration_limit,
+            disable_forward_fill=disable_forward_fill,
+            axis_index_map=axis_index_map,
+            allow_undefined_variables=allow_undefined_variables,
+            flatten_tolerance=flatten_tolerance,
+            include_line_numbers=include_line_numbers,
+            include_variables=include_variables,
+            checkpoint_every_rows=checkpoint_every_rows,
+            checkpoint_every_lines=checkpoint_every_lines,
+        )
+
+    def run(self, input: "TextFileLike | str | os.PathLike") -> SessionBatches:
+        """Interpret ``input`` in full; it becomes the session's program."""
+        program, input_is_path = _normalize_input(input)
+        return SessionBatches(self._inner.run(program, input_is_path))
+
+    def checkpoints(self) -> list[Checkpoint]:
+        """Checkpoints of the session's program taken so far, in order."""
+        return self._inner.checkpoints()
+
+    def checkpoint_for(self, line_no: int) -> Checkpoint | None:
+        """The latest checkpoint at or before 1-based ``line_no``."""
+        return self._inner.checkpoint_for(line_no)
+
+    def resume(self, checkpoint: Checkpoint, input: "TextFileLike | str | os.PathLike") -> SessionBatches:
+        """Interpret ``input`` from ``checkpoint`` on.
+
+        Raises :class:`NotResumable` (with a ``reason``) when the text before
+        the checkpoint changed, the program has control structures or a jump,
+        or the checkpoint belongs to another session.
+        """
+        program, input_is_path = _normalize_input(input)
+        return SessionBatches(self._inner.resume(checkpoint, program, input_is_path))
+
+    def edit(self, input: "TextFileLike | str | os.PathLike") -> SessionBatches:
+        """Interpret an edited program, resuming from the latest checkpoint
+        before the first changed byte or running in full."""
+        program, input_is_path = _normalize_input(input)
+        return SessionBatches(self._inner.edit(program, input_is_path))

@@ -4,6 +4,20 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- `NcSession` re-interprets an edited program from a checkpoint instead of
+  from the start. `run` interprets in full and takes a `Checkpoint` at a line
+  boundary every `checkpoint_every_rows` output rows (or
+  `checkpoint_every_lines` lines); `resume(checkpoint, text)` and `edit(text)`
+  run only the part after the last checkpoint before the first changed byte,
+  with rows, variable events and final state equal to a full run.
+  Structure-free, jump-free programs only; others raise `NotResumable`. On a
+  1M-line program an edit of the last line takes 0.04 s instead of 0.5 s
+  (#47).
+
 ## [v0.2.9] - 2026-11-01
 
 ### Changed
