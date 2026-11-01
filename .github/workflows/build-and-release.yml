@@ -156,7 +156,9 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
+          # Named interpreters: --find-interpreter also picks up the image's PyPy,
+          # which pyo3-ffi 0.29.0 fails to compile for.
+          args: --release --out dist -i python3.12 -i python3.13 -i python3.14 -i python3.14t
           sccache: 'true'
           manylinux: auto
       - name: Upload wheels
