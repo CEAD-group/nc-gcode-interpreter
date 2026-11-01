@@ -143,8 +143,10 @@ fn reject_string_variable(key: &str, state: &State, line_no: usize) -> Result<()
 /// line index; an unresolved jump propagates to the caller.
 pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
     if streams(input) && preflight_streaming(input, 0, state)? {
+        output.set_resumable(true);
         return interpret_streaming(input, 0, 0, output, state);
     }
+    output.set_resumable(false);
 
     // Pass 1: decode every line. Words borrow `&str` spans of `input` and are
     // appended to per-chunk arenas; each decoded line only records its

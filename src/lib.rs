@@ -67,7 +67,7 @@ mod python_bindings {
 
     use crate::checkpoint::{
         common_prefix_len, plan_resume, resume_checkpointed, run_checkpointed, Checkpoint, CheckpointList,
-        SessionConfig,
+        Resumability, SessionConfig, NOT_RESUMABLE, RESUMABLE,
     };
     use crate::errors::ErrorLocation;
     use crate::interpreter::{nc_to_batch_stream_with_line_numbers, nc_to_row_stream, SourceText};
@@ -853,6 +853,8 @@ mod python_bindings {
         /// The text of the latest run; the checkpoints in `list` belong to it.
         current: Option<SourceText>,
         list: CheckpointList,
+        /// Whether the latest run takes checkpoints, set by its worker.
+        resumable: Resumability,
     }
 
     impl NcSession {
@@ -868,9 +870,10 @@ mod python_bindings {
 
         fn full_run(&mut self, input: SourceText) -> PyResult<NcBatchIterator> {
             let list = self.start(input.clone(), Vec::new());
-            let (config, id) = (self.config.clone(), self.id);
+            self.resumable = Resumability::default();
+            let (config, id, resumable) = (self.config.clone(), self.id, self.resumable.clone());
             let worker = spawn_batch_worker(move |sender, events_sender| {
-                run_checkpointed(input, &config, id, list, sender, events_sender)
+                run_checkpointed(input, &config, id, list, resumable, sender, events_sender)
             })?;
             Ok(NcBatchIterator::new(worker, self.config.include_variables, None))
         }
@@ -913,6 +916,7 @@ mod python_bindings {
                 })
                 .map_err(|why| not_resumable(py, why, &checkpoint))?;
             let list = self.start(input.clone(), kept);
+            self.resumable = Resumability::new(RESUMABLE.into());
             let config = self.config.clone();
             let from = checkpoint.clone();
             let worker = spawn_batch_worker(move |sender, events_sender| {
@@ -975,6 +979,7 @@ mod python_bindings {
                 },
                 current: None,
                 list: CheckpointList::default(),
+                resumable: Resumability::default(),
             })
         }
 
@@ -984,6 +989,18 @@ mod python_bindings {
         fn run(&mut self, input: PyBackedStr, input_is_path: bool) -> PyResult<NcBatchIterator> {
             let input = source_text(input, input_is_path)?;
             self.full_run(input)
+        }
+
+        /// Whether the latest run takes checkpoints (structure-free and
+        /// jump-free): None until its worker chose the driver, which it does
+        /// before producing the first batch, or when the run failed before.
+        #[getter]
+        fn resumable(&self) -> Option<bool> {
+            match self.resumable.load(std::sync::atomic::Ordering::Acquire) {
+                RESUMABLE => Some(true),
+                NOT_RESUMABLE => Some(false),
+                _ => None,
+            }
         }
 
         /// The checkpoints of the session's text taken so far, in order.

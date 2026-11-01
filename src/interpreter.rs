@@ -299,6 +299,7 @@ pub(crate) fn interpret_source(
             BlockFlow::Jump(request) => Err(request.into_not_found_error(state)),
         };
     }
+    output.set_resumable(false);
 
     let file = NCParser::parse(Rule::file, input)
         .map_err(|e| {

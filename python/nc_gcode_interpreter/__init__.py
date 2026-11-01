@@ -697,6 +697,15 @@ class NcSession:
         program, input_is_path = _normalize_input(input)
         return SessionBatches(self._inner.run(program, input_is_path))
 
+    @property
+    def resumable(self) -> bool | None:
+        """Whether the latest run takes checkpoints (structure-free, jump-free).
+
+        None until the run has chosen its driver, which happens before its
+        first batch, so it is set once the first ``next()`` returns.
+        """
+        return self._inner.resumable
+
     def checkpoints(self) -> list[Checkpoint]:
         """Checkpoints of the session's program taken so far, in order."""
         return self._inner.checkpoints()

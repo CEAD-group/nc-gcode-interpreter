@@ -194,7 +194,10 @@ def test_loop_programs_have_no_checkpoints_and_refuse_resume():
     kwargs = {"batch_size": 5, "checkpoint_every_lines": 1}
     loop = (EXAMPLES / "loop.mpf").read_text()
     session = NcSession(**kwargs)
-    drain(session.run(loop))
+    it = session.run(loop)
+    next(it)
+    assert session.resumable is False
+    drain(it)
     assert session.checkpoints() == []
     it = session.edit(loop + "\nG1 X1")
     assert it.resumed_from is None
@@ -202,7 +205,10 @@ def test_loop_programs_have_no_checkpoints_and_refuse_resume():
 
     session = NcSession(**kwargs)
     text = generated(30)
-    drain(session.run(text))
+    it = session.run(text)
+    next(it)
+    assert session.resumable is True
+    drain(it)
     checkpoint = session.checkpoint_for(10)
     for insert, reason in [
         ("WHILE R1 < 2\nR1 = R1 + 1\nENDWHILE", "structured"),
@@ -251,3 +257,25 @@ def test_every_checkpoint_of_the_examples_resumes_exactly(path):
     edited = text.replace("M30", "") + "\nG1 X12.5 R9=3\n"
     for checkpoint in checkpoints:
         assert_resume_matches(kwargs, session.resume(checkpoint, edited), edited)
+
+
+def test_abandoned_resume_keeps_checks_and_checkpoints():
+    kwargs = {"batch_size": 10, "checkpoint_every_rows": 10, "include_variables": True}
+    session = NcSession(**kwargs)
+    text = generated(200)
+    drain(session.run(text))
+    checkpoints = session.checkpoints()
+    early, late = checkpoints[3], checkpoints[-3]
+    abandoned = generated(200, {early.line_no + 2: "G1 X5"})
+    it = session.resume(early, abandoned)
+    next(it)
+    del it
+    kept = [(c.line_no, c.row_idx) for c in session.checkpoints()]
+    assert kept[:4] == [(c.line_no, c.row_idx) for c in checkpoints[:4]]
+    # `late` was taken in the original text, which the abandoned edit changed
+    # before it: refused whatever the session's current text is.
+    with pytest.raises(NotResumable) as error:
+        session.resume(late, abandoned)
+    assert error.value.reason == "prefix_changed"
+    edited = generated(200, {late.line_no + 1: "G1 X6"})
+    assert_resume_matches(kwargs, session.resume(late, edited), edited)

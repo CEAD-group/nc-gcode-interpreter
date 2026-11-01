@@ -469,6 +469,13 @@ impl OutputRows {
         self.checkpointer = Some(Box::new(checkpointer));
     }
 
+    /// Record which driver the run took (see [`crate::checkpoint::Resumability`]).
+    pub(crate) fn set_resumable(&self, resumable: bool) {
+        if let Some(checkpointer) = &self.checkpointer {
+            checkpointer.set_resumable(resumable);
+        }
+    }
+
     /// Whether the line driver must report line boundaries.
     #[inline]
     pub(crate) fn checkpointing(&self) -> bool {

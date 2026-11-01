@@ -31,6 +31,13 @@ use std::sync::{Arc, Mutex};
 /// interpreter thread that appends them and the session that hands them out.
 pub type CheckpointList = Arc<Mutex<Vec<Arc<Checkpoint>>>>;
 
+/// Whether a run can take checkpoints: [`UNKNOWN`] until the driver is
+/// chosen, which happens before the first row.
+pub type Resumability = Arc<std::sync::atomic::AtomicU8>;
+pub const UNKNOWN: u8 = 0;
+pub const RESUMABLE: u8 = 1;
+pub const NOT_RESUMABLE: u8 = 2;
+
 /// Configuration of a resumable batch run; fixed for a session because a
 /// checkpoint is only valid under the configuration that produced it.
 #[derive(Clone, Debug)]
@@ -100,12 +107,20 @@ pub struct Checkpointer {
     last_line: usize,
     last_rows: usize,
     list: CheckpointList,
+    resumable: Resumability,
 }
 
 impl Checkpointer {
     /// `line_index` (0-based) and `rows` are where counting starts: the
     /// program start for a full run, the checkpoint for a resume.
-    pub fn new(session_id: u64, config: &SessionConfig, line_index: usize, rows: usize, list: CheckpointList) -> Self {
+    pub fn new(
+        session_id: u64,
+        config: &SessionConfig,
+        line_index: usize,
+        rows: usize,
+        list: CheckpointList,
+        resumable: Resumability,
+    ) -> Self {
         Checkpointer {
             session_id,
             every_rows: config.every_rows,
@@ -113,7 +128,14 @@ impl Checkpointer {
             last_line: line_index,
             last_rows: rows,
             list,
+            resumable,
         }
+    }
+
+    /// Record which driver the run took: only the streaming one checkpoints.
+    pub(crate) fn set_resumable(&self, resumable: bool) {
+        let value = if resumable { RESUMABLE } else { NOT_RESUMABLE };
+        self.resumable.store(value, std::sync::atomic::Ordering::Release);
     }
 
     #[inline]
@@ -283,6 +305,7 @@ pub fn run_checkpointed(
     config: &SessionConfig,
     session_id: u64,
     list: CheckpointList,
+    resumable: Resumability,
     sender: SyncSender<Table>,
     events_sender: Sender<VariableEvents>,
 ) -> Result<State, ParsingError> {
@@ -306,7 +329,7 @@ pub fn run_checkpointed(
         config.emit_line_no,
     );
     install_flattener(&mut output, &state, config.flatten_tolerance)?;
-    output.set_checkpointer(Checkpointer::new(session_id, config, 0, 0, list));
+    output.set_checkpointer(Checkpointer::new(session_id, config, 0, 0, list, resumable));
     interpret_source(input, &mut state, &mut output)?;
     output.finish()?;
     Ok(state)
@@ -342,6 +365,7 @@ pub fn resume_checkpointed(
         checkpoint.line_no - 1,
         checkpoint.row_idx,
         list,
+        Resumability::new(RESUMABLE.into()),
     ));
     crate::line_driver::resume_streaming(
         input.as_str(),
@@ -395,7 +419,17 @@ mod tests {
     }
 
     fn full(text: &str, config: &SessionConfig, list: &CheckpointList) -> Outcome {
-        collect(|s, e| run_checkpointed(SourceText::from(text), config, 7, list.clone(), s, e))
+        collect(|s, e| {
+            run_checkpointed(
+                SourceText::from(text),
+                config,
+                7,
+                list.clone(),
+                Resumability::default(),
+                s,
+                e,
+            )
+        })
     }
 
     fn program(edit: Option<(usize, &str)>) -> String {
