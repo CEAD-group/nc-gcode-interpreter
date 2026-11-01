@@ -69,6 +69,7 @@
 use crate::errors::ParsingError;
 use crate::output::{intern_column, CellMap, Row, FLATTENED_COLUMN};
 use crate::state::emit_warning;
+use crate::state::FxMap;
 use crate::types::Value;
 use std::collections::HashMap;
 
@@ -136,7 +137,7 @@ pub struct Flattener {
     /// non-geometric value columns), interned.
     geometric_axes: Vec<&'static str>,
     /// Last known machine coordinate per geometric axis column.
-    positions: HashMap<&'static str, f64>,
+    positions: FxMap<&'static str, f64>,
     motion: Motion,
     plane: Plane,
     /// Buffered blocks of the active spline, in program order. Non-empty
@@ -144,7 +145,7 @@ pub struct Flattener {
     spline_buffer: Vec<SplineItem>,
     /// Snapshot of `positions` taken when the spline was selected: the
     /// spline's start point.
-    spline_start: HashMap<&'static str, f64>,
+    spline_start: FxMap<&'static str, f64>,
     /// Current B-spline degree (`SD=`, modal within the spline).
     spline_degree: usize,
     /// Curve motion words already warned about (CIP, CT, POLY, ...): one
@@ -179,11 +180,11 @@ impl Flattener {
         Ok(Flattener {
             tolerance,
             geometric_axes,
-            positions: HashMap::new(),
+            positions: FxMap::default(),
             motion: Motion::Linear,
             plane: G17,
             spline_buffer: Vec::new(),
-            spline_start: HashMap::new(),
+            spline_start: FxMap::default(),
             spline_degree: 3,
             warned_motions: Vec::new(),
         })
@@ -201,7 +202,7 @@ impl Flattener {
             }
             self.motion = new_motion;
         }
-        if let Some(Value::Str(plane)) = row.cells.get(intern_column("gg06_plane_select")) {
+        if let Some(Value::Str(plane)) = row.cells.get("gg06_plane_select") {
             self.plane = match plane.as_str() {
                 "G18" => G18,
                 "G19" => G19,
@@ -215,7 +216,7 @@ impl Flattener {
                     self.spline_start = self.positions.clone();
                     self.spline_degree = 3;
                 }
-                if let Some(Value::Float(sd)) = row.cells.get(intern_column("SD")) {
+                if let Some(Value::Float(sd)) = row.cells.get("SD") {
                     self.spline_degree = (*sd as usize).max(1);
                 }
                 let has_point = self
@@ -659,7 +660,7 @@ fn points_value(points: &[Vec<f64>], point_rows: &[Option<usize>], item_index: u
 }
 
 fn row_motion(row: &Row) -> Option<Motion> {
-    match row.cells.get(intern_column("gg01_motion")) {
+    match row.cells.get("gg01_motion") {
         Some(Value::Str(m)) => Some(match m.as_str() {
             "G0" | "G1" => Motion::Linear,
             "G2" => Motion::Arc { cw: true },

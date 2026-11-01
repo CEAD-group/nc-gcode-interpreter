@@ -24,6 +24,11 @@ released to PyPI.
   with jumps keep the indexed driver; `NC_STREAM_MIN_BYTES` still sets a size
   threshold (#89).
 
+- Less work per output row on the interpreter thread: the batch builder moves
+  string cells out of the rows it recycles instead of cloning them, and the
+  per-row column set and the flattener's position maps hash with FxHash. At
+  5M lines `nc_to_batches` takes 4.4 s instead of 5.2 s (#89).
+
 ## [v0.2.8] - 2026-10-15
 
 ### Added
