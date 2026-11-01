@@ -164,7 +164,8 @@ Rows are typed and forward-filled like the batch DataFrame (disable with `forwar
 **Memory.** Programs of 64 MiB or more without multi-line control blocks or
 jumps are validated in a parallel preflight scan and then executed one line at a
 time, so parse storage is bounded by the longest line instead of the program
-length. The input text, its diagnostic copy and line-offset index, variable
+length. The input text (held once: the Python str is borrowed, not copied, and
+error messages read from the same buffer), its line-offset index, variable
 state and any output the caller retains still grow with the program, so use
 `nc_to_batches` with a bounded consumer for large files. Smaller programs and
 programs with jumps keep the indexed fast path; `NC_STREAM_MIN_BYTES` sets the

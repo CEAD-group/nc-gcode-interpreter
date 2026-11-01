@@ -4,6 +4,18 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Changed
+
+- `nc_to_batches` and `nc_to_rows` borrow the Python str's UTF-8 buffer for
+  the run instead of copying it twice (once into a Rust `String`, once more
+  for error messages). On a 5M-line, 322 MB program the peak footprint of
+  `nc_to_batches` drops from 1.28 to 0.72 GiB. The Rust entry points
+  (`nc_to_table`, `nc_to_row_stream`, `nc_to_batch_stream*`) take
+  `impl Into<SourceText>`: a `&str` still works and is copied once, an owned
+  `String` or `Arc<str>` is shared without a copy (#89).
+
 ## [v0.2.8] - 2026-10-15
 
 ### Added
