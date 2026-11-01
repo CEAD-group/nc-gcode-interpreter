@@ -651,10 +651,13 @@ class NcSession:
     Only structure-free, jump-free programs take checkpoints (the CAM output
     the streaming driver runs); for others :meth:`checkpoints` stays empty
     and :meth:`resume` raises :class:`NotResumable`. A batch never straddles
-    a checkpoint: the partial batch is emitted there, so a
-    ``checkpoint_every_rows`` that is a multiple of ``batch_size`` keeps
-    batches full. The keyword arguments mean what they mean for
-    :func:`nc_to_batches` and are fixed for the session.
+    a checkpoint: the partial batch is emitted there, so batches can be
+    shorter than ``batch_size`` at a checkpoint. A ``checkpoint_every_rows``
+    that is a multiple of ``batch_size`` keeps batches full only when every
+    line yields at most one row; flattened arcs and splines yield many, so a
+    checkpoint lands past the batch boundary and leaves a short batch. The
+    keyword arguments mean what they mean for :func:`nc_to_batches` and are
+    fixed for the session.
     """
 
     def __init__(

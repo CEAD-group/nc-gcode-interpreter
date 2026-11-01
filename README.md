@@ -205,8 +205,11 @@ changed. The resumed rows, the whole-program `variable_events` and the final
 unchanged prefix are not repeated. Only programs without control structures
 and jumps take checkpoints (option A of #47); for others `checkpoints()` stays
 empty, `edit` runs in full and `session.resumable` is False once the first
-batch has arrived. A batch never straddles a checkpoint, so keep
-`checkpoint_every_rows` a multiple of `batch_size`. On a 1M-line (63 MB)
+batch has arrived. A batch never straddles a checkpoint: the partial batch
+is emitted there, so batches can be shorter than `batch_size`. Keeping
+`checkpoint_every_rows` a multiple of `batch_size` avoids that only when each
+line yields at most one row; with `flatten_tolerance` set, an arc or spline
+line yields many and the checkpoint lands past the batch boundary. On a 1M-line (63 MB)
 generated program a full run takes 0.5 s and an edit of the last line resumes
 in 0.04 s with `checkpoint_every_rows=10_000` (0.12 s with 100 000).
 
