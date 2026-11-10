@@ -15,7 +15,7 @@ Expose a resumable interpretation handle:
 - `resume(token, patched_text)` — restart interpretation from a checkpoint,
   against an edited program.
 
-Consumer: ribweaver `/sim` phase-E *incremental re-interpret* for multi-million-row
+Consumer: a live-edit *incremental re-interpret* in a G-code editor, for multi-million-row
 loop expansions. When the user edits source line *L*, it resumes from the last
 checkpoint whose block cursor precedes *L* instead of re-running the whole program.
 Downstream is evidence-gated: debounced-full re-interpret is fine below ~10⁵ rows,

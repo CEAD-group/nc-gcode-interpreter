@@ -18,6 +18,7 @@ use std::sync::{Mutex, OnceLock};
 /// `fill`, per column per batch) — trusted `&'static str` keys, no need for
 /// SipHash's DoS resistance. See [`crate::state::FxMap`].
 type FxMap<K, V> = HashMap<K, V, rustc_hash::FxBuildHasher>;
+type FxSet<T> = HashSet<T, rustc_hash::FxBuildHasher>;
 
 /// Intern a column name to a process-stable `&'static str`.
 ///
@@ -39,6 +40,15 @@ pub fn intern_column(name: &str) -> &'static str {
     let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
     guard.insert(leaked);
     leaked
+}
+
+/// Column-name equality for the per-row scans. Keys are mostly the same
+/// interned instance (pointer hit) or differ in length or first byte, so the
+/// `memcmp` call is rarely reached.
+#[inline]
+pub(crate) fn key_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && (std::ptr::eq(a.as_ptr(), b.as_ptr()) || (a.as_bytes().first() == b.as_bytes().first() && a == b))
 }
 
 /// A row's output cells: interned column name -> value, in first-insert order.
@@ -69,7 +79,7 @@ impl CellMap {
     #[inline]
     pub fn insert(&mut self, key: &'static str, value: Value) -> Option<Value> {
         for (k, v) in self.entries.iter_mut() {
-            if *k == key {
+            if key_eq(k, key) {
                 return Some(std::mem::replace(v, value));
             }
         }
@@ -91,18 +101,18 @@ impl CellMap {
 
     #[inline]
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
-        self.entries.iter_mut().find(|(k, _)| *k == key).map(|(_, v)| v)
+        self.entries.iter_mut().find(|(k, _)| key_eq(k, key)).map(|(_, v)| v)
     }
 
     #[inline]
     pub fn get(&self, key: &str) -> Option<&Value> {
-        self.entries.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+        self.entries.iter().find(|(k, _)| key_eq(k, key)).map(|(_, v)| v)
     }
 
     /// Remove `key`, returning its value if present.
     #[inline]
     pub fn remove(&mut self, key: &str) -> Option<Value> {
-        let position = self.entries.iter().position(|(k, _)| *k == key)?;
+        let position = self.entries.iter().position(|(k, _)| key_eq(k, key))?;
         Some(self.entries.remove(position).1)
     }
 
@@ -113,9 +123,16 @@ impl CellMap {
         self.entries.iter().map(|(k, v)| (k, v))
     }
 
+    /// Move every cell out, leaving the map empty with its allocation kept.
+    #[inline]
+    pub(crate) fn drain(&mut self) -> impl Iterator<Item = (&'static str, Value)> + '_ {
+        self.entries.drain(..)
+    }
+
     /// Iterate the column keys, mirroring `HashMap::keys` (yields `&&'static str`
     /// so `.copied()` recovers the `&'static str`).
     #[inline]
+    #[allow(dead_code)] // used via the rlib API
     pub fn keys(&self) -> impl Iterator<Item = &&'static str> {
         self.entries.iter().map(|(k, _)| k)
     }
@@ -303,11 +320,11 @@ impl BatchStreamSink {
             return Ok(());
         }
         // Take the buffered rows out to build the batch, then recycle their
-        // allocations: `build_batch` only borrows the rows (it copies each cell
-        // value into the columnar builders), so once it returns the row buffers
-        // are free to be cleared and pooled rather than dropped.
+        // allocations: `build_batch_owned` moves each cell value into the
+        // columnar builders, so once it returns the row buffers are free to be
+        // cleared and pooled rather than dropped.
         let mut rows = std::mem::take(&mut self.buffer);
-        let table = self.builder.build_batch(&rows);
+        let table = self.builder.build_batch_owned(&mut rows);
         self.recycle.reserve(rows.len());
         for mut row in rows.drain(..) {
             row.reset_for_reuse();
@@ -336,6 +353,8 @@ pub struct OutputRows {
     /// sink: arc and spline rows are replaced by sampled runs of G1 rows
     /// before they reach the sink (see [`crate::flatten`]).
     flattener: Option<crate::flatten::Flattener>,
+    /// Reused output buffer for the flattener (one allocation per run, not per row).
+    flattened: Vec<Row>,
     /// Whether the once-per-run G91 warning has fired (see `flush`).
     warned_g91: bool,
 }
@@ -347,6 +366,7 @@ impl OutputRows {
             sink: RowSink::Collect(Vec::new()),
             record_variables: false,
             flattener: None,
+            flattened: Vec::new(),
             warned_g91: false,
         }
     }
@@ -358,6 +378,7 @@ impl OutputRows {
             sink: RowSink::Stream(sender),
             record_variables: true,
             flattener: None,
+            flattened: Vec::new(),
             warned_g91: false,
         }
     }
@@ -416,6 +437,7 @@ impl OutputRows {
             // log: on only when the caller opted in via `include_variables`.
             record_variables,
             flattener: None,
+            flattened: Vec::new(),
             warned_g91: false,
         }
     }
@@ -453,6 +475,7 @@ impl OutputRows {
                 sink: RowSink::Collect(rows.clone()),
                 record_variables: self.record_variables,
                 flattener: None,
+                flattened: Vec::new(),
                 warned_g91: self.warned_g91,
             }),
             _ => None,
@@ -476,21 +499,30 @@ impl OutputRows {
     /// `current`. `None` when nothing is available to recycle.
     fn deliver(&mut self, row: Row) -> Result<Option<Row>, ParsingError> {
         if let Some(mut flattener) = self.flattener.take() {
-            let mut flattened = Vec::new();
+            let mut flattened = std::mem::take(&mut self.flattened);
             flattener.push(row, &mut flattened);
             self.flattener = Some(flattener);
             // Keep one recycled row for the caller to reuse; hand any others the
             // sink returns this call straight back to the pool so they are not
             // freed (a flattened block delivers many rows in one `deliver`).
             let mut recycled = None;
-            for row in flattened {
-                if let Some(r) = self.deliver_to_sink(row)? {
-                    if let Some(prev) = recycled.replace(r) {
-                        self.reclaim(prev);
+            let mut result = Ok(());
+            for row in flattened.drain(..) {
+                if result.is_err() {
+                    continue;
+                }
+                match self.deliver_to_sink(row) {
+                    Ok(Some(r)) => {
+                        if let Some(prev) = recycled.replace(r) {
+                            self.reclaim(prev);
+                        }
                     }
+                    Ok(None) => {}
+                    Err(error) => result = Err(error),
                 }
             }
-            return Ok(recycled);
+            self.flattened = flattened;
+            return result.map(|()| recycled);
         }
         self.deliver_to_sink(row)
     }
@@ -592,7 +624,64 @@ pub enum Column {
     Float(Vec<Option<f64>>),
     Int(Vec<Option<i64>>),
     Str(Vec<Option<String>>),
+    /// The G-group columns: a few distinct values, repeated over long runs.
+    Dict(DictColumn),
     StrList(Vec<Option<Vec<String>>>),
+}
+
+/// A string column stored as one code per row into the batch's distinct
+/// values, so filling a modal G-group down a batch writes integers instead of
+/// allocating a `String` per row.
+#[derive(Debug, Clone, Default)]
+pub struct DictColumn {
+    /// Distinct values, in order of first appearance in this batch.
+    pub values: Vec<String>,
+    /// Per row: an index into `values`, or [`DictColumn::NULL`].
+    pub codes: Vec<u32>,
+}
+
+/// Equal when the cells are equal, whatever order the values were first seen in.
+impl PartialEq for DictColumn {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl DictColumn {
+    /// The code of a null cell.
+    pub const NULL: u32 = u32::MAX;
+
+    pub fn len(&self) -> usize {
+        self.codes.len()
+    }
+
+    #[allow(dead_code)] // used via the rlib API
+    pub fn is_empty(&self) -> bool {
+        self.codes.is_empty()
+    }
+
+    /// The value at `row`, `None` for a null cell.
+    pub fn get(&self, row: usize) -> Option<&str> {
+        self.values.get(self.codes[row] as usize).map(String::as_str)
+    }
+
+    /// The column's cells in row order.
+    pub fn iter(&self) -> impl Iterator<Item = Option<&str>> + '_ {
+        self.codes
+            .iter()
+            .map(|&code| self.values.get(code as usize).map(String::as_str))
+    }
+
+    /// The code for `value`, adding it to `values` when new.
+    fn code_for(&mut self, value: &str) -> u32 {
+        match self.values.iter().position(|v| v == value) {
+            Some(code) => code as u32,
+            None => {
+                self.values.push(value.to_string());
+                (self.values.len() - 1) as u32
+            }
+        }
+    }
 }
 
 impl Column {
@@ -601,6 +690,7 @@ impl Column {
             Column::Float(v) => v.len(),
             Column::Int(v) => v.len(),
             Column::Str(v) => v.len(),
+            Column::Dict(v) => v.len(),
             Column::StrList(v) => v.len(),
         }
     }
@@ -616,7 +706,7 @@ impl Column {
         match self {
             Column::Float(_) => "f64",
             Column::Int(_) => "i64",
-            Column::Str(_) => "str",
+            Column::Str(_) | Column::Dict(_) => "str",
             Column::StrList(_) => "list[str]",
         }
     }
@@ -641,6 +731,20 @@ impl Column {
             Column::Float(v) => fill(v, seed.map(Carry::into_float)).map(Carry::Float),
             Column::Int(v) => fill(v, seed.map(Carry::into_int)).map(Carry::Int),
             Column::Str(v) => fill(v, seed.map(Carry::into_str)).map(Carry::Str),
+            Column::Dict(column) => {
+                let mut last = match seed {
+                    Some(seed) => column.code_for(&seed.into_str()),
+                    None => DictColumn::NULL,
+                };
+                for code in column.codes.iter_mut() {
+                    if *code == DictColumn::NULL {
+                        *code = last;
+                    } else {
+                        last = *code;
+                    }
+                }
+                column.values.get(last as usize).cloned().map(Carry::Str)
+            }
             Column::StrList(v) => fill(v, seed.map(Carry::into_str_list)).map(Carry::StrList),
         }
     }
@@ -695,6 +799,15 @@ pub struct Table {
 const KNOWN_AXIS_COLUMNS: &[&str] = &[
     "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V", "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
 ];
+
+/// Text of a numeric tool selection (`T2`, `T=3`) for the string `T` column.
+pub(crate) fn tool_number_text(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
+}
 
 pub fn is_string_column(name: &str) -> bool {
     MODAL_G_GROUPS.contains(&name)
@@ -761,7 +874,7 @@ pub const LINE_NO_COLUMN: &str = "line_no";
 /// names are `&'static str` (constant vocabulary or interned row keys), so the
 /// order is comparison-by-content and independent of which `&'static str`
 /// instance carries a given name.
-fn canonical_order(present: &HashSet<&'static str>) -> Vec<&'static str> {
+fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
     let mut ordered: Vec<&'static str> = Vec::new();
     let push_if_present = |name: &'static str, ordered: &mut Vec<&'static str>| {
         if present.contains(name) && !ordered.contains(&name) {
@@ -819,6 +932,10 @@ pub struct BatchBuilder {
     columns: Vec<&'static str>,
     /// Last carried non-null value per forward-filled column.
     fill: FxMap<&'static str, Carry>,
+    /// Position in `columns` of a cell key, by the key's address and length:
+    /// rows reuse a few interned key instances, so this skips hashing the
+    /// name for every cell. Cleared whenever `columns` changes.
+    slots: FxMap<(usize, usize), u32>,
 }
 
 impl BatchBuilder {
@@ -828,6 +945,7 @@ impl BatchBuilder {
             emit_line_no: false,
             columns: Vec::new(),
             fill: FxMap::default(),
+            slots: FxMap::default(),
         }
     }
 
@@ -850,39 +968,69 @@ impl BatchBuilder {
     pub fn build_batch(&mut self, rows: &[Row]) -> Table {
         // Skip rows that carry no output values (blocks that only affected
         // internal state, e.g. definitions - their variable_changes are a
-        // streaming-only concern). Keep the whole `Row` so the source line
-        // number is available alongside the cells when `emit_line_no` is set.
-        let kept: Vec<&Row> = rows.iter().filter(|r| !r.cells.is_empty()).collect();
-        let cells: Vec<&CellMap> = kept.iter().map(|r| &r.cells).collect();
+        // streaming-only concern). Keep the source line number alongside the
+        // cells for when `emit_line_no` is set.
+        self.build(
+            rows.iter()
+                .filter(|r| !r.cells.is_empty())
+                .map(|r| (r.line_no, BatchCells::Shared(&r.cells)))
+                .collect(),
+        )
+    }
 
-        // Union of every column seen so far with those present in this batch.
-        let mut present: HashSet<&'static str> = self.columns.iter().copied().collect();
-        present.extend(cells.iter().flat_map(|r| r.keys().copied()));
-        self.columns = canonical_order(&present);
+    /// As [`build_batch`](Self::build_batch), but moves the cell values out of
+    /// `rows` (left empty) instead of cloning their strings.
+    pub(crate) fn build_batch_owned(&mut self, rows: &mut [Row]) -> Table {
+        self.build(
+            rows.iter_mut()
+                .filter(|r| !r.cells.is_empty())
+                .map(|r| (r.line_no, BatchCells::Owned(&mut r.cells)))
+                .collect(),
+        )
+    }
 
-        let height = cells.len();
-        // One typed builder per column, in canonical order, each pre-filled
-        // with `height` nulls. A name->position index lets each cell find its
-        // builder in O(1).
-        let mut index_of: FxMap<&'static str, usize> =
-            FxMap::with_capacity_and_hasher(self.columns.len(), Default::default());
-        let mut builders: Vec<ColumnBuilder> = Vec::with_capacity(self.columns.len());
-        for (position, &name) in self.columns.iter().enumerate() {
-            index_of.insert(name, position);
-            builders.push(ColumnBuilder::new(name, height));
+    fn build(&mut self, mut kept: Vec<(usize, BatchCells)>) -> Table {
+        let height = kept.len();
+        // One typed builder per known column, each pre-filled with `height`
+        // nulls. A column first seen in this batch gets a builder appended and
+        // is moved to its canonical place after the pass.
+        let mut names: Vec<&'static str> = self.columns.clone();
+        let mut builders: Vec<ColumnBuilder> = names.iter().map(|&name| ColumnBuilder::new(name, height)).collect();
+
+        // Single row-major pass: dispatch each present cell to its column
+        // builder. Interning does not guarantee one instance per name, so a
+        // key instance not seen before is matched by content once.
+        let slots = &mut self.slots;
+        for (row_index, (_, cells)) in kept.iter_mut().enumerate() {
+            cells.for_each(|key, value| {
+                let instance = (key.as_ptr() as usize, key.len());
+                let position = match slots.get(&instance) {
+                    Some(&position) => position as usize,
+                    None => {
+                        let position = names.iter().position(|&name| name == key).unwrap_or_else(|| {
+                            names.push(key);
+                            builders.push(ColumnBuilder::new(key, height));
+                            names.len() - 1
+                        });
+                        slots.insert(instance, position as u32);
+                        position
+                    }
+                };
+                builders[position].set(row_index, value);
+            });
         }
 
-        // Single pass: dispatch each present cell to its column builder. Every
-        // cell key is in `present` (hence in `index_of`), so the lookup always
-        // hits; the `if let` is defensive only. FxHash beat a linear scan of
-        // `self.columns` here (~22 keys need content compare — interning does
-        // NOT guarantee pointer identity across all column sources).
-        for (row_index, cell) in cells.iter().enumerate() {
-            for (&key, value) in cell.iter() {
-                if let Some(&position) = index_of.get(key) {
-                    builders[position].set(row_index, value);
-                }
-            }
+        if names.len() != self.columns.len() {
+            // New columns: grow the canonical set and reorder the builders.
+            let present: FxSet<&'static str> = names.iter().copied().collect();
+            self.columns = canonical_order(&present);
+            let mut by_name: FxMap<&'static str, ColumnBuilder> = names.into_iter().zip(builders).collect();
+            builders = self
+                .columns
+                .iter()
+                .map(|name| by_name.remove(name).expect("every present column has a builder"))
+                .collect();
+            self.slots.clear();
         }
 
         // Opt-in (default off): the source line number leads every batch, one
@@ -892,7 +1040,7 @@ impl BatchBuilder {
         let extra = usize::from(self.emit_line_no);
         let mut columns: Vec<(String, Column)> = Vec::with_capacity(self.columns.len() + extra);
         if self.emit_line_no {
-            let line_no_column = Column::Int(kept.iter().map(|r| Some(r.line_no as i64)).collect());
+            let line_no_column = Column::Int(kept.iter().map(|&(line_no, _)| Some(line_no as i64)).collect());
             columns.push((LINE_NO_COLUMN.to_string(), line_no_column));
         }
         for (&name, builder) in self.columns.iter().zip(builders) {
@@ -911,6 +1059,22 @@ impl BatchBuilder {
     }
 }
 
+/// One kept row's cells for [`BatchBuilder::build`]: borrowed (values are
+/// cloned) or owned by a row about to be recycled (values are moved out).
+enum BatchCells<'a> {
+    Shared(&'a CellMap),
+    Owned(&'a mut CellMap),
+}
+
+impl BatchCells<'_> {
+    fn for_each(&mut self, mut f: impl FnMut(&'static str, Value)) {
+        match self {
+            BatchCells::Shared(cells) => cells.iter().for_each(|(&key, value)| f(key, value.clone())),
+            BatchCells::Owned(cells) => cells.drain().for_each(|(key, value)| f(key, value)),
+        }
+    }
+}
+
 /// A typed, null-prefilled column under construction. Mirrors [`Column`] but
 /// accepts cells one at a time by row index (`set`), converting each [`Value`]
 /// with the same name-based typing rules as the old per-column scan. Empty
@@ -919,6 +1083,7 @@ enum ColumnBuilder {
     Float(Vec<Option<f64>>),
     Int(Vec<Option<i64>>),
     Str(Vec<Option<String>>),
+    Dict(DictColumn),
     StrList(Vec<Option<Vec<String>>>),
 }
 
@@ -928,6 +1093,11 @@ impl ColumnBuilder {
             ColumnBuilder::Int(vec![None; height])
         } else if name == "M" {
             ColumnBuilder::StrList(vec![None; height])
+        } else if MODAL_G_GROUPS.contains(&name) || NON_MODAL_G_GROUPS.contains(&name) {
+            ColumnBuilder::Dict(DictColumn {
+                values: Vec::new(),
+                codes: vec![DictColumn::NULL; height],
+            })
         } else if is_string_column(name) {
             ColumnBuilder::Str(vec![None; height])
         } else {
@@ -935,7 +1105,7 @@ impl ColumnBuilder {
         }
     }
 
-    fn set(&mut self, row_index: usize, value: &Value) {
+    fn set(&mut self, row_index: usize, value: Value) {
         match self {
             ColumnBuilder::Int(column) => {
                 // Block numbers: original integer lexeme, float fallback.
@@ -944,27 +1114,34 @@ impl ColumnBuilder {
                         .parse::<i64>()
                         .ok()
                         .or_else(|| s.parse::<f64>().ok().map(|v| v as i64)),
-                    Value::Float(f) => Some(*f as i64),
+                    Value::Float(f) => Some(f as i64),
                     _ => None,
                 };
             }
             ColumnBuilder::StrList(column) => {
                 column[row_index] = match value {
-                    Value::StrList(l) => Some(l.clone()),
-                    Value::Str(s) => Some(vec![s.clone()]),
+                    Value::StrList(l) => Some(l),
+                    Value::Str(s) => Some(vec![s]),
                     _ => None,
                 };
             }
             ColumnBuilder::Str(column) => {
                 column[row_index] = match value {
-                    Value::Str(s) => Some(s.clone()),
+                    Value::Str(s) => Some(s),
                     Value::Float(f) => Some(f.to_string()),
                     _ => None,
                 };
             }
+            ColumnBuilder::Dict(column) => {
+                column.codes[row_index] = match value {
+                    Value::Str(s) => column.code_for(&s),
+                    Value::Float(f) => column.code_for(&f.to_string()),
+                    _ => DictColumn::NULL,
+                };
+            }
             ColumnBuilder::Float(column) => {
                 column[row_index] = match value {
-                    Value::Float(f) => Some(*f),
+                    Value::Float(f) => Some(f),
                     Value::Str(s) => s.parse::<f64>().ok(),
                     _ => None,
                 };
@@ -977,6 +1154,7 @@ impl ColumnBuilder {
             ColumnBuilder::Float(v) => Column::Float(v),
             ColumnBuilder::Int(v) => Column::Int(v),
             ColumnBuilder::Str(v) => Column::Str(v),
+            ColumnBuilder::Dict(v) => Column::Dict(v),
             ColumnBuilder::StrList(v) => Column::StrList(v),
         }
     }
@@ -1026,6 +1204,7 @@ pub fn write_csv<W: std::io::Write>(table: &Table, writer: W) -> Result<(), std:
                     Column::Float(v) => v[row].map_or(String::new(), |f| format!("{:.3}", f)),
                     Column::Int(v) => v[row].map_or(String::new(), |i| i.to_string()),
                     Column::Str(v) => v[row].clone().unwrap_or_default(),
+                    Column::Dict(v) => v.get(row).unwrap_or_default().to_string(),
                     Column::StrList(v) => v[row].as_ref().and_then(|l| l.get(copy)).cloned().unwrap_or_default(),
                 });
             }
@@ -1034,4 +1213,139 @@ pub fn write_csv<W: std::io::Write>(table: &Table, writer: W) -> Result<(), std:
     }
     w.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Moving cell values out of recycled rows builds the same batches as
+    /// cloning them, forward-fill carry included.
+    #[test]
+    fn owned_batches_match_borrowed_batches() {
+        let mut rows: Vec<Row> = (0..6)
+            .map(|i| {
+                let mut row = Row {
+                    line_no: i + 1,
+                    ..Row::default()
+                };
+                if i != 2 {
+                    row.cells.insert(intern_column("X"), Value::Float(i as f64));
+                }
+                if i % 2 == 0 {
+                    row.cells
+                        .insert(intern_column("gg01_motion"), Value::Str(format!("G{}", i % 4)));
+                }
+                if i == 3 {
+                    row.cells.insert("M", Value::StrList(vec!["M3".into(), "M8".into()]));
+                    row.cells.insert("N", Value::Str("30".into()));
+                }
+                row
+            })
+            .collect();
+        let mut shared = BatchBuilder::new(false).with_line_numbers(true);
+        let mut owned = BatchBuilder::new(false).with_line_numbers(true);
+        for batch in rows.chunks_mut(4) {
+            let expected = shared.build_batch(batch);
+            let got = owned.build_batch_owned(batch);
+            assert_eq!(expected.columns, got.columns);
+            assert!(batch.iter().all(|row| row.cells.is_empty()));
+        }
+    }
+
+    /// Text of every cell of a column, `None` for a null.
+    fn cell_text(column: &Column) -> Vec<Option<String>> {
+        match column {
+            Column::Float(v) => v.iter().map(|c| c.map(|f| f.to_string())).collect(),
+            Column::Int(v) => v.iter().map(|c| c.map(|i| i.to_string())).collect(),
+            Column::Str(v) => v.clone(),
+            Column::Dict(v) => v.iter().map(|c| c.map(str::to_string)).collect(),
+            Column::StrList(v) => v.iter().map(|c| c.as_ref().map(|l| l.join(" "))).collect(),
+        }
+    }
+
+    /// Rows where the G-group values change, go missing, and a column (`Y`,
+    /// then `gg06_plane_select`) first appears after the first batch.
+    fn mixed_rows(count: usize) -> Vec<Row> {
+        (0..count)
+            .map(|i| {
+                let mut row = Row {
+                    line_no: i + 1,
+                    ..Row::default()
+                };
+                row.cells.insert(intern_column("X"), Value::Float(i as f64));
+                if i % 5 == 1 {
+                    row.cells
+                        .insert(intern_column("gg01_motion"), Value::Str(format!("G{}", i % 3)));
+                }
+                if i == 7 {
+                    row.cells.insert(intern_column("gg02_wait"), Value::Str("G4".into()));
+                }
+                if i >= 9 {
+                    row.cells.insert(intern_column("Y"), Value::Float(-(i as f64)));
+                }
+                if i == 13 {
+                    row.cells
+                        .insert(intern_column("gg06_plane_select"), Value::Str("G18".into()));
+                }
+                row
+            })
+            .collect()
+    }
+
+    /// Batches of any size concatenate to the whole-table build: G-group
+    /// columns carry their value across batch boundaries, and a column that
+    /// first appears in a later batch lands in its canonical position.
+    #[test]
+    fn batches_concatenate_to_the_whole_table() {
+        let rows = mixed_rows(20);
+        for disable_forward_fill in [false, true] {
+            let whole = Table::from_rows(&rows, disable_forward_fill);
+            let names: Vec<&str> = whole.columns.iter().map(|(name, _)| name.as_str()).collect();
+            assert_eq!(names, ["gg01_motion", "gg06_plane_select", "gg02_wait", "X", "Y"]);
+            for batch_size in [1, 3, 4, 7, 20] {
+                let mut builder = BatchBuilder::new(disable_forward_fill);
+                let mut offset = 0;
+                for batch in rows.chunks(batch_size) {
+                    let table = builder.build_batch(batch);
+                    for (name, column) in &table.columns {
+                        let (_, expected) = whole.columns.iter().find(|(n, _)| n == name).unwrap();
+                        assert_eq!(
+                            cell_text(column),
+                            cell_text(expected)[offset..offset + batch.len()],
+                            "column {name}, batch size {batch_size}, rows from {offset}"
+                        );
+                    }
+                    // A column absent from this batch is all null in the whole table so far.
+                    for (name, expected) in &whole.columns {
+                        if !table.columns.iter().any(|(n, _)| n == name) {
+                            assert!(cell_text(expected)[..offset + batch.len()].iter().all(Option::is_none));
+                        }
+                    }
+                    offset += batch.len();
+                }
+            }
+        }
+    }
+
+    /// G-group columns are dictionary columns: the modal one fills down, the
+    /// non-modal one stays on its own row.
+    #[test]
+    fn g_group_columns_are_dictionary_encoded() {
+        let table = Table::from_rows(&mixed_rows(10), false);
+        let column = |name: &str| &table.columns.iter().find(|(n, _)| n == name).unwrap().1;
+        let Column::Dict(motion) = column("gg01_motion") else {
+            panic!("gg01_motion is not a dictionary column");
+        };
+        assert_eq!(motion.values, ["G1", "G0"]);
+        assert_eq!(motion.get(0), None);
+        assert_eq!(motion.get(5), Some("G1"));
+        assert_eq!(motion.get(6), Some("G0"));
+        let Column::Dict(wait) = column("gg02_wait") else {
+            panic!("gg02_wait is not a dictionary column");
+        };
+        assert_eq!(wait.iter().filter(|cell| cell.is_some()).count(), 1);
+        assert_eq!(wait.get(7), Some("G4"));
+        assert_eq!(column("gg01_motion").dtype_name(), "str");
+    }
 }

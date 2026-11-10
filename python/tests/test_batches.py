@@ -208,3 +208,20 @@ def test_include_line_numbers_survives_flattening():
     assert per_line.count(2) > 5
     stream_lines = [line for line, *_ in nc_to_rows(program, flatten_tolerance=0.1)]
     assert per_line == stream_lines
+
+
+def test_g_group_columns_stay_plain_strings():
+    # The interpreter holds G-group columns as dictionary codes internally;
+    # Python must keep seeing String columns with the same values.
+    program = "G1 G64 X1\nX2\nG4 F0.5\nG0 X3\nG17 X4\nM30\n"
+    frames = list(nc_to_batches(program, batch_size=2))
+    assert [f.height for f in frames] == [2, 2, 2]
+    for frame in frames:
+        for name in frame.columns:
+            if name.startswith("gg"):
+                assert frame[name].dtype == pl.String, name
+    df = pl.concat(frames, how="diagonal")
+    assert df["gg01_motion"].to_list() == ["G1", "G1", "G1", "G0", "G0", "G0"]
+    assert df["gg10_exact_stop_mode"].to_list() == ["G64"] * 6
+    assert df["gg02_wait"].to_list() == [None, None, "G4", None, None, None]
+    assert df["gg06_plane_select"].to_list() == [None, None, None, None, "G17", "G17"]

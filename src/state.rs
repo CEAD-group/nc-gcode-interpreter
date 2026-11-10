@@ -1,5 +1,6 @@
 use crate::errors::ParsingError;
 use crate::frame::{self, Matrix3, Plane};
+use crate::interpreter::SourceText;
 use crate::output::CellMap;
 use crate::types::Value;
 use std::collections::{HashMap, HashSet};
@@ -114,9 +115,9 @@ pub struct State {
     /// Store line offsets for efficient error reporting. Shared (`Arc`) to
     /// avoid re-copying the offset table when the state is cloned.
     line_offsets: Arc<[usize]>,
-    /// Store the input text for error messages. Shared (`Arc`) so cloning the
-    /// state does not copy the (up to gigabyte) program buffer.
-    input: Arc<str>,
+    /// The program text, for error messages. Shared with the driver that runs
+    /// it, so neither cloning the state nor storing it copies the program.
+    input: SourceText,
     /// Registry resolving an assignment key (axis or block address) to its
     /// interned `&'static str` output-column name, so output rows carry `Copy`
     /// keys with no per-row allocation. Keyed by the uppercased name; the
@@ -124,6 +125,9 @@ pub struct State {
     /// hit misses. Built once at construction from the axis identifiers and the
     /// fixed block addresses.
     output_keys: FxMap<String, (ColKind, &'static str)>,
+    /// `output_keys` for one-letter keys in either case, indexed by the ASCII
+    /// byte: most axis words (X, Y, Z, E, F, ...) resolve without hashing.
+    one_letter_keys: [Option<(ColKind, &'static str)>; 128],
 }
 
 impl State {
@@ -175,6 +179,14 @@ impl State {
                 .or_insert((ColKind::Block, crate::output::intern_column(block)));
         }
 
+        let mut one_letter_keys = [None; 128];
+        for (name, entry) in &output_keys {
+            if let [byte] = name.as_bytes() {
+                one_letter_keys[byte.to_ascii_uppercase() as usize] = Some(*entry);
+                one_letter_keys[byte.to_ascii_lowercase() as usize] = Some(*entry);
+            }
+        }
+
         let geometry_keys = frame::AXIS_NAMES.map(|name| output_keys.get(name).map(|(_, key)| *key));
         let arc_offset_keys = ["I", "J", "K"].map(crate::output::intern_column);
 
@@ -197,8 +209,9 @@ impl State {
             arc_offset_keys,
             warned_unpositioned: [false; 3],
             line_offsets: Arc::from(Vec::new()),
-            input: Arc::from(""),
+            input: SourceText::from(""),
             output_keys,
+            one_letter_keys,
         }
     }
 
@@ -208,6 +221,9 @@ impl State {
     /// already in canonical (uppercase) form - hits without allocating; only a
     /// mixed/lowercase key pays a single `to_uppercase`.
     pub fn resolve_output_key(&self, key: &str) -> Option<(ColKind, &'static str)> {
+        if let [byte] = key.as_bytes() {
+            return self.one_letter_keys[*byte as usize];
+        }
         if let Some(entry) = self.output_keys.get(key) {
             return Some(*entry);
         }
@@ -240,15 +256,22 @@ impl State {
         self.jump_scopes.iter().any(|scope| scope.contains(key))
     }
 
-    /// Sets the input text and pre-calculates line offsets for efficient access.
-    /// `Arc::from(&str)` copies the program once into the `Arc<str>` (making
-    /// later `State` clones cheap). Taking `&str` lets the caller pass its
-    /// existing borrow directly; the previous `set_input(input.to_string())`
-    /// call first materialized a throwaway `String` - a second full copy of the
-    /// whole program, a wasted gigabyte on the largest inputs.
+    /// Sets the input text (copied once) and pre-calculates line offsets.
+    #[cfg(any(test, feature = "bench-experiments"))]
     pub fn set_input(&mut self, input: &str) {
-        self.line_offsets = input.match_indices('\n').map(|(i, _)| i).collect::<Vec<_>>().into();
-        self.input = Arc::from(input);
+        self.set_source(SourceText::from(input));
+    }
+
+    /// Shares the program text with the caller (no copy) and pre-calculates
+    /// line offsets for efficient access.
+    pub fn set_source(&mut self, source: SourceText) {
+        self.line_offsets = source
+            .as_str()
+            .match_indices('\n')
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>()
+            .into();
+        self.input = source;
     }
 
     /// Gets a line from the input by line number (1-based indexing)
@@ -261,8 +284,9 @@ impl State {
         } else {
             self.line_offsets.get(line_no - 2).map(|&i| i + 1)?
         };
-        let end = self.line_offsets.get(line_no - 1).copied().unwrap_or(self.input.len());
-        Some(&self.input[start..end])
+        let input = self.input.as_str();
+        let end = self.line_offsets.get(line_no - 1).copied().unwrap_or(input.len());
+        Some(&input[start..end])
     }
 
     /// Checks if a given key is a valid axis identifier

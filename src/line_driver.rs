@@ -43,10 +43,16 @@ pub mod experiments;
 /// of the test suite, most hand-written files) stay single-threaded.
 const PARALLEL_MIN_BYTES: usize = 4 << 20; // 4 MiB
 
-/// Below this many bytes the indexed driver runs jump-free programs: its
-/// retained decode state is small there, and it skips the streaming driver's
-/// second decode. NC_STREAM_MIN_BYTES overrides it (0 streams every program).
-const STREAMING_MIN_BYTES: usize = 64 << 20; // 64 MiB
+/// Below this many bytes the indexed driver runs jump-free programs. The
+/// streaming driver decodes on a second thread, so it is as fast from about
+/// 1 MiB up and within 0.3 ms below, and it retains no per-line state: every
+/// jump-free program streams. NC_STREAM_MIN_BYTES overrides it (a huge value
+/// pins the indexed driver).
+const STREAMING_MIN_BYTES: usize = 0;
+
+/// Below this many bytes the streaming driver's preflight and decode stay on
+/// the calling thread; the thread hand-off costs more than it saves there.
+const STREAM_PARALLEL_MIN_BYTES: usize = 64 << 10; // 64 KiB
 
 type Output = crate::output::OutputRows;
 
@@ -115,6 +121,14 @@ enum LineExec<'a, 'i> {
     /// (`sparse_source`), so its positions are whole-file coordinates.
     Parsed(Pair<'i, Rule>),
     Blank,
+}
+
+/// A numeric tool selection (`T2`, `T=3`) goes to the row's `T` column, like `T="name"`.
+fn record_tool_number(key: &str, value: f64, output: &mut Output) {
+    if key == "T" {
+        let last = output.last_mut().expect("row was just pushed");
+        last.insert("T", Value::Str(crate::output::tool_number_text(value)));
+    }
 }
 
 /// One type per name (mirrors `interpret_assignment`): assigning a number to
@@ -266,7 +280,7 @@ pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> R
 /// holds a jump decides, exactly as a sequential scan would.
 fn preflight_streaming(input: &str, state: &State) -> Result<bool, ParsingError> {
     let threads = rayon::current_num_threads().max(1);
-    let parts = if input.len() < PARALLEL_MIN_BYTES || threads <= 1 {
+    let parts = if input.len() < STREAM_PARALLEL_MIN_BYTES || threads <= 1 {
         1
     } else {
         threads * 8
@@ -380,23 +394,106 @@ fn chunk_at_newlines(input: &str, parts: usize) -> Vec<Range<usize>> {
     ranges
 }
 
-/// O(longest line) decoding/parse storage, independent of the number of lines.
+/// O(chunk) decoding/parse storage, independent of the number of lines.
 /// Input ownership, diagnostic line offsets and the selected output sink are
 /// separate: collecting output still necessarily grows with the program.
 fn interpret_streaming(input: &str, output: &mut Output, state: &mut State) -> Result<BlockFlow, ParsingError> {
-    let mut arena = Vec::new();
-    for (index, line) in input.lines().enumerate() {
-        arena.clear();
-        let flow = match decode_line(line, index + 1, &mut arena) {
-            DecodeResult::Blank => continue,
-            DecodeResult::Trivial(decoded, _) => execute_decoded(&decoded, &arena, output, state)?,
-            DecodeResult::NeedsGrammar => interpret_block(parse_single_line(line, index, state)?, output, state)?,
+    if input.len() < STREAM_PARALLEL_MIN_BYTES || rayon::current_num_threads() <= 1 {
+        let mut arena = Vec::new();
+        for (index, line) in input.lines().enumerate() {
+            arena.clear();
+            let decoded = decode_line(line, index + 1, &mut arena);
+            let flow = execute_streamed(&decoded, line, index, &arena, output, state)?;
+            if !matches!(flow, BlockFlow::Continue) {
+                return Ok(flow);
+            }
+        }
+        return Ok(BlockFlow::Continue);
+    }
+    // Decode on a second thread, a few chunks ahead, so execution does not pay
+    // for the decode the indexed driver runs in parallel.
+    std::thread::scope(|scope| {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<DecodedChunk>(2);
+        // Executed chunks go back to the decode thread, which refills their
+        // buffers instead of allocating and freeing three per chunk.
+        let (spent_sender, spent) = std::sync::mpsc::channel::<DecodedChunk>();
+        scope.spawn(move || decode_chunks(input, sender, spent));
+        // Returning early drops `receiver`, which stops the decode thread.
+        for chunk in receiver {
+            for (offset, (decoded, line)) in chunk.results.iter().zip(&chunk.lines).enumerate() {
+                let flow = execute_streamed(decoded, line, chunk.first_line + offset, &chunk.arena, output, state)?;
+                if !matches!(flow, BlockFlow::Continue) {
+                    return Ok(flow);
+                }
+            }
+            let _ = spent_sender.send(chunk);
+        }
+        Ok(BlockFlow::Continue)
+    })
+}
+
+/// Lines per chunk the streaming decode thread hands to execution.
+const STREAM_CHUNK_LINES: usize = 4096;
+
+/// A run of consecutive decoded lines; `first_line` is the 0-based index of
+/// the first one, and `results` index into `arena` like the indexed driver's.
+struct DecodedChunk<'a> {
+    first_line: usize,
+    lines: Vec<&'a str>,
+    results: Vec<DecodeResult<'a>>,
+    arena: Vec<Word<'a>>,
+}
+
+fn decode_chunks<'a>(
+    input: &'a str,
+    sender: std::sync::mpsc::SyncSender<DecodedChunk<'a>>,
+    spent: std::sync::mpsc::Receiver<DecodedChunk<'a>>,
+) {
+    let mut lines = input.lines().peekable();
+    let mut first_line = 0;
+    while lines.peek().is_some() {
+        let mut chunk = match spent.try_recv() {
+            Ok(mut chunk) => {
+                chunk.lines.clear();
+                chunk.results.clear();
+                chunk.arena.clear();
+                chunk
+            }
+            Err(_) => DecodedChunk {
+                first_line: 0,
+                lines: Vec::with_capacity(STREAM_CHUNK_LINES),
+                results: Vec::with_capacity(STREAM_CHUNK_LINES),
+                arena: Vec::with_capacity(STREAM_CHUNK_LINES * 4),
+            },
         };
-        if !matches!(flow, BlockFlow::Continue) {
-            return Ok(flow);
+        chunk.first_line = first_line;
+        chunk.lines.extend(lines.by_ref().take(STREAM_CHUNK_LINES));
+        for (offset, line) in chunk.lines.iter().enumerate() {
+            chunk
+                .results
+                .push(decode_line(line, first_line + offset + 1, &mut chunk.arena));
+        }
+        first_line += chunk.lines.len();
+        if sender.send(chunk).is_err() {
+            return;
         }
     }
-    Ok(BlockFlow::Continue)
+}
+
+/// Execute one streamed line (0-based `index`) from its decode result.
+fn execute_streamed(
+    decoded: &DecodeResult,
+    line: &str,
+    index: usize,
+    arena: &[Word],
+    output: &mut Output,
+    state: &mut State,
+) -> Result<BlockFlow, ParsingError> {
+    match decoded {
+        DecodeResult::Blank => Ok(BlockFlow::Continue),
+        DecodeResult::Trivial(decoded, _) => execute_decoded(decoded, arena, output, state),
+        DecodeResult::NeedsGrammar => interpret_block(parse_single_line(line, index, state)?, output, state),
+    }
 }
 
 fn parse_single_line<'i>(line: &'i str, offset: usize, state: &State) -> Result<Pair<'i, Rule>, ParsingError> {
@@ -543,6 +640,7 @@ fn execute_decoded(
                         let key = key.to_uppercase();
                         reject_string_variable(&key, state, line.line_no)?;
                         output.record_variable_change(&key, *value);
+                        record_tool_number(&key, *value, output);
                         state.symbol_table.insert(key, *value);
                     }
                 }
@@ -630,6 +728,7 @@ fn execute_decoded(
                         reject_string_variable(&key, state, line.line_no)?;
                         let local_value = increment_local(state, &key, value);
                         output.record_variable_change(&key, local_value);
+                        record_tool_number(&key, local_value, output);
                         state.symbol_table.insert(key, local_value);
                     }
                 }
@@ -1642,6 +1741,38 @@ M30
         let error = result.unwrap_err();
         assert!(matches!(error, ParsingError::ParsingContext { line_no: 3, .. }));
         assert!(rx.try_recv().is_err(), "syntax failure must not emit earlier rows");
+    }
+
+    /// Programs past STREAM_PARALLEL_MIN_BYTES and several decode chunks long
+    /// take the pipelined decode; output, M30 and late runtime errors agree.
+    #[test]
+    fn pipelined_streaming_matches_full_parse() {
+        use std::fmt::Write;
+        let mut body = String::from("MULTIPLIER=2\nR1=0\n");
+        for i in 0..3 * super::STREAM_CHUNK_LINES {
+            if i % 997 == 0 {
+                body.push_str("X=SIN(30) R1=R1+1\n");
+            } else {
+                writeln!(body, "N{i} G1 X{}.5 Y{} E=IC(MULTIPLIER*0.01) ; c", i % 100, i % 7).unwrap();
+            }
+        }
+        assert!(body.len() > super::STREAM_PARALLEL_MIN_BYTES);
+        let mid = body.len() / 2 + body[body.len() / 2..].find('\n').unwrap() + 1;
+        for program in [
+            body.clone(),
+            format!("{}M30\n{}", &body[..mid], &body[mid..]),
+            format!("{}X=SIN(MISSING)\n{}", &body[..mid], &body[mid..]),
+        ] {
+            assert_paths_agree(&program, false);
+        }
+        // The shared error check compares only the line text; pin the number.
+        let program = format!("{}X=SIN(MISSING)\n{}", &body[..mid], &body[mid..]);
+        let _guard = env_lock();
+        std::env::set_var("NC_STREAM_MIN_BYTES", "0");
+        let error = run(&program, true, false).unwrap_err();
+        std::env::remove_var("NC_STREAM_MIN_BYTES");
+        let expected = body[..mid].lines().count() + 1;
+        assert_eq!(error.location().map(|l| l.line), Some(expected), "{error}");
     }
 
     #[test]

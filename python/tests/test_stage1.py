@@ -159,3 +159,20 @@ def test_fast_path_matches_on_real_corpus(mpf):
         extra_axes=["ELX"],
         allow_undefined_variables=True,
     )
+
+
+@pytest.mark.parametrize(
+    "program, expected",
+    [
+        ("G1 X0\nT2\nX1", [None, "2", None]),
+        ("G1 X0\nT=3\nX1", [None, "3", None]),
+        ("G1 X0\nt4\nX1", [None, "4", None]),
+        ("R1=7\nG1 X0\nT=R1\nX1", [None, "7", None]),
+        ('G1 X0\nT="NOZ_A"\nT5 X1', [None, "NOZ_A", "5"]),
+    ],
+    ids=["T2", "T=3", "lowercase", "expression", "mixed with a named tool"],
+)
+def test_numeric_tool_selection_reaches_the_t_column(program, expected):
+    """A numeric tool selection lands in the same string T column as a named one (#101)."""
+    df = run_both(program)
+    assert df["T"].to_list() == expected

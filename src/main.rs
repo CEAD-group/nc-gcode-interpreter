@@ -152,7 +152,7 @@ fn main() -> io::Result<()> {
     let flatten_tolerance = matches.get_one::<f64>("flatten_tolerance").copied();
 
     match nc_to_table(
-        &input,
+        input,
         initial_state.as_deref(),
         axes_override.clone(),
         extra_axes,

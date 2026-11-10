@@ -67,7 +67,7 @@
 //!   than being misread).
 
 use crate::errors::ParsingError;
-use crate::output::{intern_column, CellMap, Row, FLATTENED_COLUMN};
+use crate::output::{intern_column, key_eq, CellMap, Row, FLATTENED_COLUMN};
 use crate::state::emit_warning;
 use crate::types::Value;
 use std::collections::HashMap;
@@ -135,8 +135,9 @@ pub struct Flattener {
     /// Geometric axis columns (configured axis identifiers minus the
     /// non-geometric value columns), interned.
     geometric_axes: Vec<&'static str>,
-    /// Last known machine coordinate per geometric axis column.
-    positions: HashMap<&'static str, f64>,
+    /// Last known machine coordinate per geometric axis, indexed like
+    /// `geometric_axes` (a row updates a few slots, with no hashing).
+    positions: Vec<Option<f64>>,
     motion: Motion,
     plane: Plane,
     /// Buffered blocks of the active spline, in program order. Non-empty
@@ -144,7 +145,7 @@ pub struct Flattener {
     spline_buffer: Vec<SplineItem>,
     /// Snapshot of `positions` taken when the spline was selected: the
     /// spline's start point.
-    spline_start: HashMap<&'static str, f64>,
+    spline_start: Vec<Option<f64>>,
     /// Current B-spline degree (`SD=`, modal within the spline).
     spline_degree: usize,
     /// Curve motion words already warned about (CIP, CT, POLY, ...): one
@@ -159,8 +160,8 @@ impl Flattener {
     /// point even though the interpreter does.
     pub fn seed_position(&mut self, axis: &str, machine_value: f64) {
         let key = intern_column(&axis.to_uppercase());
-        if self.geometric_axes.contains(&key) {
-            self.positions.insert(key, machine_value);
+        if let Some(slot) = self.axis_slot(key) {
+            self.positions[slot] = Some(machine_value);
         }
     }
 
@@ -170,7 +171,7 @@ impl Flattener {
                 message: format!("flatten tolerance must be a positive number, got {}", tolerance),
             });
         }
-        let geometric_axes = axis_identifiers
+        let geometric_axes: Vec<&'static str> = axis_identifiers
             .iter()
             .map(|a| a.to_uppercase())
             .filter(|a| !NON_GEOMETRIC_AXES.contains(&a.as_str()))
@@ -178,12 +179,12 @@ impl Flattener {
             .collect();
         Ok(Flattener {
             tolerance,
+            positions: vec![None; geometric_axes.len()],
             geometric_axes,
-            positions: HashMap::new(),
             motion: Motion::Linear,
             plane: G17,
             spline_buffer: Vec::new(),
-            spline_start: HashMap::new(),
+            spline_start: Vec::new(),
             spline_degree: 3,
             warned_motions: Vec::new(),
         })
@@ -201,7 +202,7 @@ impl Flattener {
             }
             self.motion = new_motion;
         }
-        if let Some(Value::Str(plane)) = row.cells.get(intern_column("gg06_plane_select")) {
+        if let Some(Value::Str(plane)) = row.cells.get("gg06_plane_select") {
             self.plane = match plane.as_str() {
                 "G18" => G18,
                 "G19" => G19,
@@ -215,7 +216,7 @@ impl Flattener {
                     self.spline_start = self.positions.clone();
                     self.spline_degree = 3;
                 }
-                if let Some(Value::Float(sd)) = row.cells.get(intern_column("SD")) {
+                if let Some(Value::Float(sd)) = row.cells.get("SD") {
                     self.spline_degree = (*sd as usize).max(1);
                 }
                 let has_point = self
@@ -266,10 +267,23 @@ impl Flattener {
         !self.spline_buffer.is_empty()
     }
 
+    /// Index of `name` in `geometric_axes`.
+    fn axis_slot(&self, name: &str) -> Option<usize> {
+        self.geometric_axes.iter().position(|&axis| key_eq(axis, name))
+    }
+
+    /// Last known machine coordinate of a geometric axis.
+    fn position(&self, axis: &str) -> Option<f64> {
+        self.axis_slot(axis).and_then(|slot| self.positions[slot])
+    }
+
     fn track_positions(&mut self, row: &Row) {
-        for &axis in &self.geometric_axes {
-            if let Some(Value::Float(v)) = row.cells.get(axis) {
-                self.positions.insert(axis, *v);
+        // Walk the row's few cells, not every configured axis.
+        for (&key, value) in row.cells.iter() {
+            if let Value::Float(v) = value {
+                if let Some(slot) = self.axis_slot(key) {
+                    self.positions[slot] = Some(*v);
+                }
             }
         }
     }
@@ -309,7 +323,7 @@ impl Flattener {
             return;
         }
 
-        let (Some(su), Some(sv)) = (self.positions.get(u_axis).copied(), self.positions.get(v_axis).copied()) else {
+        let (Some(su), Some(sv)) = (self.position(u_axis), self.position(v_axis)) else {
             self.pass_through_with_warning(row, "arc start position is unknown", out);
             return;
         };
@@ -411,8 +425,8 @@ impl Flattener {
                 continue;
             }
             if let Some(end) = cell_float(&row, axis) {
-                let start = match self.positions.get(axis) {
-                    Some(&start) => start,
+                let start = match self.position(axis) {
+                    Some(start) => start,
                     None => {
                         // First-ever position of this axis: there is nothing
                         // to ramp from, so the channel holds its end value
@@ -501,17 +515,19 @@ impl Flattener {
         let mut current: Vec<f64> = channels
             .iter()
             .map(|&c| {
-                start.get(c).copied().unwrap_or_else(|| {
-                    // Channel never positioned before the spline: start it at
-                    // its first programmed value (a zero-length lead-in).
-                    items
-                        .iter()
-                        .find_map(|item| match item {
-                            SplineItem::Point(row) => cell_float(row, c),
-                            _ => None,
-                        })
-                        .unwrap_or(0.0)
-                })
+                self.axis_slot(c)
+                    .and_then(|slot| start.get(slot).copied().flatten())
+                    .unwrap_or_else(|| {
+                        // Channel never positioned before the spline: start it at
+                        // its first programmed value (a zero-length lead-in).
+                        items
+                            .iter()
+                            .find_map(|item| match item {
+                                SplineItem::Point(row) => cell_float(row, c),
+                                _ => None,
+                            })
+                            .unwrap_or(0.0)
+                    })
             })
             .collect();
         points.push(current.clone());
@@ -659,7 +675,7 @@ fn points_value(points: &[Vec<f64>], point_rows: &[Option<usize>], item_index: u
 }
 
 fn row_motion(row: &Row) -> Option<Motion> {
-    match row.cells.get(intern_column("gg01_motion")) {
+    match row.cells.get("gg01_motion") {
         Some(Value::Str(m)) => Some(match m.as_str() {
             "G0" | "G1" => Motion::Linear,
             "G2" => Motion::Arc { cw: true },
@@ -956,6 +972,9 @@ struct BSpline {
     knots: Vec<f64>,
     ctrl: Vec<Vec<f64>>,
     channels: usize,
+    /// de Boor working rows, `(p + 1) * (channels + 1)` values, reused by
+    /// every `eval` (the flattener evaluates several times per control point).
+    scratch: std::cell::RefCell<Vec<f64>>,
 }
 
 impl BSpline {
@@ -984,6 +1003,7 @@ impl BSpline {
             knots,
             ctrl,
             channels: points[0].len(),
+            scratch: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -998,7 +1018,13 @@ impl BSpline {
         } else {
             p + t as usize
         };
-        let mut d: Vec<Vec<f64>> = (0..=p).map(|j| self.ctrl[j + k - p].clone()).collect();
+        // Row j of `d` is control point j + k - p.
+        let width = channels + 1;
+        let mut d = self.scratch.borrow_mut();
+        d.clear();
+        for j in 0..=p {
+            d.extend_from_slice(&self.ctrl[j + k - p]);
+        }
         for r in 1..=p {
             for j in (r..=p).rev() {
                 let i = j + k - p;
@@ -1008,17 +1034,14 @@ impl BSpline {
                 } else {
                     (t - knots[i]) / denom
                 };
-                // Indexing two rows of `d` at once: a plain indexed loop is
-                // clearer than a split_at_mut dance.
-                #[allow(clippy::needless_range_loop)]
                 for c in 0..=channels {
-                    let previous = d[j - 1][c];
-                    d[j][c] = (1.0 - alpha) * previous + alpha * d[j][c];
+                    let previous = d[(j - 1) * width + c];
+                    d[j * width + c] = (1.0 - alpha) * previous + alpha * d[j * width + c];
                 }
             }
         }
-        let w = d[p][channels];
-        d[p][..channels].iter().map(|v| v / w).collect()
+        let w = d[p * width + channels];
+        d[p * width..p * width + channels].iter().map(|v| v / w).collect()
     }
 
     /// Greville abscissa of control point `i`, the mean of the `p` knots
