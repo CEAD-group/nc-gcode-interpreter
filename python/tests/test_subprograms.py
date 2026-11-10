@@ -473,6 +473,55 @@ class InputAndSpeed:
         self.log.append(("write", name, indices, value))
 
 
+SAVING = "PROC KEEPS_PLANE SAVE\nG18\nG1 Z5\nM17\n"
+STRAIGHT = (
+    "G1 X0 Y0 Z0 F100\nG17\nGOTO_X(5, 2)\nX1\nKEEPS_PLANE\nG2 X2 Y1 I1 J0\n"
+    "T2 M6\nSPEED=4\nG1 X=$A_IN[1]\nF=(SPEED*2)\nE=IC(SPEED*0.5)\nOPAQUE(1)\nG1 X3\nM30\n"
+)
+
+
+@pytest.mark.parametrize("path", ["lines", "streaming"])
+def test_structure_free_program_matches_the_block_walker(monkeypatch, path):
+    def run(stage1):
+        monkeypatch.setenv("NC_STAGE1", stage1)
+        if path == "streaming":
+            monkeypatch.setenv("NC_STREAM_MIN_BYTES", "0")
+        provider = InputAndSpeed()
+        df, state = nc_to_dataframe(
+            STRAIGHT,
+            subprograms={
+                "GOTO_X": "PROC GOTO_X(REAL TARGET, REAL SCALE)\nG1 X=TARGET*SCALE\nM17\n",
+                "KEEPS_PLANE": SAVING,
+                "TC": "PROC TC\nG1 Z100\n",
+            },
+            m_function_subprograms={6: "TC"},
+            external_variables=provider,
+            include_line_numbers=True,
+        )
+        return df, state, provider.log
+
+    fast, fast_state, fast_log = run("1")
+    walker, walker_state, walker_log = run("0")
+    assert fast.equals(walker, null_equal=True)
+    assert fast_state == walker_state
+    assert fast_log == walker_log
+    # The served variable reached the provider from every word form.
+    assert [entry[:2] for entry in fast_log] == [
+        ("write", "SPEED"),
+        ("read", "$A_IN"),
+        ("read", "SPEED"),
+        ("read", "SPEED"),
+    ]
+    assert fast["gg06_plane_select"].to_list()[-1] == "G17"
+
+
+@pytest.mark.parametrize("stage1", ["1", "0"])
+def test_alarm_stops_a_structure_free_program(monkeypatch, stage1):
+    monkeypatch.setenv("NC_STAGE1", stage1)
+    with pytest.raises(NcError, match="65000"):
+        nc_to_dataframe("G1 X1\nSETAL(65000)\nG1 X2\n", stop_on_setal=True)
+
+
 def test_dataframe_with_a_provider_equals_the_batch_stream():
     program = "".join(f"G1 X=$A_IN[1]+{i} Y{i}\n" for i in range(50)) + "SPEED=3\nG1 F=(SPEED*2)\n"
     whole, _ = nc_to_dataframe(program, external_variables=InputAndSpeed())

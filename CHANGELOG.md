@@ -82,9 +82,11 @@ released to PyPI.
   `PROC FOO SAVE` was recorded as a call named `SAVE` and `RET` as a call
   while interpretation continued (part of #105). A main program whose `PROC`
   header declares parameters is an error.
-- When any of the three extensions is used, the program is interpreted by
-  the grammar path and not the line fast path, which is slower on very large
-  programs. Runs without the extensions are unaffected.
+- A program without control structures keeps the line fast path when an
+  extension is used. Only its lines with a call, an M function mapped to a
+  subprogram, or a word that names a served variable go through the
+  grammar, which dispatches them. Before, any extension sent the whole
+  program through the grammar path, about seven times slower per line.
 - `DEF REAL A[n]` declares the elements `A[0]` to `A[n-1]`. Before, it also
   created `A[n]`, so an out-of-range access went unnoticed.
 - `REDEF` is a reserved word.
