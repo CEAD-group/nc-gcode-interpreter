@@ -163,6 +163,7 @@ reserved   = _{
   | ^"EXTERN"
   | ^"RET"
   | ^"REDEF"
+  | ^"PCALL"
 }
 
 // Sinumerik user variables may begin with an underscore: CAM post-processors
@@ -282,7 +283,14 @@ frame_kw = @{
 }
 
 // function call parser
-non_returning_function_call =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }
+// PCALL may prefix a path to the name and P sets the number of runs (manual
+// 4.2.3.8 and 4.2.3.3). Plain calls keep their span, which is the output value.
+non_returning_function_call =  { (pcall_kw ~ call_path?)? ~ call_target ~ call_repetitions? }
+call_target                 =  { identifier ~ ("(" ~ function_arguments? ~ ")")? }
+pcall_kw                    = @{ ^"PCALL" ~ !(ASCII_ALPHANUMERIC | "_") }
+call_path                   = @{ ("/" ~ (ASCII_ALPHANUMERIC | "_")+)* ~ "/" }
+call_repetitions            =  { call_repetitions_literal | (^"P" ~ "=" ~ expression) }
+call_repetitions_literal    = @{ ^"P" ~ ASCII_DIGIT+ ~ !(ASCII_ALPHANUMERIC | "_" | ".") }
 // Arguments may be left empty (`CYCLE(1,,3)`) except the last one. Each one
 // is parsed once: `(argument? ~ ",")* ~ argument` parsed the last argument
 // twice, doubling the work at every nesting level (#78).

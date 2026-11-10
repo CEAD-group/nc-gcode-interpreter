@@ -433,6 +433,24 @@ mod tests {
     }
 
     #[test]
+    fn repetition_count_runs_the_body_and_is_recorded() {
+        let sub = "PROC STEP(VAR REAL AT)\nAT = AT + 1\nG1 X=AT\n";
+        let (table, _) = run("DEF REAL POS = 0\nSTEP(POS) P=3\nL6 P2\n", &[("STEP", sub)]).unwrap();
+        let moves: Vec<_> = floats(&table, "X").into_iter().flatten().collect();
+        assert_eq!(moves, [1.0, 2.0, 3.0]);
+        let calls: Vec<_> = texts(&table, "non_returning_function_call")
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(calls, ["STEP(POS)", "L6"]);
+        let counts = match &table.columns.iter().find(|(n, _)| n == "call_repetitions").unwrap().1 {
+            Column::Int(v) => v.iter().flatten().copied().collect::<Vec<_>>(),
+            other => panic!("call_repetitions is not an int column: {other:?}"),
+        };
+        assert_eq!(counts, [3, 2]);
+    }
+
+    #[test]
     fn header_and_return_are_not_calls() {
         let (table, _) = run("PROC MAIN SAVE\nEXTERN FOO(INT)\nG1 X1\nRET\nX2\n", &[]).unwrap();
         assert_eq!(floats(&table, "X"), [Some(1.0)]);

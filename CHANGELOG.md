@@ -63,6 +63,15 @@ released to PyPI.
   `NAME[n] = REP(v[, count])` write consecutive elements starting at the
   indexed one, last index fastest. Before, only the `DEF` initializer form
   was interpreted and the statement form was an internal error.
+- Program repetitions: `L6 P2` and `L6 P=2` call `L6` twice (manual
+  4.2.3.3). A supplied subprogram runs that many times, with its arguments
+  passed once; without a supplied body the call keeps its name and the
+  count goes to a new `call_repetitions` column. A count outside 1 to 9999
+  is an error. Before, `L6 P2` was recorded as a call named `P2` and
+  `L6 P=2` set a user variable `P` (part of #105).
+- `PCALL NAME(...)` calls `NAME` (manual 4.2.3.8). A path before the name
+  (`PCALL/_N_WKS_DIR/_N_X_WPD/NAME`) is not interpreted and gives a
+  warning; the call goes to `NAME`. Before, `PCALL` was dropped silently.
 
 ### Changed
 
@@ -77,7 +86,7 @@ released to PyPI.
   programs. Runs without the extensions are unaffected.
 - `DEF REAL A[n]` declares the elements `A[0]` to `A[n-1]`. Before, it also
   created `A[n]`, so an out-of-range access went unnoticed.
-- `REDEF` is a reserved word.
+- `REDEF` and `PCALL` are reserved words.
 
 ## [v0.2.10] - 2026-11-10
 
