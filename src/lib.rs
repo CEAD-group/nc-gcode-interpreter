@@ -162,6 +162,19 @@ mod python_bindings {
                     // build of the offset + value buffers.
                     Arc::new(v.into_iter().collect::<StringArray>()),
                 ),
+                Column::Dict(column) => {
+                    // Same Utf8 array as a `Column::Str`, written from the codes.
+                    let lengths: Vec<usize> = column.values.iter().map(String::len).collect();
+                    let bytes: usize = column.codes.iter().filter_map(|&code| lengths.get(code as usize)).sum();
+                    let mut builder = StringBuilder::with_capacity(column.codes.len(), bytes);
+                    for &code in &column.codes {
+                        match column.values.get(code as usize) {
+                            Some(value) => builder.append_value(value),
+                            None => builder.append_null(),
+                        }
+                    }
+                    (DataType::Utf8, Arc::new(builder.finish()))
+                }
                 Column::StrList(v) => {
                     let values_cap: usize = v.iter().filter_map(|c| c.as_ref()).map(|l| l.len()).sum();
                     let mut builder = ListBuilder::with_capacity(StringBuilder::new(), v.len())

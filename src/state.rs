@@ -125,6 +125,9 @@ pub struct State {
     /// hit misses. Built once at construction from the axis identifiers and the
     /// fixed block addresses.
     output_keys: FxMap<String, (ColKind, &'static str)>,
+    /// `output_keys` for one-letter keys in either case, indexed by the ASCII
+    /// byte: most axis words (X, Y, Z, E, F, ...) resolve without hashing.
+    one_letter_keys: [Option<(ColKind, &'static str)>; 128],
 }
 
 impl State {
@@ -176,6 +179,14 @@ impl State {
                 .or_insert((ColKind::Block, crate::output::intern_column(block)));
         }
 
+        let mut one_letter_keys = [None; 128];
+        for (name, entry) in &output_keys {
+            if let [byte] = name.as_bytes() {
+                one_letter_keys[byte.to_ascii_uppercase() as usize] = Some(*entry);
+                one_letter_keys[byte.to_ascii_lowercase() as usize] = Some(*entry);
+            }
+        }
+
         let geometry_keys = frame::AXIS_NAMES.map(|name| output_keys.get(name).map(|(_, key)| *key));
         let arc_offset_keys = ["I", "J", "K"].map(crate::output::intern_column);
 
@@ -200,6 +211,7 @@ impl State {
             line_offsets: Arc::from(Vec::new()),
             input: SourceText::from(""),
             output_keys,
+            one_letter_keys,
         }
     }
 
@@ -209,6 +221,9 @@ impl State {
     /// already in canonical (uppercase) form - hits without allocating; only a
     /// mixed/lowercase key pays a single `to_uppercase`.
     pub fn resolve_output_key(&self, key: &str) -> Option<(ColKind, &'static str)> {
+        if let [byte] = key.as_bytes() {
+            return self.one_letter_keys[*byte as usize];
+        }
         if let Some(entry) = self.output_keys.get(key) {
             return Some(*entry);
         }
