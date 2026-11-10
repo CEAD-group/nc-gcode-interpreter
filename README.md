@@ -209,7 +209,9 @@ batch has arrived. A batch never straddles a checkpoint: the partial batch
 is emitted there, so batches can be shorter than `batch_size`. Keeping
 `checkpoint_every_rows` a multiple of `batch_size` avoids that only when each
 line yields at most one row; with `flatten_tolerance` set, an arc or spline
-line yields many and the checkpoint lands past the batch boundary. On a 1M-line (63 MB)
+line yields many and the checkpoint lands past the batch boundary. Every
+checkpoint holds a copy of the program's variables, so a run keeps at most
+1024: past that it keeps every second one and doubles its interval. On a 1M-line (63 MB)
 generated program a full run takes 0.5 s and an edit of the last line resumes
 in 0.04 s with `checkpoint_every_rows=10_000` (0.12 s with 100 000).
 

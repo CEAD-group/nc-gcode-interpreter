@@ -522,31 +522,55 @@ impl OutputRows {
         if self.flattener.as_ref().is_some_and(|f| !f.is_idle()) {
             return Ok(());
         }
-        let RowSink::Batch(sink) = &mut self.sink else {
+        // Both structs are destructured without `..`: a new field does not
+        // compile until it is carried into the snapshot or ignored here.
+        let OutputRows {
+            current: _,
+            sink,
+            record_variables: _,
+            flattener,
+            flattened: _,
+            warned_g91,
+            checkpointer,
+        } = self;
+        let RowSink::Batch(sink) = sink else {
             unreachable!("checked above")
         };
         sink.emit()?;
-        if sink.record_variables && !sink.events.row_idx.is_empty() {
+        let BatchStreamSink {
+            sender: _,
+            builder,
+            buffer: _,
+            recycle: _,
+            batch_size: _,
+            record_variables,
+            events_sender: _,
+            events,
+            frozen_events,
+            name_ids,
+            output_row_count,
+        } = sink;
+        if *record_variables && !events.row_idx.is_empty() {
             let sealed = VariableEvents {
-                row_idx: std::mem::take(&mut sink.events.row_idx),
-                name_id: std::mem::take(&mut sink.events.name_id),
-                value: std::mem::take(&mut sink.events.value),
+                row_idx: std::mem::take(&mut events.row_idx),
+                name_id: std::mem::take(&mut events.name_id),
+                value: std::mem::take(&mut events.value),
                 names: Vec::new(),
             };
-            sink.frozen_events.push(std::sync::Arc::new(sealed));
+            frozen_events.push(std::sync::Arc::new(sealed));
         }
+        let event_idx = frozen_events.iter().map(|c| c.row_idx.len()).sum::<usize>();
+        let row_idx = *output_row_count as usize;
         let snapshot = crate::checkpoint::OutputSnapshot {
-            builder: sink.builder.clone(),
-            output_row_count: sink.output_row_count,
-            frozen_events: sink.frozen_events.clone(),
-            names: sink.events.names.clone(),
-            name_ids: sink.name_ids.clone(),
-            flattener: self.flattener.clone(),
-            warned_g91: self.warned_g91,
+            builder: builder.clone(),
+            output_row_count: *output_row_count,
+            frozen_events: frozen_events.clone(),
+            names: events.names.clone(),
+            name_ids: name_ids.clone(),
+            flattener: flattener.clone(),
+            warned_g91: *warned_g91,
         };
-        let event_idx = sink.event_count();
-        let row_idx = sink.output_row_count as usize;
-        self.checkpointer.as_mut().expect("checked above").record(
+        checkpointer.as_mut().expect("checked above").record(
             line_index,
             byte_offset,
             row_idx,
@@ -587,6 +611,7 @@ impl OutputRows {
             }),
             record_variables,
             flattener: snapshot.flattener.clone(),
+            flattened: Vec::new(),
             warned_g91: snapshot.warned_g91,
             checkpointer: None,
         }

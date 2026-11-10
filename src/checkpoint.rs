@@ -98,6 +98,10 @@ impl Checkpoint {
     }
 }
 
+/// Most checkpoints a run keeps. Past it the run keeps every second one and
+/// doubles its interval, so memory is bounded on any program length.
+pub const MAX_CHECKPOINTS: usize = 1024;
+
 /// Decides when a checkpoint is due and records it. Lives on the output
 /// (see [`OutputRows::line_boundary`]).
 pub struct Checkpointer {
@@ -164,10 +168,19 @@ impl Checkpointer {
             state: state.clone(),
             output,
         };
-        self.list
-            .lock()
-            .expect("checkpoint list mutex poisoned")
-            .push(Arc::new(checkpoint));
+        let mut list = self.list.lock().expect("checkpoint list mutex poisoned");
+        list.push(Arc::new(checkpoint));
+        // Each checkpoint holds a copy of the variable tables: keep every
+        // second one and double the interval so their number stays bounded.
+        if list.len() > MAX_CHECKPOINTS {
+            let mut index = 0;
+            list.retain(|_| {
+                index += 1;
+                index % 2 == 0
+            });
+            self.every_rows *= 2;
+            self.every_lines *= 2;
+        }
     }
 }
 

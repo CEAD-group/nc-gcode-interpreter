@@ -658,6 +658,9 @@ class NcSession:
     checkpoint lands past the batch boundary and leaves a short batch. The
     keyword arguments mean what they mean for :func:`nc_to_batches` and are
     fixed for the session.
+
+    Every checkpoint holds a copy of the program's variables. A run keeps at
+    most 1024: past that it keeps every second one and doubles its interval.
     """
 
     def __init__(
