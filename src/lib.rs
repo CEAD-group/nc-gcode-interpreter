@@ -150,6 +150,8 @@ mod python_bindings {
         use arrow_array::{Array, ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
         use arrow_schema::{DataType, Field, Schema};
 
+        // Experimental switch, read per batch: NC_GGROUP_ARROW=dict or enum.
+        let dictionary_g_groups = std::env::var("NC_GGROUP_ARROW").is_ok_and(|v| v == "dict" || v == "enum");
         let mut fields: Vec<Field> = Vec::with_capacity(table.columns.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(table.columns.len());
         for (name, column) in table.columns {
@@ -162,6 +164,20 @@ mod python_bindings {
                     // build of the offset + value buffers.
                     Arc::new(v.into_iter().collect::<StringArray>()),
                 ),
+                Column::Dict(column) if dictionary_g_groups => {
+                    // Experiment: hand the codes over as an Arrow dictionary (polars Categorical).
+                    use arrow_array::types::UInt32Type;
+                    use arrow_array::{DictionaryArray, UInt32Array};
+                    let values: StringArray = column.values.iter().map(|v| Some(v.as_str())).collect();
+                    let keys: UInt32Array = column
+                        .codes
+                        .iter()
+                        .map(|&code| ((code as usize) < column.values.len()).then_some(code))
+                        .collect();
+                    let array = DictionaryArray::<UInt32Type>::try_new(keys, Arc::new(values))
+                        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+                    (array.data_type().clone(), Arc::new(array))
+                }
                 Column::Dict(column) => {
                     // Same Utf8 array as a `Column::Str`, written from the codes.
                     let lengths: Vec<usize> = column.values.iter().map(String::len).collect();

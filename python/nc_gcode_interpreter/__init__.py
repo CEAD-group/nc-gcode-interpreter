@@ -478,6 +478,17 @@ def nc_to_rows(
     )
 
 
+_G_GROUP_ENUMS: dict[str, pl.Enum] = {}
+
+
+def _g_group_enum(name: str) -> pl.Enum:
+    """The Enum dtype of one G-group column: its commands in manual order."""
+    if name not in _G_GROUP_ENUMS:
+        group = next(g for g in GGroups.g_groups if g["short_name"] == name)
+        _G_GROUP_ENUMS[name] = pl.Enum([entry["id"] for entry in group["entries"]])
+    return _G_GROUP_ENUMS[name]
+
+
 class _BatchIterator:
     """Iterator of polars DataFrames returned by :func:`nc_to_batches`.
 
@@ -499,7 +510,13 @@ class _BatchIterator:
         return self
 
     def __next__(self) -> pl.DataFrame:
-        return pl.DataFrame(next(self._inner))
+        frame = pl.DataFrame(next(self._inner))
+        # Experiment: NC_GGROUP_ARROW=enum casts G-group columns to a fixed-vocabulary Enum.
+        if os.environ.get("NC_GGROUP_ARROW") == "enum":
+            frame = frame.cast(
+                {name: _g_group_enum(name) for name in frame.columns if GGroups.is_g_group(name)}
+            )
+        return frame
 
     @property
     def state(self) -> dict | None:
