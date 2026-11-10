@@ -130,6 +130,9 @@ pub(crate) struct ExtState {
     /// Program levels, main program first. Empty until the main program starts,
     /// so initial-state definitions stay global.
     pub frames: Vec<Frame>,
+    /// Active modal G function per G group, as far as the program set them;
+    /// a PROC with the SAVE attribute restores these on return.
+    pub modal_g: HashMap<&'static str, String>,
 }
 
 impl std::fmt::Debug for ExtState {
@@ -139,6 +142,18 @@ impl std::fmt::Debug for ExtState {
             .field("external_names", &self.external_names)
             .field("frames", &self.frames)
             .finish()
+    }
+}
+
+impl Extensions {
+    /// Names are case-insensitive: two `subprograms` keys for one name would
+    /// shadow each other.
+    pub fn duplicate_subprogram(&self) -> Option<String> {
+        let mut seen = HashSet::new();
+        self.subprograms
+            .keys()
+            .map(|name| name.to_uppercase())
+            .find(|name| !seen.insert(name.clone()))
     }
 }
 
@@ -180,6 +195,7 @@ impl ExtState {
             provider,
             flush: None,
             frames: Vec::new(),
+            modal_g: HashMap::new(),
         }
     }
 
@@ -389,7 +405,8 @@ mod tests {
 
     #[test]
     fn locals_are_scoped_and_var_parameters_copy_back() {
-        let sub = "PROC ADD(REAL A, VAR REAL SUM, VAR REAL LIST[3])\nDEF REAL TMP=100\nSUM=SUM+A\nLIST[1]=A\nRET\n";
+        let sub =
+            "PROC ADD(REAL INC, VAR REAL SUM, VAR REAL LIST[3])\nDEF REAL TMP=100\nSUM=SUM+INC\nLIST[1]=INC\nRET\n";
         let program =
             "DEF REAL TMP=1, TOTAL=10\nDEF REAL VALUES[3]\nADD(5, TOTAL, VALUES)\nG1 X=TMP Y=TOTAL Z=VALUES[1]\n";
         let (table, state) = run(program, &[("ADD", sub)]).unwrap();
@@ -397,7 +414,7 @@ mod tests {
         assert_eq!(floats(&table, "Y").last(), Some(&Some(15.0)));
         assert_eq!(floats(&table, "Z").last(), Some(&Some(5.0)));
         assert!(
-            !state.symbol_table.contains_key("A"),
+            !state.symbol_table.contains_key("INC"),
             "parameter leaked into the caller"
         );
     }
@@ -411,8 +428,8 @@ mod tests {
 
     #[test]
     fn nested_calls_and_recursion_limit() {
-        let outer = "PROC OUTER(REAL V)\nINNER(V+1)\nG1 Y=V\n";
-        let inner = "PROC INNER(REAL V)\nG1 X=V\n";
+        let outer = "PROC OUTER(REAL VAL)\nINNER(VAL+1)\nG1 Y=VAL\n";
+        let inner = "PROC INNER(REAL VAL)\nG1 X=VAL\n";
         let (table, _) = run("OUTER(1)\n", &[("OUTER", outer), ("INNER", inner)]).unwrap();
         assert_eq!(
             texts(&table, "subprogram"),

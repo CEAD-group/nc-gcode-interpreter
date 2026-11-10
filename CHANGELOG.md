@@ -63,6 +63,15 @@ released to PyPI.
   `NAME[n] = REP(v[, count])` write consecutive elements starting at the
   indexed one, last index fastest. Before, only the `DEF` initializer form
   was interpreted and the statement form was an internal error.
+- A subprogram whose `PROC` header has the `SAVE` attribute gives the caller
+  back its modal G functions on return: each G group the subprogram changed
+  gets the caller's value on the row after the body's rows. A group the
+  program never set before the call cannot be restored and gives a warning.
+- Loud errors for constructs the subprogram mechanism does not model: a
+  `FOR` counter, a `PROC` parameter or a local `DEF` with the name of an
+  external variable, a string assigned to an external variable, a `PROC` parameter with the name of an axis or
+  address, `SET`/`REP` statements that write past the declared array, and
+  two `subprograms` entries whose names differ only in case.
 - Program repetitions: `L6 P2` and `L6 P=2` call `L6` twice (manual
   4.2.3.3). A supplied subprogram runs that many times, with its arguments
   passed once; without a supplied body the call keeps its name and the
@@ -75,10 +84,13 @@ released to PyPI.
 
 ### Changed
 
+- A program that calls `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`, `TRACON` or
+  `TRAFOOF` gets the new `transformation` column, also when it uses none of
+  the new arguments.
 - Two subprogram calls in one block (`FOO BAR`) are an error. Before, the
   second silently replaced the first. Keyword G commands such as `SOFT`
-  next to a call are unaffected (part of #105).
-
+  next to a call are unaffected. A repeat count before the name (`P3 FOO`,
+  `P=3 FOO`) is an error as well (part of #105).
 - `PROC`, `EXTERN` and `RET` are reserved words and no longer read as
   subprogram calls. A `PROC` header and an `EXTERN` declaration produce no
   output; `RET` ends the program at the top level like `M17`. Before,

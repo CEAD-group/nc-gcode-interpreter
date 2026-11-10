@@ -121,8 +121,11 @@ ret_kw           = @{ ^"RET" ~ !(ASCII_ALPHANUMERIC | "_") }
 // local variable definitions
 // The attributes of a definition-file DEF (range, preprocessing stop, access
 // rights, unit, limits; manual 4.1.1.4) are accepted and not interpreted.
-definition = { ^"DEF" ~ def_attr* ~ data_type ~ def_attr* ~ (assignment_multi | assignment | variable_array | variable) ~ ("," ~ (assignment_multi | assignment | variable_array | variable))* }
+definition = { ^"DEF" ~ def_attr_word* ~ data_type ~ def_attr_word* ~ (assignment_multi | assignment | variable_array | variable) ~ ("," ~ (assignment_multi | assignment | variable_array | variable))* }
 data_type  = { ^"INT" | ^"REAL" | ^"BOOL" | ^"CHAR" | (^"STRING" ~ "[" ~ ASCII_DIGIT+ ~ "]") }
+// An attribute is always followed by another word; the last word of the
+// list is the variable name, even when it is spelled like an attribute.
+def_attr_word = _{ def_attr ~ &(ASCII_ALPHA | "_") }
 def_attr   = @{
     ((^"NCK" | ^"CHAN" | ^"SYNRW" | ^"SYNR" | ^"SYNW" | ^"INIPO" | ^"INIRE" | ^"INICF" | ^"PRLOC") ~ !(ASCII_ALPHANUMERIC | "_"))
   | ((^"APROP" | ^"APWOP" | ^"APRP" | ^"APWP" | ^"APRB" | ^"APWB" | ^"APR" | ^"APW" | ^"PHU") ~ (" " | "\t")* ~ ASCII_DIGIT+ ~ !(ASCII_ALPHANUMERIC | "_"))

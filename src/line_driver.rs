@@ -1312,6 +1312,14 @@ fn decode_line_inner<'a>(
                         let value = &line[word_start..ws_end];
                         i = ws_end;
                         let typo_warn = !has_args && crate::interpret_rules::looks_like_axis_word_typo(word);
+                        // `P=3 FOO` is a repeat count before the name, an error the grammar reports.
+                        let p_before = arena[words_start..].iter().any(|w| match w {
+                            Word::Assign(key, _) | Word::AssignDynamic { key, .. } => key.eq_ignore_ascii_case("P"),
+                            _ => false,
+                        });
+                        if p_before {
+                            return DecodeResult::NeedsGrammar;
+                        }
                         arena.push(Word::Call { value, typo_warn });
                         // A repetition count or a second call after the call needs the grammar.
                         let mut rest = i;
@@ -1545,6 +1553,8 @@ mod tests {
         }
         // a second call in a block: identical error on both paths
         assert_paths_agree("X1\nFOO BAR", false);
+        // a repeat count before the name: identical error on both paths
+        assert_paths_agree("X1\nP=3 FOO", false);
         // frame keyword mid-block: identical UnsupportedStatement error
         assert_paths_agree("G1 CROTS X0", false);
     }

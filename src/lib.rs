@@ -326,6 +326,11 @@ mod python_bindings {
             required_subprograms,
             stop_on_setal,
         };
+        if let Some(name) = extensions.duplicate_subprogram() {
+            return Err(PyErr::new::<PyValueError, _>(format!(
+                "subprograms has more than one entry for {name} (names are not case-sensitive)"
+            )));
+        }
         let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, ErrInfo>>(1);
         // Variable-change events are a small sparse side-table sent once at the
         // end; an unbounded channel so the worker never blocks emitting them

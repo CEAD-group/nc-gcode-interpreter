@@ -173,7 +173,7 @@ def test_errors_name_the_call_and_the_subprogram_line():
         and "line 2" in message
     )
     with pytest.raises(NcError, match="2 arguments passed, the PROC header declares 1"):
-        nc_to_dataframe("ONE(1, 2)\n", subprograms={"ONE": "PROC ONE(INT A)\n"})
+        nc_to_dataframe("ONE(1, 2)\n", subprograms={"ONE": "PROC ONE(INT COUNT)\n"})
     with pytest.raises(NcError, match="nested more than"):
         nc_to_dataframe("AGAIN\n", subprograms={"AGAIN": "AGAIN\n"})
     with pytest.raises(NcError, match="not among the supplied subprograms"):
@@ -382,7 +382,7 @@ def test_pcall_calls_the_named_subprogram(capfd):
     df, _ = nc_to_dataframe("G1 X0\nPCALL L6\nPCALL SHAFT(1, 2) P2\n")
     assert df["non_returning_function_call"].drop_nulls().to_list() == ["L6", "SHAFT(1, 2)"]
     assert df["call_repetitions"].drop_nulls().to_list() == [2]
-    sub = "PROC SHAFT(REAL A)\nG1 X=A\n"
+    sub = "PROC SHAFT(REAL LEN)\nG1 X=LEN\n"
     df, _ = nc_to_dataframe(
         "PCALL/_N_WKS_DIR/_N_SHAFT_WPD/SHAFT(7)\n", subprograms={"SHAFT": sub}
     )
@@ -403,3 +403,141 @@ def test_two_calls_in_one_block_are_an_error(line):
 def test_keyword_g_commands_next_to_a_call_stay_g_commands():
     df, _ = nc_to_dataframe("G1 X0\nSOFT FOO\n")
     assert df["non_returning_function_call"].drop_nulls().to_list() == ["FOO"]
+
+
+class Recorder:
+    """Serves the given names with one value and records every call."""
+
+    def __init__(self, names, value=0.0):
+        self.names = names
+        self.value = value
+        self.calls = []
+
+    def read(self, name, indices):
+        self.calls.append(("read", name, indices))
+        return self.value
+
+    def write(self, name, indices, value):
+        self.calls.append(("write", name, indices, value))
+
+
+@pytest.mark.parametrize(
+    "definition, name",
+    [
+        ("DEF REAL APR1=3", "APR1"),
+        ("DEF REAL CHAN=5", "CHAN"),
+        ("DEF INT NCK=2", "NCK"),
+        ("DEF REAL PHU2=1", "PHU2"),
+        ("DEF REAL LLI5=3, ULI2=4", "LLI5"),
+        ("DEF NCK REAL SYNR=1", "SYNR"),
+    ],
+)
+def test_a_variable_may_be_spelled_like_a_definition_attribute(definition, name):
+    df, state = nc_to_dataframe(f"{definition}\nG1 X={name}\n")
+    assert "non_returning_function_call" not in df.columns
+    assert df["X"].to_list() == [state["symbol_table"][name]]
+
+
+def test_for_counter_and_local_names_cannot_be_external_variables():
+    served = Recorder(["CNT"])
+    with pytest.raises(NcError, match="FOR counter 'CNT' is an external variable"):
+        nc_to_dataframe("FOR CNT=1 TO 2\nG1 X=CNT\nENDFOR\n", external_variables=served)
+    assert served.calls == []
+    with pytest.raises(NcError, match="parameter CNT of the PROC header has the name of an external variable"):
+        nc_to_dataframe("FOO(3)\n", subprograms={"FOO": "PROC FOO(REAL CNT)\nG1 X=CNT\n"}, external_variables=served)
+    with pytest.raises(NcError, match="'CNT' is an external variable; the program cannot define"):
+        nc_to_dataframe("FOO\n", subprograms={"FOO": "DEF REAL CNT=1\nG1 X=CNT\n"}, external_variables=served)
+
+
+def test_a_string_cannot_be_assigned_to_an_external_variable():
+    served = Recorder(["MYS"])
+    with pytest.raises(NcError, match="'MYS' is an external variable; a string cannot be assigned"):
+        nc_to_dataframe('MYS="abc"\n', external_variables=served)
+
+
+@pytest.mark.parametrize(
+    "call, runs",
+    [("FOO P3", 3), ("FOO P=3", 3), ("FOO(1) P2", 2), ("FOO P=R1", 2), ("FOO P=(2)", 2)],
+)
+def test_repeat_count_after_a_supplied_call_runs_it(call, runs):
+    df, state = nc_to_dataframe(
+        f"R1=2\n{call}\nG1 X1\n", subprograms={"FOO": "PROC FOO(REAL Q=0)\nG1 Y1\nM17\n"}
+    )
+    assert df.filter(pl.col("subprogram_line") == 2).height == runs
+    assert df["call_repetitions"].drop_nulls().to_list() == [runs]
+    assert "P" not in state["symbol_table"]
+
+
+@pytest.mark.parametrize("line", ["P3 FOO", "P=3 FOO", "G1 X1 P2 FOO(1)"])
+def test_repeat_count_before_the_name_is_an_error(line):
+    # Manual 4.2.3.3: the syntax is <program name> P<value>.
+    for subprograms in (None, {"FOO": "G1 Y1\n"}):
+        with pytest.raises(NcError, match="a repeat count follows the subprogram name"):
+            nc_to_dataframe(f"{line}\n", subprograms=subprograms)
+
+
+def test_save_restores_the_modal_g_functions_of_the_caller():
+    body = "PROC FOO SAVE\nG91 G18\nG0 X5\n"
+    df, _ = nc_to_dataframe("G90 G17 G1 X0 F100\nFOO\nX1\n", subprograms={"FOO": body})
+    after = df.filter(pl.col("subprogram").is_null())[-1]
+    assert after["gg14_wp_measure_mode"].item() == "G90"
+    assert after["gg06_plane_select"].item() == "G17"
+    assert after["gg01_motion"].item() == "G1"
+    inside = df.filter(pl.col("subprogram") == "FOO")
+    assert inside["gg14_wp_measure_mode"].to_list()[-1] == "G91"
+    # Without SAVE the subprogram's G functions stay active.
+    df, _ = nc_to_dataframe("G90 G17 G1 X0 F100\nFOO\nX1\n", subprograms={"FOO": body.replace(" SAVE", "")})
+    assert df["gg14_wp_measure_mode"].to_list()[-1] == "G91"
+
+
+def test_save_warns_when_the_value_before_the_call_is_unknown(capfd):
+    nc_to_dataframe("G1 X0 F100\nFOO\nX1\n", subprograms={"FOO": "PROC FOO SAVE\nG18\nG1 X5\n"})
+    assert "the value of gg06_plane_select before the call is not known" in capfd.readouterr().err
+
+
+def test_var_parameter_keeps_a_direct_write_to_the_callers_variable():
+    program = "R1=1\nR2=1\nF(R1, R2)\nG1 X=R1 Y=R2\n"
+    df, _ = nc_to_dataframe(program, subprograms={"F": "PROC F(VAR REAL PA, VAR REAL PB)\nR1=5\nPB=7\nM17\n"})
+    assert (df["X"].to_list()[-1], df["Y"].to_list()[-1]) == (5.0, 7.0)
+    both = "PROC F(VAR REAL PA)\nR1=5\nPA=PA+1\nM17\n"
+    with pytest.raises(NcError, match="wrote R1 both directly and through its VAR parameter PA"):
+        nc_to_dataframe("R1=1\nF(R1)\n", subprograms={"F": both})
+
+
+def test_ret_with_a_return_target_is_an_error():
+    with pytest.raises(NcError, match="RET with arguments"):
+        nc_to_dataframe("FOO\nG1 X1\n", subprograms={"FOO": "G1 Y1\nRET(\"LBL\")\n"})
+
+
+def test_parameter_with_an_axis_name_is_an_error():
+    with pytest.raises(NcError, match="parameter A of the PROC header has the name of an axis"):
+        nc_to_dataframe("FOO(5)\n", subprograms={"FOO": "PROC FOO(REAL A)\nG1 X=A\n"})
+
+
+def test_flattened_rows_keep_the_subprogram_columns():
+    body = "G2 X10 Y0 I5 J0\nBSPLINE X20 Y5\nX30 Y0\nX40 Y5\nG1 X50\n"
+    df, _ = nc_to_dataframe("G1 X0 Y0 F100\nFOO\nG1 X0\n", subprograms={"FOO": body}, flatten_tolerance=0.5)
+    inside = df.filter(pl.col("subprogram_line").is_not_null())
+    assert inside.height > 6
+    assert inside["subprogram"].unique().to_list() == ["FOO"]
+    assert sorted(inside["subprogram_line"].unique().to_list()) == [1, 2, 3, 4, 5]
+    assert df.filter(pl.col("subprogram").is_null()).height == 3
+
+
+@pytest.mark.parametrize(
+    "line, message",
+    [
+        ("QA[1]=SET(1,2,3,4,5)", "more values than 'QA' has elements"),
+        ("QA[2]=REP(1,2)", "more values than 'QA' has elements"),
+        ("QU[0]=SET(1,2)", "'QU' is not a defined array"),
+        ("QB[1]=SET(1,2)", "'QB' is not a defined array of this dimension"),
+    ],
+)
+def test_array_assignment_stays_inside_the_declared_array(line, message):
+    with pytest.raises(NcError, match=message):
+        nc_to_dataframe(f"DEF REAL QA[3]\nDEF REAL QB[2,2]\n{line}\n")
+
+
+def test_subprogram_names_that_differ_only_in_case_are_refused():
+    with pytest.raises(ValueError, match="more than one entry for FOO"):
+        nc_to_dataframe("FOO\n", subprograms={"foo": "G1 X1\n", "FOO": "G1 X2\n"})

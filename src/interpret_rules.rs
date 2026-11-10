@@ -566,6 +566,11 @@ fn lone_primary<'i>(pairs: &[Pair<'i, Rule>], at: usize) -> Option<Pair<'i, Rule
 fn primary_is_string(operand: &Pair<Rule>, state: &State) -> bool {
     match operand.as_rule() {
         Rule::string_value => true,
+        Rule::variable
+            if state.ext.has_external() && state.ext.is_external(&operand.as_str().trim().to_uppercase()) =>
+        {
+            false
+        }
         Rule::variable => interpret_variable(operand.clone(), state)
             .map(|k| state.string_table.contains_key(&normalize_reserved_case(k, state)))
             .unwrap_or(false),
@@ -814,11 +819,14 @@ fn interpret_g_command(g_command: Pair<Rule>, state: &mut State) -> Result<(&'st
     // source case leaking into the output breaks downstream comparisons -
     // worst case the flattener seeing 'g18' would arc in the wrong plane.
     match crate::modal_groups::classify_g_command(&command_str.to_uppercase()) {
-        Some((group, _modal)) => {
+        Some((group, modal)) => {
             let code = command_str.to_uppercase();
             // The frame model needs the active plane for RPL and the arc check.
             if group == "gg06_plane_select" {
                 state.set_plane(&code);
+            }
+            if modal && state.ext.active() {
+                state.ext.modal_g.insert(group, code.clone());
             }
             Ok((group, code))
         }
@@ -1194,7 +1202,26 @@ fn run_subprogram(
         .into_inner()
         .flat_map(|block| block.into_inner())
         .find(|item| item.as_rule() == Rule::proc_header);
+    let saves_g_functions = header.clone().is_some_and(|header| {
+        header
+            .into_inner()
+            .any(|part| part.as_rule() == Rule::proc_attr && part.as_str().eq_ignore_ascii_case("SAVE"))
+    });
     let params = proc_params(header);
+    for param in &params {
+        if state.is_axis(&param.name) || state.is_block_address(&param.name) {
+            return Err(call_error(format!(
+                "parameter {} of the PROC header has the name of an axis or address",
+                param.name
+            )));
+        }
+        if state.ext.is_external(&param.name) {
+            return Err(call_error(format!(
+                "parameter {} of the PROC header has the name of an external variable",
+                param.name
+            )));
+        }
+    }
 
     let arguments: Vec<Pair<Rule>> = arguments
         .map(|arguments| {
@@ -1234,6 +1261,8 @@ fn run_subprogram(
         bound.push(value);
     }
 
+    // PROC ... SAVE: the modal G functions before the call return after its last run.
+    let saved_g_functions = saves_g_functions.then(|| state.ext.modal_g.clone());
     // Manual 4.2.3.3: the arguments are passed once, on the first run; a VAR
     // parameter still refers to the caller's variable on every run.
     for pass in 0..repetitions {
@@ -1251,16 +1280,17 @@ fn run_subprogram(
             &params,
             &bound,
             call_line,
+            &call_error,
             output,
             state,
-        )
-        .map_err(|error| match error {
-            ParsingError::StreamClosed => ParsingError::StreamClosed,
-            error => call_error(error.to_string()),
-        })?;
+        )?;
     }
     // The rest of the calling block gets a row of its own, after the body's rows.
-    output.start_row(call_line)
+    output.start_row(call_line)?;
+    if let Some(saved) = saved_g_functions {
+        restore_g_functions(name, saved, output, state);
+    }
+    Ok(())
 }
 
 /// One run of a subprogram body with its parameters bound to `bound`.
@@ -1272,6 +1302,7 @@ fn run_subprogram_pass(
     params: &[ProcParam],
     bound: &[BoundValue],
     call_line: usize,
+    call_error: &dyn Fn(String) -> ParsingError,
     output: &mut Output,
     state: &mut State,
 ) -> Result<(), ParsingError> {
@@ -1308,23 +1339,42 @@ fn run_subprogram_pass(
     // Read the VAR parameters while the callee's scope still exists.
     let mut numbers_back: Vec<(String, f64)> = Vec::new();
     let mut strings_back: Vec<(String, String)> = Vec::new();
+    let mut written_both_ways: Option<(String, String)> = None;
     for (param, value) in params.iter().zip(bound) {
         match value {
-            BoundValue::NumberRef(key, _) => {
+            // Only a value the subprogram changed goes back, so a direct
+            // write to the caller's variable inside the subprogram survives.
+            BoundValue::NumberRef(key, before) => {
                 if let Some(v) = state.symbol_table.get(&param.name) {
-                    numbers_back.push((key.clone(), *v));
+                    if v.to_bits() != before.to_bits() {
+                        // The caller's variable is visible here only when it is global.
+                        let direct = state
+                            .symbol_table
+                            .get(key)
+                            .is_some_and(|now| now.to_bits() != before.to_bits());
+                        if direct {
+                            written_both_ways = Some((key.clone(), param.name.clone()));
+                        }
+                        numbers_back.push((key.clone(), *v));
+                    }
                 }
             }
-            BoundValue::TextRef(key, _) => {
+            BoundValue::TextRef(key, before) => {
                 if let Some(t) = state.string_table.get(&param.name) {
-                    strings_back.push((key.clone(), t.clone()));
+                    if t != before {
+                        strings_back.push((key.clone(), t.clone()));
+                    }
                 }
             }
-            BoundValue::ArrayRef(key, _) => {
+            BoundValue::ArrayRef(key, before) => {
                 let prefix = format!("{}[", param.name);
                 for (k, v) in &state.symbol_table {
                     if k.starts_with(&prefix) {
-                        numbers_back.push((format!("{key}{}", &k[param.name.len()..]), *v));
+                        let suffix = &k[param.name.len()..];
+                        let unchanged = before.iter().any(|(s, b)| s == suffix && b.to_bits() == v.to_bits());
+                        if !unchanged {
+                            numbers_back.push((format!("{key}{suffix}"), *v));
+                        }
                     }
                 }
             }
@@ -1334,13 +1384,54 @@ fn run_subprogram_pass(
     state.swap_source(caller_source.0, caller_source.1);
     output.set_call_context(caller_context);
     state.leave_call();
-    result?;
+    match result {
+        Ok(()) => {}
+        Err(ParsingError::StreamClosed) => return Err(ParsingError::StreamClosed),
+        Err(error) => return Err(call_error(error.to_string())),
+    }
+    // A VAR parameter is copied in and out, not aliased, so the order of the
+    // two writes is lost.
+    if let Some((key, param)) = written_both_ways {
+        return Err(call_error(format!(
+            "the subprogram wrote {key} both directly and through its VAR parameter {param}; that is not supported"
+        )));
+    }
     for (key, value) in numbers_back {
         output.record_variable_change(&key, value);
         state.symbol_table.insert(key, value);
     }
     state.string_table.extend(strings_back);
     Ok(())
+}
+
+/// PROC ... SAVE: the modal G functions active before the call are active
+/// again after it (manual 4.2.2.4). They go on the row after the body's rows.
+fn restore_g_functions(name: &str, saved: HashMap<&'static str, String>, output: &mut Output, state: &mut State) {
+    let changed: Vec<(&'static str, String)> = state
+        .ext
+        .modal_g
+        .iter()
+        .filter(|(group, code)| saved.get(*group) != Some(code))
+        .map(|(group, code)| (*group, code.clone()))
+        .collect();
+    for (group, code) in changed {
+        match saved.get(group) {
+            Some(before) => {
+                if group == "gg06_plane_select" {
+                    state.set_plane(before);
+                }
+                if let Some(row) = output.last_mut() {
+                    row.insert(group, Value::Str(before.clone()));
+                }
+                state.ext.modal_g.insert(group, before.clone());
+            }
+            // The program never set this group, so its value before the call
+            // is the control's default, which is not known here.
+            None => crate::state::emit_warning(format_args!(
+                "Warning: subprogram {name} has the SAVE attribute and set {code}; the value of {group} before the call is not known, so {code} stays active"
+            )),
+        }
+    }
 }
 
 /// Bind a VAR parameter to the caller's variable named by `argument`.
@@ -1459,24 +1550,57 @@ fn call_repetition_count(pair: Pair<Rule>, state: &mut State) -> Result<u32, Par
 }
 
 /// A block holds one subprogram call: the output row has one call cell, and
-/// a second call would silently replace the first.
+/// a second call would silently replace the first. A repeat count before the
+/// name would otherwise run the call once or set a variable P.
 pub(crate) fn reject_second_call(block: &Pair<Rule>, state: &State) -> Result<(), ParsingError> {
     let mut first: Option<Pair<Rule>> = None;
+    let mut count_before: Option<Pair<Rule>> = None;
     for statement in block.clone().into_inner().filter(|p| p.as_rule() == Rule::statement) {
-        let Some(call) = statement
-            .into_inner()
-            .next()
-            .filter(|p| p.as_rule() == Rule::non_returning_function_call)
-        else {
+        let Some(item) = statement.into_inner().next() else {
             continue;
         };
+        if item.as_rule() == Rule::assignment
+            && item
+                .as_str()
+                .split('=')
+                .next()
+                .is_some_and(|lhs| lhs.trim().eq_ignore_ascii_case("P"))
+        {
+            count_before.get_or_insert(item);
+            continue;
+        }
+        if item.as_rule() != Rule::non_returning_function_call {
+            continue;
+        }
+        let call = item;
         let parts = call_parts(&call);
+        // `P3` ahead of a call parses as a call named P3.
+        let count_shaped = parts.name.len() > 1
+            && parts.name.starts_with('P')
+            && parts.name[1..].bytes().all(|b| b.is_ascii_digit())
+            && !parts.text.contains('(');
+        if count_shaped && first.is_none() && count_before.is_none() {
+            count_before = Some(call);
+            continue;
+        }
         let is_g_keyword = !parts.text.contains('(')
             && !parts.pcall
             && parts.repetitions.is_none()
             && crate::modal_groups::classify_g_command(&parts.name).is_some();
         if is_g_keyword {
             continue;
+        }
+        if let Some(count) = count_before.as_ref().filter(|_| first.is_none()) {
+            return Err(annotate_error(
+                &count,
+                "subprogram call",
+                format!(
+                    "{} before the call {}: a repeat count follows the subprogram name (manual 4.2.3.3)",
+                    count.as_str().trim(),
+                    call.as_str().trim()
+                ),
+                state,
+            ));
         }
         if let Some(first) = &first {
             return Err(annotate_error(
@@ -1552,6 +1676,14 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
     let rhs_is_string = matches!(expression_pair.as_rule(), Rule::string_value | Rule::string_expression)
         || (expression_pair.as_rule() == Rule::expression && expression_is_string(&expression_pair, state));
     if rhs_is_string {
+        if let Some((name, _)) = external_target(&variable_pair, state)? {
+            return Err(ParsingError::with_context(
+                element_line_no,
+                element_preview,
+                "external variable".to_string(),
+                format!("'{name}' is an external variable; a string cannot be assigned to it"),
+            ));
+        }
         let text = evaluate_string(expression_pair.clone(), state)?;
         // STRING[<index>] = <one char>: write a single character into a string
         // variable (manual 4.1.4.8), as opposed to reassigning the whole string.
@@ -2375,11 +2507,13 @@ fn interpret_array_write(element: Pair<Rule>, output: &mut Output, state: &mut S
         }
         sizes.iter().all(|s| *s > 0).then_some(sizes)
     };
+    let external = state.ext.has_external() && state.ext.is_external(&name.to_uppercase());
     let needs_sizes = position.len() > 1 || (repeating && values.len() == 1);
-    let sizes = if needs_sizes {
-        Some(sizes(state).ok_or_else(|| error(format!("'{name}' is not a defined array of this dimension")))?)
-    } else {
-        None
+    let sizes = match sizes(state) {
+        Some(sizes) => Some(sizes),
+        // The provider holds a served array; its size is not known here.
+        None if external && !needs_sizes => None,
+        None => return Err(error(format!("'{name}' is not a defined array of this dimension"))),
     };
     if repeating {
         let value = values[0];
@@ -2397,7 +2531,6 @@ fn interpret_array_write(element: Pair<Rule>, output: &mut Output, state: &mut S
         values = vec![value; count];
     }
 
-    let external = state.ext.has_external() && state.ext.is_external(&name.to_uppercase());
     for value in values {
         if let Some(sizes) = &sizes {
             if position.iter().zip(sizes).any(|(p, s)| p >= s) {
@@ -2421,7 +2554,7 @@ fn interpret_array_write(element: Pair<Rule>, output: &mut Output, state: &mut S
                 state.symbol_table.insert(key, value);
             }
         }
-        // Advance, last index fastest; a 1-D array has no known end here.
+        // Advance, last index fastest.
         for axis in (0..position.len()).rev() {
             position[axis] += 1;
             match &sizes {
@@ -2674,6 +2807,15 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
     for pair in pairs {
         if !state.ext.frames.is_empty() {
             if let Some(base) = declared_base(&pair, state) {
+                if state.ext.is_external(&base.to_uppercase()) {
+                    let (line_no, preview) = get_error_context(&pair, state);
+                    return Err(ParsingError::with_context(
+                        line_no,
+                        preview,
+                        "definition".to_string(),
+                        format!("'{base}' is an external variable; the program cannot define a variable of that name"),
+                    ));
+                }
                 state.declare_local(&base);
             }
         }
@@ -2968,6 +3110,16 @@ fn interpret_statement_for(
     // Parse and execute the assignment statement
     let assignment = pairs.next().expect("Expected an assignment, got none");
     let (assign_line_no, assign_preview) = get_error_context(&assignment, state);
+    if let Some(target) = assignment.clone().into_inner().next() {
+        if let Some((name, _)) = external_target(&target, state)? {
+            return Err(ParsingError::with_context(
+                assign_line_no,
+                assign_preview,
+                "FOR statement".to_string(),
+                format!("FOR counter '{name}' is an external variable; a counter must be a variable of the program"),
+            ));
+        }
+    }
     let (variable_name, initial_value) = interpret_assignment(assignment, state)?;
     let Some(initial_value) = initial_value else {
         return Err(ParsingError::with_context(
@@ -3202,7 +3354,22 @@ fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State
             Rule::if_goto_statement => interpret_if_goto(pair, state)?,
             Rule::case_statement => interpret_case(pair, state)?,
             // RET returns like M17; at the top level it ends the program.
-            Rule::return_statement => BlockFlow::EndProgram,
+            Rule::return_statement => {
+                // RET(<target>, ...) continues at a block of the caller.
+                if pair
+                    .clone()
+                    .into_inner()
+                    .any(|part| part.as_rule() == Rule::function_arguments)
+                {
+                    return Err(annotate_error(
+                        &pair,
+                        "RET",
+                        "RET with arguments (a return target) is not supported".to_string(),
+                        state,
+                    ));
+                }
+                BlockFlow::EndProgram
+            }
             Rule::gotos_statement => {
                 // GOTOS repeats the program only when the PLC requests it via
                 // <Chan>.basic.out.enableGoToStart; without that request the
