@@ -566,6 +566,11 @@ fn lone_primary<'i>(pairs: &[Pair<'i, Rule>], at: usize) -> Option<Pair<'i, Rule
 fn primary_is_string(operand: &Pair<Rule>, state: &State) -> bool {
     match operand.as_rule() {
         Rule::string_value => true,
+        Rule::variable
+            if state.ext.has_external() && state.ext.is_external(&operand.as_str().trim().to_uppercase()) =>
+        {
+            false
+        }
         Rule::variable => interpret_variable(operand.clone(), state)
             .map(|k| state.string_table.contains_key(&normalize_reserved_case(k, state)))
             .unwrap_or(false),
@@ -814,11 +819,14 @@ fn interpret_g_command(g_command: Pair<Rule>, state: &mut State) -> Result<(&'st
     // source case leaking into the output breaks downstream comparisons -
     // worst case the flattener seeing 'g18' would arc in the wrong plane.
     match crate::modal_groups::classify_g_command(&command_str.to_uppercase()) {
-        Some((group, _modal)) => {
+        Some((group, modal)) => {
             let code = command_str.to_uppercase();
             // The frame model needs the active plane for RPL and the arc check.
             if group == "gg06_plane_select" {
                 state.set_plane(&code);
+            }
+            if modal && state.ext.active() {
+                state.ext.modal_g.insert(group, code.clone());
             }
             Ok((group, code))
         }
@@ -1185,7 +1193,26 @@ fn run_subprogram(
         .into_inner()
         .flat_map(|block| block.into_inner())
         .find(|item| item.as_rule() == Rule::proc_header);
+    let saves_g_functions = header.clone().is_some_and(|header| {
+        header
+            .into_inner()
+            .any(|part| part.as_rule() == Rule::proc_attr && part.as_str().eq_ignore_ascii_case("SAVE"))
+    });
     let params = proc_params(header);
+    for param in &params {
+        if state.is_axis(&param.name) || state.is_block_address(&param.name) {
+            return Err(call_error(format!(
+                "parameter {} of the PROC header has the name of an axis or address",
+                param.name
+            )));
+        }
+        if state.ext.is_external(&param.name) {
+            return Err(call_error(format!(
+                "parameter {} of the PROC header has the name of an external variable",
+                param.name
+            )));
+        }
+    }
 
     let arguments: Vec<Pair<Rule>> = arguments
         .map(|arguments| {
@@ -1264,6 +1291,7 @@ fn run_subprogram(
         bound.push(value);
     }
 
+    let saved_g_functions = saves_g_functions.then(|| state.ext.modal_g.clone());
     state.enter_call(name);
     for (param, value) in params.iter().zip(&bound) {
         state.declare_local(&param.name);
@@ -1299,21 +1327,31 @@ fn run_subprogram(
     let mut strings_back: Vec<(String, String)> = Vec::new();
     for (param, value) in params.iter().zip(&bound) {
         match value {
-            BoundValue::NumberRef(key, _) => {
+            // Only a value the subprogram changed goes back, so a direct
+            // write to the caller's variable inside the subprogram survives.
+            BoundValue::NumberRef(key, before) => {
                 if let Some(v) = state.symbol_table.get(&param.name) {
-                    numbers_back.push((key.clone(), *v));
+                    if v.to_bits() != before.to_bits() {
+                        numbers_back.push((key.clone(), *v));
+                    }
                 }
             }
-            BoundValue::TextRef(key, _) => {
+            BoundValue::TextRef(key, before) => {
                 if let Some(t) = state.string_table.get(&param.name) {
-                    strings_back.push((key.clone(), t.clone()));
+                    if t != before {
+                        strings_back.push((key.clone(), t.clone()));
+                    }
                 }
             }
-            BoundValue::ArrayRef(key, _) => {
+            BoundValue::ArrayRef(key, before) => {
                 let prefix = format!("{}[", param.name);
                 for (k, v) in &state.symbol_table {
                     if k.starts_with(&prefix) {
-                        numbers_back.push((format!("{key}{}", &k[param.name.len()..]), *v));
+                        let suffix = &k[param.name.len()..];
+                        let unchanged = before.iter().any(|(s, b)| s == suffix && b.to_bits() == v.to_bits());
+                        if !unchanged {
+                            numbers_back.push((format!("{key}{suffix}"), *v));
+                        }
                     }
                 }
             }
@@ -1334,7 +1372,41 @@ fn run_subprogram(
     }
     state.string_table.extend(strings_back);
     // The rest of the calling block gets a row of its own, after the body's rows.
-    output.start_row(call_line)
+    output.start_row(call_line)?;
+    if let Some(saved) = saved_g_functions {
+        restore_g_functions(name, saved, output, state);
+    }
+    Ok(())
+}
+
+/// PROC ... SAVE: the modal G functions active before the call are active
+/// again after it (manual 4.2.2.4). They go on the row after the body's rows.
+fn restore_g_functions(name: &str, saved: HashMap<&'static str, String>, output: &mut Output, state: &mut State) {
+    let changed: Vec<(&'static str, String)> = state
+        .ext
+        .modal_g
+        .iter()
+        .filter(|(group, code)| saved.get(*group) != Some(code))
+        .map(|(group, code)| (*group, code.clone()))
+        .collect();
+    for (group, code) in changed {
+        match saved.get(group) {
+            Some(before) => {
+                if group == "gg06_plane_select" {
+                    state.set_plane(before);
+                }
+                if let Some(row) = output.last_mut() {
+                    row.insert(group, Value::Str(before.clone()));
+                }
+                state.ext.modal_g.insert(group, before.clone());
+            }
+            // The program never set this group, so its value before the call
+            // is the control's default, which is not known here.
+            None => crate::state::emit_warning(format_args!(
+                "Warning: subprogram {name} has the SAVE attribute and set {code}; the value of {group} before the call is not known, so {code} stays active"
+            )),
+        }
+    }
 }
 
 fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (&'static str, String) {
@@ -1404,6 +1476,14 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
     let rhs_is_string = matches!(expression_pair.as_rule(), Rule::string_value | Rule::string_expression)
         || (expression_pair.as_rule() == Rule::expression && expression_is_string(&expression_pair, state));
     if rhs_is_string {
+        if let Some((name, _)) = external_target(&variable_pair, state)? {
+            return Err(ParsingError::with_context(
+                element_line_no,
+                element_preview,
+                "external variable".to_string(),
+                format!("'{name}' is an external variable; a string cannot be assigned to it"),
+            ));
+        }
         let text = evaluate_string(expression_pair.clone(), state)?;
         // STRING[<index>] = <one char>: write a single character into a string
         // variable (manual 4.1.4.8), as opposed to reassigning the whole string.
@@ -2227,11 +2307,13 @@ fn interpret_array_write(element: Pair<Rule>, output: &mut Output, state: &mut S
         }
         sizes.iter().all(|s| *s > 0).then_some(sizes)
     };
+    let external = state.ext.has_external() && state.ext.is_external(&name.to_uppercase());
     let needs_sizes = position.len() > 1 || (repeating && values.len() == 1);
-    let sizes = if needs_sizes {
-        Some(sizes(state).ok_or_else(|| error(format!("'{name}' is not a defined array of this dimension")))?)
-    } else {
-        None
+    let sizes = match sizes(state) {
+        Some(sizes) => Some(sizes),
+        // The provider holds a served array; its size is not known here.
+        None if external && !needs_sizes => None,
+        None => return Err(error(format!("'{name}' is not a defined array of this dimension"))),
     };
     if repeating {
         let value = values[0];
@@ -2249,7 +2331,6 @@ fn interpret_array_write(element: Pair<Rule>, output: &mut Output, state: &mut S
         values = vec![value; count];
     }
 
-    let external = state.ext.has_external() && state.ext.is_external(&name.to_uppercase());
     for value in values {
         if let Some(sizes) = &sizes {
             if position.iter().zip(sizes).any(|(p, s)| p >= s) {
@@ -2273,7 +2354,7 @@ fn interpret_array_write(element: Pair<Rule>, output: &mut Output, state: &mut S
                 state.symbol_table.insert(key, value);
             }
         }
-        // Advance, last index fastest; a 1-D array has no known end here.
+        // Advance, last index fastest.
         for axis in (0..position.len()).rev() {
             position[axis] += 1;
             match &sizes {
@@ -2526,6 +2607,15 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
     for pair in pairs {
         if !state.ext.frames.is_empty() {
             if let Some(base) = declared_base(&pair, state) {
+                if state.ext.is_external(&base.to_uppercase()) {
+                    let (line_no, preview) = get_error_context(&pair, state);
+                    return Err(ParsingError::with_context(
+                        line_no,
+                        preview,
+                        "definition".to_string(),
+                        format!("'{base}' is an external variable; the program cannot define a variable of that name"),
+                    ));
+                }
                 state.declare_local(&base);
             }
         }
@@ -2820,6 +2910,16 @@ fn interpret_statement_for(
     // Parse and execute the assignment statement
     let assignment = pairs.next().expect("Expected an assignment, got none");
     let (assign_line_no, assign_preview) = get_error_context(&assignment, state);
+    if let Some(target) = assignment.clone().into_inner().next() {
+        if let Some((name, _)) = external_target(&target, state)? {
+            return Err(ParsingError::with_context(
+                assign_line_no,
+                assign_preview,
+                "FOR statement".to_string(),
+                format!("FOR counter '{name}' is an external variable; a counter must be a variable of the program"),
+            ));
+        }
+    }
     let (variable_name, initial_value) = interpret_assignment(assignment, state)?;
     let Some(initial_value) = initial_value else {
         return Err(ParsingError::with_context(
@@ -3155,6 +3255,21 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
     let mut flow = BlockFlow::Continue;
     for statement in element.into_inner() {
         let last = output.last_mut().expect("Output vector should not be empty");
+        if let Some(name) = &state.ext.called_in_block {
+            // `NAME P3` or `NAME P=3` repeats the call (manual 4.2.3.3).
+            let word: String = statement.as_str().split_whitespace().collect::<String>().to_uppercase();
+            let count = word
+                .strip_prefix('P')
+                .map(|rest| rest.strip_prefix('=').unwrap_or(rest));
+            if count.is_some_and(|count| !count.is_empty() && !count.starts_with(|c: char| c.is_ascii_alphabetic())) {
+                return Err(annotate_error(
+                    &statement,
+                    "subprogram call",
+                    format!("a repeat count ({word}) after the call of {name} is not supported"),
+                    state,
+                ));
+            }
+        }
         match statement.as_rule() {
             Rule::non_returning_function_call => {
                 if state.ext.active() {
@@ -3189,6 +3304,7 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                             Value::Str(statement.as_str().trim().to_string()),
                         );
                         call_subprogram(statement, &name, output, state)?;
+                        state.ext.called_in_block = Some(name);
                         continue;
                     }
                 }
@@ -3516,6 +3632,7 @@ pub(crate) fn interpret_block(
         Rule::block => {
             // Start this block's output row, flushing the previous one.
             let line_no = element.line_col().0;
+            state.ext.called_in_block = None;
             output.start_row(line_no)?;
 
             let mut flow = BlockFlow::Continue;

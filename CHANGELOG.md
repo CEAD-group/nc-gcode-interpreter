@@ -63,6 +63,16 @@ released to PyPI.
   `NAME[n] = REP(v[, count])` write consecutive elements starting at the
   indexed one, last index fastest. Before, only the `DEF` initializer form
   was interpreted and the statement form was an internal error.
+- A subprogram whose `PROC` header has the `SAVE` attribute gives the caller
+  back its modal G functions on return: each G group the subprogram changed
+  gets the caller's value on the row after the body's rows. A group the
+  program never set before the call cannot be restored and gives a warning.
+- Loud errors for constructs the subprogram mechanism does not model: a
+  repeat count after a call (`NAME P3`), a `FOR` counter, a `PROC` parameter
+  or a local `DEF` with the name of an external variable, a string assigned
+  to an external variable, a `PROC` parameter with the name of an axis or
+  address, `SET`/`REP` statements that write past the declared array, and
+  two `subprograms` entries whose names differ only in case.
 
 ### Changed
 

@@ -122,6 +122,15 @@ const G19: Plane = Plane {
     offsets: ["J", "K"],
 };
 
+/// A generated row belongs to the subprogram line of the row it came from.
+fn copy_origin(source: &Row, cells: &mut CellMap) {
+    for column in [crate::output::SUBPROGRAM_COLUMN, crate::output::SUBPROGRAM_LINE_COLUMN] {
+        if let Some(value) = source.cells.get(column) {
+            cells.insert(column, value.clone());
+        }
+    }
+}
+
 /// One buffered block of an active spline: either a point-bearing row (its
 /// geometric axis cells define the next spline point / control point) or any
 /// other row that arrived mid-spline and is re-emitted in place.
@@ -462,6 +471,7 @@ impl Flattener {
                 let value = if k == segments { end } else { start + (end - start) * f };
                 cells.insert(axis, Value::Float(value));
             }
+            copy_origin(&row, &mut cells);
             emitted.push(Row {
                 line_no: row.line_no,
                 cells,
@@ -616,6 +626,7 @@ impl Flattener {
                                 }
                             }
                         }
+                        copy_origin(&row, &mut cells);
                         emitted.push(Row {
                             line_no: row.line_no,
                             cells,
@@ -638,6 +649,7 @@ impl Flattener {
                             if !programmed {
                                 cells.insert(intern_column(FLATTENED_COLUMN), Value::Float(1.0));
                             }
+                            copy_origin(&row, &mut cells);
                             emitted.push(Row {
                                 line_no: row.line_no,
                                 cells,
