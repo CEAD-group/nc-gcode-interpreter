@@ -382,6 +382,20 @@ fn straight_lines_with_every_decoder_word_form() {
 }
 
 #[test]
+fn numeric_and_named_tool_selections() {
+    let tools = "T2 M6\nG1 X1 T=3\nt4\nR1=5\nT=R1+1 X2\nT=\"MILL\"\nT7\n";
+    let outcome = parity(tools);
+    let cells: Vec<&String> = outcome
+        .rows()
+        .iter()
+        .flat_map(|row| &row.cells)
+        .map(|(_, v)| v)
+        .collect();
+    assert!(cells.iter().any(|v| v.contains("\"6\"")), "{cells:?}");
+    parity(&format!("IF 1\n{tools}ENDIF\n"));
+}
+
+#[test]
 fn decoder_word_forms_inside_structures() {
     // Structured programs take the tree walker by default: this compares
     // decode_ast with the whole-file grammar on every claimed line.

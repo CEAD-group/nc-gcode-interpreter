@@ -76,7 +76,8 @@ fn interpret_ast_with(
     output: &mut OutputRows,
     pipeline: Option<Pipeline>,
 ) -> Result<(), ParsingError> {
-    state.set_input(input);
+    // Copies the text once; the default path shares it instead.
+    state.set_source(crate::interpreter::SourceText::from(input));
     let (shape, table) = scan_structure_table(input)?;
     let context = |error| {
         if shape.has_block_structures {

@@ -209,6 +209,9 @@ fn exec_statement(
                 }
                 None => {
                     state.warn_unsupported_address(&assigned.key, line_no);
+                    if assigned.key.eq_ignore_ascii_case("T") {
+                        row(output).insert("T", Value::Str(crate::output::tool_number_text(value)));
+                    }
                     output.record_variable_change(&assigned.key, value);
                 }
             }
