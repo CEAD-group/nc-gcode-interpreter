@@ -2150,7 +2150,7 @@ fn interpret_assignment_multi(
     let variable_pair = inner_pairs
         .next()
         .ok_or(ParsingError::InvalidElementCount { expected: 2, actual: 0 })?;
-    let keys = interpret_variable_array(variable_pair, state)?;
+    let keys = declared_array_keys(variable_pair, state)?;
     let value_pair = inner_pairs
         .next()
         .ok_or(ParsingError::InvalidElementCount { expected: 2, actual: 1 })?;
@@ -2173,6 +2173,116 @@ fn interpret_assignment_multi(
             (key, value)
         })
         .collect())
+}
+/// The element keys a definition `NAME[n, m]` declares: indices 0..n-1.
+fn declared_array_keys(declaration: Pair<Rule>, state: &mut State) -> Result<Vec<String>, ParsingError> {
+    let sizes: Vec<String> = declaration
+        .clone()
+        .into_inner()
+        .nth(1)
+        .map(|indices| interpret_indices(indices, state))
+        .transpose()?
+        .unwrap_or_default()
+        .iter()
+        .map(|size| (*size as i64).to_string())
+        .collect();
+    // interpret_variable_array lists every element up to and including the index.
+    let mut keys = interpret_variable_array(declaration, state)?;
+    keys.retain(|key| {
+        let inner = key.rsplit('[').next().unwrap_or("").trim_end_matches(']');
+        inner.split(',').zip(&sizes).all(|(index, size)| index != size)
+    });
+    Ok(keys)
+}
+
+/// `NAME[n] = SET(v, ...)` or `REP(v[, count])` as a statement: the values go
+/// to consecutive elements starting at the indexed one, last index fastest
+/// (manual 4.1.1.9). Unlike a DEF initializer the index is a start position.
+fn interpret_array_write(element: Pair<Rule>, output: &mut Output, state: &mut State) -> Result<(), ParsingError> {
+    let (line_no, preview) = get_error_context(&element, state);
+    let error =
+        |message: String| ParsingError::with_context(line_no, preview.clone(), "array assignment".to_string(), message);
+    let mut parts = element.into_inner();
+    let mut target = parts.next().expect("assignment_multi has a target").into_inner();
+    let name = interpret_identifier(target.next().expect("variable_array has a name"))?;
+    let indices = interpret_indices(target.next().expect("variable_array has indices"), state)?;
+    let mut position: Vec<usize> = indices.iter().map(|i| *i as usize).collect();
+    let values_pair = parts.next().expect("assignment_multi has values");
+    let repeating = values_pair.as_rule() == Rule::value_repeating;
+    let mut values = interpret_value_array(values_pair, state)?;
+
+    // Sizes are not stored; the defined elements give them where needed.
+    let sizes = |state: &State| -> Option<Vec<usize>> {
+        let prefix = format!("{name}[");
+        let mut sizes = vec![0usize; position.len()];
+        for key in state.symbol_table.keys().filter(|k| k.starts_with(&prefix)) {
+            let inner = key[prefix.len()..].trim_end_matches(']');
+            let element: Vec<usize> = inner.split(',').filter_map(|i| i.parse().ok()).collect();
+            if element.len() != sizes.len() {
+                return None;
+            }
+            for (size, index) in sizes.iter_mut().zip(element) {
+                *size = (*size).max(index + 1);
+            }
+        }
+        sizes.iter().all(|s| *s > 0).then_some(sizes)
+    };
+    let needs_sizes = position.len() > 1 || (repeating && values.len() == 1);
+    let sizes = if needs_sizes {
+        Some(sizes(state).ok_or_else(|| error(format!("'{name}' is not a defined array of this dimension")))?)
+    } else {
+        None
+    };
+    if repeating {
+        let value = values[0];
+        let count = match (values.get(1).copied().flatten(), &sizes) {
+            (Some(count), _) if count >= 0.0 && count.fract() == 0.0 => count as usize,
+            (Some(count), _) => return Err(error(format!("REP count {count} is not a whole number"))),
+            // Without a count REP fills to the end of the array.
+            (None, Some(sizes)) => {
+                let total: usize = sizes.iter().product();
+                let offset = position.iter().zip(sizes).fold(0, |acc, (p, s)| acc * s + p);
+                total.saturating_sub(offset)
+            }
+            (None, None) => unreachable!("sizes are resolved for REP without a count"),
+        };
+        values = vec![value; count];
+    }
+
+    let external = state.ext.has_external() && state.ext.is_external(&name.to_uppercase());
+    for value in values {
+        if let Some(sizes) = &sizes {
+            if position.iter().zip(sizes).any(|(p, s)| p >= s) {
+                return Err(error(format!(
+                    "more values than '{name}' has elements from the given index"
+                )));
+            }
+        }
+        if let Some(value) = value {
+            if external {
+                let indices: Vec<_> = position
+                    .iter()
+                    .map(|i| crate::subprogram::ExternalIndex::Int(*i as i64))
+                    .collect();
+                let name = name.to_uppercase();
+                external_result(state.ext.write(&name, &indices, value), &name, line_no, preview.clone())?;
+            } else {
+                let joined: Vec<String> = position.iter().map(|i| i.to_string()).collect();
+                let key = format!("{name}[{}]", joined.join(","));
+                output.record_variable_change(&key, value);
+                state.symbol_table.insert(key, value);
+            }
+        }
+        // Advance, last index fastest; a 1-D array has no known end here.
+        for axis in (0..position.len()).rev() {
+            position[axis] += 1;
+            match &sizes {
+                Some(sizes) if axis > 0 && position[axis] >= sizes[axis] => position[axis] = 0,
+                _ => break,
+            }
+        }
+    }
+    Ok(())
 }
 fn interpret_value_array(pair: Pair<Rule>, state: &mut State) -> Result<Vec<Option<f64>>, ParsingError> {
     let mut values = Vec::new();
@@ -2506,7 +2616,7 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
                 }
             }
             Rule::variable_array => {
-                let keys = interpret_variable_array(pair, state)?;
+                let keys = declared_array_keys(pair, state)?;
                 for key in keys {
                     state.symbol_table.insert(key.clone(), 0.0);
                     output.record_variable_change(&key, 0.0);
@@ -3175,6 +3285,7 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                     }
                 }
             }
+            Rule::assignment_multi => interpret_array_write(statement, output, state)?,
             Rule::tool_selection => interpret_tool_selection(statement, output, state)?,
             _ => Err(ParsingError::UnexpectedRule {
                 rule: statement.as_rule(),

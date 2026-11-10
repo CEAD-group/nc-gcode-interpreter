@@ -324,3 +324,19 @@ def test_required_subprogram_that_is_not_supplied_is_an_error():
     with pytest.raises(NcError, match="ATTACH is a required subprogram") as error:
         nc_to_dataframe("OUTER\n", subprograms=cycles, required_subprograms=["attach"])
     assert "OUTER" in str(error.value)
+
+
+def test_array_assignment_with_set_and_rep_outside_a_definition():
+    program = (
+        "DEF REAL POSE[8]\nDEF REAL GRID[2,3]\n"
+        "POSE[0] = SET( 0.000, -30.000, -70.000, 0.000, 19.656, 0.000, 3000, 25000) ; taught\n"
+        "POSE[2] = SET(7, , 9)\n"
+        "GRID[0,2] = SET(1, 2, 3)\n"
+        "POSE[6] = REP(5, 2)\n"
+    )
+    _, state = nc_to_dataframe(program)
+    table = state["symbol_table"]
+    assert [table[f"POSE[{i}]"] for i in range(8)] == [0, -30, 7, 0, 9, 0, 5, 5]
+    assert (table["GRID[0,2]"], table["GRID[1,0]"], table["GRID[1,1]"]) == (1, 2, 3)
+    with pytest.raises(NcError, match="not a defined array"):
+        nc_to_dataframe("UNKNOWN[0,0] = SET(1, 2)\n")

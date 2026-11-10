@@ -144,7 +144,7 @@ def test_include_variables_covers_def_multi_and_for_counter():
     )
     rows = list(nc_to_rows(program, include_variables=True))
     variables = [(line, vars) for line, _row, vars in rows]
-    assert variables[0] == (1, {"QA": 0.0, "QB[0]": 0.0, "QB[1]": 0.0, "QB[2]": 0.0})
+    assert variables[0] == (1, {"QA": 0.0, "QB[0]": 0.0, "QB[1]": 0.0})
     assert variables[1] == (2, {"QC[0]": 1.0, "QC[2]": 3.0})
     assert variables[2] == (3, {"R7": 1.0})  # FOR init on the FOR line
     # Counter increments surface on the ENDFOR line, where the control

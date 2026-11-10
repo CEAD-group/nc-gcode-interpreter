@@ -59,6 +59,10 @@ released to PyPI.
   access rights, unit and limits (`DEF CHAN APW 4 REAL LLI 0 ULI 10 NAME`),
   the `CHAR` type, and attribute-only `REDEF` lines are accepted and not
   interpreted.
+- Array assignment as a statement: `NAME[n] = SET(v, ...)` and
+  `NAME[n] = REP(v[, count])` write consecutive elements starting at the
+  indexed one, last index fastest. Before, only the `DEF` initializer form
+  was interpreted and the statement form was an internal error.
 
 ### Changed
 
@@ -71,6 +75,9 @@ released to PyPI.
 - When any of the three extensions is used, the program is interpreted by
   the grammar path and not the line fast path, which is slower on very large
   programs. Runs without the extensions are unaffected.
+- `DEF REAL A[n]` declares the elements `A[0]` to `A[n-1]`. Before, it also
+  created `A[n]`, so an out-of-range access went unnoticed.
+- `REDEF` is a reserved word.
 
 ## [v0.2.10] - 2026-11-10
 
