@@ -3138,7 +3138,7 @@ fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State
             Rule::if_goto_statement => interpret_if_goto(pair, state)?,
             Rule::case_statement => interpret_case(pair, state)?,
             // RET returns like M17; at the top level it ends the program.
-            Rule::return_statement => BlockFlow::EndProgram,
+            Rule::return_statement => end_of_program(state),
             Rule::gotos_statement => {
                 // GOTOS repeats the program only when the PLC requests it via
                 // <Chan>.basic.out.enableGoToStart; without that request the
@@ -3211,6 +3211,16 @@ pub(crate) fn insert_m_key(
 pub(crate) fn is_end_of_program_m_code(code: &str) -> bool {
     let digits = code.trim_start_matches(['M', 'm']);
     matches!(digits.trim_start_matches('0'), "2" | "17" | "30")
+}
+
+/// The flow after M2, M17, M30 or RET. In the top level of the initial state
+/// these end one definition file of several, so interpretation continues.
+pub(crate) fn end_of_program(state: &State) -> BlockFlow {
+    if state.in_initial_state && state.ext.frames.is_empty() {
+        BlockFlow::Continue
+    } else {
+        BlockFlow::EndProgram
+    }
 }
 
 /// True for words that look like an axis word with a typo or a missing
@@ -3355,7 +3365,7 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                 insert_m_key(last, &value, line_no, preview)?;
                 // The whole block still executes; interpretation stops after it.
                 if is_end_of_program_m_code(&value) {
-                    flow = BlockFlow::EndProgram;
+                    flow = end_of_program(state);
                 }
             }
             // axis_word is the hoisted fast-path form of assignment's first

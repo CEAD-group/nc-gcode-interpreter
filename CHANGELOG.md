@@ -90,6 +90,11 @@ released to PyPI.
 - `DEF REAL A[n]` declares the elements `A[0]` to `A[n-1]`. Before, it also
   created `A[n]`, so an out-of-range access went unnoticed.
 - `REDEF` is a reserved word.
+- `M2`, `M17`, `M30` and `RET` at the top level of `initial_state` no longer
+  end it, so several definition files, each closed by `M30` or `M17`, can be
+  passed as one text. Before, everything after the first of these codes was
+  ignored without a message. In the main program and in subprograms the
+  codes act as before. (Provisional; see #48.)
 - A supplied subprogram is checked and parsed on its first call, and later
   calls in the same run reuse the parse tree. Before, every call parsed the
   text again, which was about two thirds of the time of a call of a 20-line
