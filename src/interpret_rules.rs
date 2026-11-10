@@ -1,5 +1,6 @@
 use crate::errors::ParsingError;
 use crate::frame::{self, Matrix3};
+use crate::output::FGROUP_COLUMN;
 use crate::state::{ColKind, State};
 use crate::types::Pair;
 use crate::types::Rule;
@@ -773,6 +774,73 @@ fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (&'static
     ("non_returning_function_call", command_str)
 }
 
+/// `FGROUP(<axes>)` (manual 3.7.1): the comma-separated channel axes the path
+/// feed refers to, uppercased, or `""` for `FGROUP()` (the machine-data
+/// default). `None` when the call is not FGROUP. Every argument must be a
+/// configured axis name: FGROUP takes channel axis names only.
+fn interpret_fgroup(call: &Pair<Rule>, state: &State) -> Result<Option<String>, ParsingError> {
+    let mut inner = call.clone().into_inner();
+    let name = inner.next().map(|p| p.as_str()).unwrap_or("");
+    // Bare `FGROUP` without parentheses is not the predefined procedure.
+    if !name.eq_ignore_ascii_case("FGROUP") || !call.as_str().contains('(') {
+        return Ok(None);
+    }
+    let mut axes: Vec<String> = Vec::new();
+    for argument in inner.flat_map(|arguments| arguments.into_inner()) {
+        let axis = argument.as_str().trim().to_uppercase();
+        if !state.is_axis(&axis) {
+            let (line_no, preview) = get_error_context(&argument, state);
+            return Err(ParsingError::UnexpectedAxis {
+                axis,
+                axes: state.axis_identifiers.join(", "),
+                line_no,
+                preview,
+            });
+        }
+        axes.push(axis);
+    }
+    Ok(Some(axes.join(",")))
+}
+
+/// The output key of an `FGREF[<axis>]` assignment target, `None` when the
+/// array is not FGREF. The index is an axis name, resolved without
+/// `axis_index_map`: the reference radius is kept per axis, not as an array
+/// variable. The interpreter does not know which axes are rotary, so any
+/// configured axis is accepted.
+fn fgref_target(pair: &Pair<Rule>, state: &State) -> Result<Option<String>, ParsingError> {
+    let mut inner = pair.clone().into_inner();
+    let (Some(name), Some(indices)) = (inner.next(), inner.next()) else {
+        return Ok(None);
+    };
+    if name.as_rule() != Rule::identifier || !name.as_str().eq_ignore_ascii_case("FGREF") {
+        return Ok(None);
+    }
+    let index: Vec<Pair<Rule>> = indices.into_inner().collect();
+    let axis = match index.as_slice() {
+        [single] => single.as_str().trim().to_uppercase(),
+        _ => String::new(),
+    };
+    if !state.is_axis(&axis) {
+        let (line_no, preview) = get_error_context(pair, state);
+        return Err(ParsingError::UnexpectedAxis {
+            axis: indices_text(pair),
+            axes: state.axis_identifiers.join(", "),
+            line_no,
+            preview,
+        });
+    }
+    Ok(Some(crate::output::fgref_column(&axis)))
+}
+
+/// The text between the brackets of an array reference, for error messages.
+fn indices_text(pair: &Pair<Rule>) -> String {
+    pair.clone()
+        .into_inner()
+        .nth(1)
+        .map(|p| p.as_str().trim().to_string())
+        .unwrap_or_default()
+}
+
 /// Axis and block-address names are case-insensitive; normalize them to
 /// uppercase so state lookups and output columns are consistent regardless
 /// of the case used in the program (`x=10` must hit the same axis, column and
@@ -870,6 +938,11 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
                     "actual-position system variable".to_string(),
                     format!("{name} is a read-only actual position; it cannot be assigned"),
                 ));
+            }
+            if let Some(key) = fgref_target(&variable_pair, state)? {
+                // A modal per-axis setting, not a variable: it reaches only the output row.
+                let value = evaluate_expression(expression_pair, state)?;
+                return Ok((key, Some(value)));
             }
             let keys = interpret_variable_array(variable_pair, state)?;
             let value = evaluate_expression(expression_pair, state)?;
@@ -2432,6 +2505,10 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
         match statement.as_rule() {
             Rule::non_returning_function_call => {
                 let (line_no, preview) = get_error_context(&statement, state);
+                if let Some(axes) = interpret_fgroup(&statement, state)? {
+                    last.insert(crate::output::intern_column(FGROUP_COLUMN), Value::Str(axes));
+                    continue;
+                }
                 let (key, value) = interpret_non_returning_function_call(statement);
                 let name = value.split('(').next().unwrap_or("").trim();
                 if !value.contains('(') {
@@ -2509,7 +2586,7 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                         // stored this axis' local == `local_value`).
                         state.insert_machine_axis(skey, local_value, last);
                     }
-                    Some((ColKind::Block, skey)) => {
+                    Some((ColKind::Block | ColKind::Modal, skey)) => {
                         last.insert(skey, Value::Float(local_value));
                     }
                     None => {

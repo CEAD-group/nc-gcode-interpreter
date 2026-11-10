@@ -65,6 +65,8 @@ const UNSUPPORTED_ADDRESSES: &[(&str, &str)] = &[
 pub enum ColKind {
     Axis,
     Block,
+    /// Modal per-axis setting such as `FGREF[<axis>]`: forward-filled, never a variable.
+    Modal,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +179,12 @@ impl State {
             output_keys
                 .entry(block.to_string())
                 .or_insert((ColKind::Block, crate::output::intern_column(block)));
+        }
+
+        for axis in &axis_identifiers {
+            let column = crate::output::fgref_column(&axis.to_uppercase());
+            let interned = crate::output::intern_column(&column);
+            output_keys.insert(column, (ColKind::Modal, interned));
         }
 
         let mut one_letter_keys = [None; 128];

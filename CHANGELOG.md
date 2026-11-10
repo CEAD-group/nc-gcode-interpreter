@@ -4,6 +4,22 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- `FGROUP(<axes>)` and `FGREF[<axis>]=<radius>` are modal state (manual
+  3.7.1). A forward-filled, dictionary-encoded `FGROUP` column holds the axes
+  the path feed refers to, comma-separated as programmed; `FGROUP()` writes
+  `""` for the machine-data default, which the interpreter does not know.
+  Each programmed axis gets a forward-filled `FGREF[<axis>]` float column;
+  null means the control default. Both columns appear only when the program
+  uses them, after the axis columns. Before, `FGROUP` was stored as a
+  subprogram call in `non_returning_function_call` and `FGREF[<axis>]` needed
+  an `axis_index_map` entry and became the variable `FGREF[<index>]`; it now
+  resolves by axis name and is no longer a variable. An argument that is not
+  a configured axis is an `unexpected_axis` error (#107).
+
 ## [v0.2.10] - 2026-11-10
 
 ### Changed
