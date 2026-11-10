@@ -88,6 +88,11 @@ released to PyPI.
 - `DEF REAL A[n]` declares the elements `A[0]` to `A[n-1]`. Before, it also
   created `A[n]`, so an out-of-range access went unnoticed.
 - `REDEF` is a reserved word.
+- A supplied subprogram is checked and parsed on its first call, and later
+  calls in the same run reuse the parse tree. Before, every call parsed the
+  text again, which was about two thirds of the time of a call of a 20-line
+  body. Adds the `self_cell` dependency, which holds the tree next to the
+  text it borrows from.
 
 ## [v0.2.10] - 2026-11-10
 

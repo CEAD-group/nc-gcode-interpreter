@@ -43,6 +43,7 @@ pyo3 = { version = "0.29", optional = true }
 arrow-array = { version = "59", optional = true, default-features = false, features = ["ffi"] }
 arrow-schema = { version = "59", optional = true, default-features = false }
 arrow-data = { version = "59", optional = true, default-features = false }
+self_cell = "1"
 
 [features]
 default = []

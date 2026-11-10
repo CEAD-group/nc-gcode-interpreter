@@ -1150,7 +1150,6 @@ fn run_subprogram(
     output: &mut Output,
     state: &mut State,
 ) -> Result<(), ParsingError> {
-    use pest::Parser;
     let call_error = |message: String| {
         ParsingError::with_context(
             call_line,
@@ -1171,23 +1170,8 @@ fn run_subprogram(
         .get(name)
         .cloned()
         .expect("caller checked the name");
-    let text = subprogram.source.as_str();
-    crate::structure_scan::check_structures(text).map_err(|e| call_error(e.to_string()))?;
-    let blocks = crate::types::NCParser::parse(Rule::file, text)
-        .map_err(|e| {
-            let line = match &e.line_col {
-                pest::error::LineColLocation::Pos(pos) => pos.0,
-                pest::error::LineColLocation::Span(start, _) => start.0,
-            };
-            call_error(format!(
-                "line {line} of the subprogram does not parse: {}",
-                crate::interpreter::describe_parse_error(&e)
-            ))
-        })?
-        .next()
-        .and_then(|file| file.into_inner().next())
-        .ok_or_else(|| call_error("the subprogram text is empty".to_string()))?;
-    let blocks: Pair<Rule> = blocks.into();
+    let parsed = state.ext.parsed_body(name).map_err(call_error)?;
+    let blocks = parsed.blocks();
     let header = blocks
         .clone()
         .into_inner()
