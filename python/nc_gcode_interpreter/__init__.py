@@ -200,6 +200,8 @@ def nc_to_dataframe(
         None if m_function_subprograms is None else dict(m_function_subprograms),
         None if required_subprograms is None else list(required_subprograms),
         stop_on_setal,
+        # No row is read before the run ends, so a provider call need not wait for one.
+        defer_rows=True,
     )
     # pl.DataFrame wraps each Arrow record batch via __arrow_c_array__ (polars
     # >= 1.3), no pyarrow needed. Exhaust the iterator before reading .state.

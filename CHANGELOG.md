@@ -93,6 +93,12 @@ released to PyPI.
   text again, which was about two thirds of the time of a call of a 20-line
   body. Adds the `self_cell` dependency, which holds the tree next to the
   text it borrows from.
+- `nc_to_dataframe` with `external_variables` no longer sends the rows
+  produced so far as a separate batch before each provider call, since its
+  caller reads no row before the run ends. A program that reads the provider
+  on every motion row built one batch per row. `nc_to_batches` and the Rust
+  API keep handing the rows over first; Rust callers can opt out with
+  `Extensions::defer_rows`.
 
 ## [v0.2.10] - 2026-11-10
 

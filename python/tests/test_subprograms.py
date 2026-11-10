@@ -455,3 +455,28 @@ def test_array_assignment_stays_inside_the_declared_array(line, message):
 def test_subprogram_names_that_differ_only_in_case_are_refused():
     with pytest.raises(ValueError, match="more than one entry for FOO"):
         nc_to_dataframe("FOO\n", subprograms={"foo": "G1 X1\n", "FOO": "G1 X2\n"})
+
+
+class InputAndSpeed:
+    """Serves one input and one plain variable; logs every access."""
+
+    names = ("$A_IN", "SPEED")
+
+    def __init__(self):
+        self.log: list[tuple] = []
+
+    def read(self, name, indices):
+        self.log.append(("read", name, indices))
+        return 2.0
+
+    def write(self, name, indices, value):
+        self.log.append(("write", name, indices, value))
+
+
+def test_dataframe_with_a_provider_equals_the_batch_stream():
+    program = "".join(f"G1 X=$A_IN[1]+{i} Y{i}\n" for i in range(50)) + "SPEED=3\nG1 F=(SPEED*2)\n"
+    whole, _ = nc_to_dataframe(program, external_variables=InputAndSpeed())
+    batches = list(nc_to_batches(program, external_variables=InputAndSpeed()))
+    # The stream hands rows over before each access; the whole table need not.
+    assert len(batches) > 1
+    assert whole.equals(pl.concat(batches, how="diagonal_relaxed"), null_equal=True)

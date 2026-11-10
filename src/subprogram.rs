@@ -88,6 +88,9 @@ pub struct Extensions {
     pub required_subprograms: Vec<String>,
     /// Fail the run at a SETAL call, reporting the alarm and the call path.
     pub stop_on_setal: bool,
+    /// Keep finished rows batched across provider calls instead of sending
+    /// them first; for a consumer that reads no row before the run ends.
+    pub defer_rows: bool,
 }
 
 /// A subprogram text with its line-start table, shared across calls.

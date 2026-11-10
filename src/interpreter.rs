@@ -326,6 +326,7 @@ pub fn nc_to_batch_stream_with(
         axis_index_map,
         allow_undefined_variables,
     );
+    let defer_rows = extensions.defer_rows;
     state.ext = crate::subprogram::ExtState::new(extensions);
     if let Some(initial_state) = initial_state {
         let mut discard = OutputRows::collect();
@@ -340,7 +341,7 @@ pub fn nc_to_batch_stream_with(
         events_sender,
         emit_line_no,
     );
-    if state.ext.has_external() {
+    if state.ext.has_external() && !defer_rows {
         state.ext.flush = output.share_batch_sink();
     }
     install_flattener(&mut output, &state, flatten_tolerance)?;
