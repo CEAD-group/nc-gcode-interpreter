@@ -53,3 +53,7 @@ python = ["pyo3", "arrow-array", "arrow-schema", "arrow-data"]
 name = "workloads"
 harness = false
 required-features = ["bench-experiments"]
+
+[[bench]]
+name = "extensions"
+harness = false
