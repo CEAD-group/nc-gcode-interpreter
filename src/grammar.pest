@@ -6,6 +6,10 @@ single_line         =  { SOI ~ block ~ EOI }
 // producing a block, so the pairs are exactly the grammar-bound lines in
 // order, at their whole-file positions. The buffer always ends in a newline.
 sparse_lines        =  { SOI ~ newline* ~ (block ~ newline+)* ~ EOI }
+// Entry points of the statement-AST executor (NC_EXEC=ast): one line on its
+// own, or the sparse copy of the program over line_block (see sparse_lines).
+line                =  { SOI ~ line_block ~ EOI }
+sparse_line_blocks  =  { SOI ~ newline* ~ (line_block ~ newline+)* ~ EOI }
 blocks              =  { block ~ (newline ~ block)* }
 newline             = _{ "\n" | "\r\n" }
 WHITESPACE          = _{ " " | "\t" }
@@ -32,6 +36,9 @@ body_end_kw         = @{ (^"ELSE" | ^"ENDIF" | ^"ENDWHILE" | ^"ENDFOR" | ^"ENDLO
 // A structure head is alone on its line (manual 4.1.7); only a comment may
 // follow it, and that comment parses as the first body block.
 head_end            = _{ &(comment? ~ newline) }
+// `block` with line_control in place of control: a multi-line structure is
+// seen as its head, ELSE and closer lines, so a line_block never spans a newline.
+line_block          =  { block_number_set? ~ (label_def ~ !structure_line_kw)? ~ ((definition | frame_op | statement+ | line_control) ~ !body_end_kw)? ~ comment? }
 block_number_set    = _{ "N" ~ block_number }
 control             =  {
     gotos_statement
@@ -74,6 +81,44 @@ loop_statement         =  { ^"LOOP" ~ head_end ~ blocks ~ ^"ENDLOOP" }
 for_statement          =  { ^"FOR" ~ assignment ~ ^"TO" ~ expression ~ head_end ~ blocks ~ ^"ENDFOR" }
 while_statement        =  { ^"WHILE" ~ condition ~ head_end ~ blocks ~ ^"ENDWHILE" }
 repeat_until_statement =  { ^"REPEAT" ~ head_end ~ blocks ~ ^"UNTIL" ~ condition }
+// The single-line forms of `control`, then the line-level forms of the
+// structures (last, so a jump line never tries them). The multi-line rules
+// are left out: in a sparse buffer they would swallow the following lines.
+line_control           =  {
+    gotos_statement
+  | goto_statement
+  | case_statement
+  | if_goto_statement+
+  | if_head
+  | else_kw
+  | endif_kw
+  | while_head
+  | endwhile_kw
+  | for_head
+  | endfor_kw
+  | repeat_kw
+  | until_tail
+  | loop_kw
+  | endloop_kw
+}
+// The !goto_kw guard keeps a conditional jump with a bad target from
+// parsing as the head of an IF block.
+if_head                =  { if_kw ~ condition ~ !goto_kw }
+while_head             =  { while_kw ~ condition }
+// TO is unbounded as in for_statement, so both accept the same text.
+for_head               =  { for_kw ~ assignment ~ ^"TO" ~ expression }
+until_tail             =  { until_kw ~ condition }
+if_kw                  = @{ ^"IF" ~ !(ASCII_ALPHANUMERIC | "_") }
+while_kw               = @{ ^"WHILE" ~ !(ASCII_ALPHANUMERIC | "_") }
+for_kw                 = @{ ^"FOR" ~ !(ASCII_ALPHANUMERIC | "_") }
+until_kw               = @{ ^"UNTIL" ~ !(ASCII_ALPHANUMERIC | "_") }
+else_kw                = @{ ^"ELSE" ~ !(ASCII_ALPHANUMERIC | "_") }
+endif_kw               = @{ ^"ENDIF" ~ !(ASCII_ALPHANUMERIC | "_") }
+endwhile_kw            = @{ ^"ENDWHILE" ~ !(ASCII_ALPHANUMERIC | "_") }
+endfor_kw              = @{ ^"ENDFOR" ~ !(ASCII_ALPHANUMERIC | "_") }
+repeat_kw              = @{ ^"REPEAT" ~ !(ASCII_ALPHANUMERIC | "_") }
+loop_kw                = @{ ^"LOOP" ~ !(ASCII_ALPHANUMERIC | "_") }
+endloop_kw             = @{ ^"ENDLOOP" ~ !(ASCII_ALPHANUMERIC | "_") }
 block_number           =  { integer }
 // A condition is just an expression: comparison and logic operators are
 // expression operators (manual 4.1.3.3 "Priority of the operations"), so

@@ -6,6 +6,8 @@ mod types;
 mod errors;
 pub mod flatten;
 mod frame;
+#[cfg(test)]
+mod grammar_speed;
 mod interpret_rules;
 pub mod interpreter;
 mod line_driver;
@@ -13,6 +15,16 @@ mod modal_groups;
 pub mod output;
 mod state;
 mod structure_scan;
+// Experimental statement-AST path (NC_EXEC=ast); parts stay unused until its driver lands.
+#[allow(dead_code)]
+mod ast;
+#[allow(dead_code)]
+mod decode_ast;
+mod drive;
+#[allow(dead_code)]
+mod exec;
+#[allow(dead_code)]
+mod lower;
 
 // Unstable research helpers, excluded from normal library/Python builds.
 #[cfg(feature = "bench-experiments")]
