@@ -20,7 +20,7 @@ comment             = @{ ";" ~ (!newline ~ ANY)* }
 // therefore can never parse as a statement. definition and frame_op must
 // stay in front: DEF/TRANS/... are not reserved words, so a statement would
 // otherwise swallow them as function calls or assignments.
-block               =  { block_number_set? ~ (label_def ~ !structure_line_kw)? ~ ((definition | frame_op | statement+ | control) ~ !body_end_kw)? ~ comment? }
+block               =  { block_number_set? ~ (label_def ~ !structure_line_kw)? ~ ((proc_header | extern_decl | definition | frame_op | statement+ | control) ~ !body_end_kw)? ~ comment? }
 // A block with a control-structure keyword carries no label (alarm 12630); a
 // conditional jump (IF ... GOTO) is no structure and keeps its label.
 structure_line_kw   = _{ body_end_kw | structure_head_kw | (block_if_kw ~ condition ~ comment? ~ (newline | EOI)) }
@@ -34,7 +34,8 @@ body_end_kw         = @{ (^"ELSE" | ^"ENDIF" | ^"ENDWHILE" | ^"ENDFOR" | ^"ENDLO
 head_end            = _{ &(comment? ~ newline) }
 block_number_set    = _{ "N" ~ block_number }
 control             =  {
-    gotos_statement
+    return_statement
+  | gotos_statement
   | goto_statement
   | case_statement
   | if_goto_statement+
@@ -99,6 +100,24 @@ statement              =  {
 // look like an axis word (e.g. `X1[2]=...`) flowing to assignment_multi.
 axis_word              =  { variable_single_char ~ value ~ !"[" }
 
+// Subprogram header: PROC NAME(INT A, VAR REAL B, VAR REAL C[3]) SAVE. It
+// declares the parameters a call binds; the attributes are accepted and not
+// interpreted.
+proc_header = { proc_kw ~ identifier ~ ("(" ~ proc_params? ~ ")")? ~ proc_attr* }
+proc_kw     = @{ ^"PROC" ~ !(ASCII_ALPHANUMERIC | "_") }
+proc_params = { proc_param ~ ("," ~ proc_param)* }
+proc_param  = { var_kw? ~ data_type ~ identifier ~ proc_array? ~ ("=" ~ string_expression)? }
+var_kw      = @{ ^"VAR" ~ !(ASCII_ALPHANUMERIC | "_") }
+proc_array  = @{ "[" ~ (ASCII_DIGIT | "," | " ")* ~ "]" }
+proc_attr   = @{ (^"SAVE" | ^"DISPLOF" | ^"DISPLON" | ^"SBLOF" | ^"SBLON" | ^"ACTBLOCNO") ~ !(ASCII_ALPHANUMERIC | "_") }
+// EXTERN declares a subprogram signature; nothing is executed.
+extern_decl = { extern_kw ~ (!(newline | ";") ~ ANY)* }
+extern_kw   = @{ ^"EXTERN" ~ !(ASCII_ALPHANUMERIC | "_") }
+// RET returns from a subprogram like M17; its optional arguments (return
+// target, levels) are not interpreted.
+return_statement = { ret_kw ~ ("(" ~ function_arguments? ~ ")")? }
+ret_kw           = @{ ^"RET" ~ !(ASCII_ALPHANUMERIC | "_") }
+
 // local variable definitions
 definition = { ^"DEF" ~ data_type ~ (assignment_multi | assignment | variable_array | variable) ~ ("," ~ (assignment_multi | assignment | variable_array | variable))* }
 data_type  = { ^"INT" | ^"REAL" | ^"BOOL" | (^"STRING" ~ "[" ~ ASCII_DIGIT+ ~ "]") }
@@ -129,6 +148,9 @@ reserved   = _{
   | ^"ENDWHILE"
   | ^"ENDFOR"
   | ^"ENDLOOP"
+  | ^"PROC"
+  | ^"EXTERN"
+  | ^"RET"
 }
 
 // Sinumerik user variables may begin with an underscore: CAM post-processors

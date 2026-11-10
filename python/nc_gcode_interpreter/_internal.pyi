@@ -48,6 +48,9 @@ def nc_to_batches(
     flatten_tolerance: float | None = None,
     include_line_numbers: bool = False,
     include_variables: bool = False,
+    subprograms: dict[str, str] | None = None,
+    external_variables: Any | None = None,
+    m_function_subprograms: dict[int, str] | None = None,
 ) -> Any:
     """Interpret an NC program into an iterator of columnar polars DataFrames.
 

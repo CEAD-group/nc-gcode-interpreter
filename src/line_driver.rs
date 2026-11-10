@@ -867,7 +867,7 @@ fn parse_number(line: &str, i: &mut usize) -> Option<f64> {
 /// to parse), so the fast path must reject it to the grammar.
 const RESERVED_WORDS: &[&str] = &[
     "IF", "ELSE", "ENDIF", "GOTOB", "GOTOF", "GOTOC", "GOTOS", "GOTO", "CASE", "OF", "DEFAULT", "LOOP", "FOR", "WHILE",
-    "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP",
+    "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP", "PROC", "EXTERN", "RET",
 ];
 
 /// The grammar's word operators (op_int_div .. op_or). After a constant

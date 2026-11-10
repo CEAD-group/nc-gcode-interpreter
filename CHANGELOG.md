@@ -4,6 +4,52 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- Subprogram execution (#48). `nc_to_dataframe` and `nc_to_batches` take
+  `subprograms`, a mapping of subprogram name to source text. A call whose
+  name is in the mapping runs that text; any other call stays a
+  `non_returning_function_call` cell as before. Supported: a `PROC` header
+  with by-value parameters (numbers and strings, with defaults), `VAR`
+  parameters and `VAR` array parameters, local `DEF` variables (invisible to
+  callees, gone on return), return on `M17` or `RET`, and nested calls up to
+  16 levels. Rows produced inside a call keep the main-program line of the
+  call in `line_no` and carry two new columns: `subprogram`, the call path
+  (`OUTER/INNER`), and `subprogram_line`, the line inside that subprogram's
+  text. The interpreter does not read files; the caller supplies the texts.
+- `m_function_subprograms`, a mapping of M function number to subprogram
+  name: the subprogram runs at the end of every block that programs that M
+  function, as a control does for a tool-change cycle on `M6`. It does not
+  apply inside the replacement subprogram itself.
+- External variables. `external_variables` takes a provider object with
+  `names`, `read(name, indices)` and `write(name, indices, value)`. Every
+  read or write of a listed name (`$A_IN`, `$A_DBB`, `$AA_IM`, or any other
+  variable name) goes to the provider and is not stored by the interpreter,
+  so a program can branch and wait on machine state the interpreter does not
+  model. Indices arrive as ints, or as the axis name where an axis is the
+  index. With `nc_to_batches` the rows produced so far are yielded before the
+  provider is asked, and the provider is called on the consuming thread, so
+  a simulator can play those rows first. An exception raised by the provider
+  ends the run and propagates unchanged.
+- Rust API: `interpreter::nc_to_table_with` and
+  `interpreter::nc_to_batch_stream_with` take a `subprogram::Extensions`
+  value with the same three extensions; the provider is the
+  `subprogram::ExternalVariables` trait.
+
+### Changed
+
+- `PROC`, `EXTERN` and `RET` are reserved words and no longer read as
+  subprogram calls. A `PROC` header and an `EXTERN` declaration produce no
+  output; `RET` ends the program at the top level like `M17`. Before,
+  `PROC FOO SAVE` was recorded as a call named `SAVE` and `RET` as a call
+  while interpretation continued (part of #105). A main program whose `PROC`
+  header declares parameters is an error.
+- When any of the three extensions is used, the program is interpreted by
+  the grammar path and not the line fast path, which is slower on very large
+  programs. Runs without the extensions are unaffected.
+
 ## [v0.2.10] - 2026-11-10
 
 ### Changed

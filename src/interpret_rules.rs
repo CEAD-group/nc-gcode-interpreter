@@ -222,6 +222,9 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
         }),
         Rule::variable => {
             let (line_no, preview) = get_error_context(&inner_pair, state);
+            if let Some((name, indices)) = external_target(&inner_pair, state)? {
+                return external_result(state.ext.read(&name, &indices), &name, line_no, preview);
+            }
             interpret_variable(inner_pair, state).and_then(|key| {
                 if let Some(value) = state.symbol_table.get(&key).cloned() {
                     Ok(value)
@@ -247,6 +250,10 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
         }
         Rule::variable_array => {
             let (line_no, preview) = get_error_context(&inner_pair, state);
+            // A served name goes to the provider, also for actual positions.
+            if let Some((name, indices)) = external_target(&inner_pair, state)? {
+                return external_result(state.ext.read(&name, &indices), &name, line_no, preview);
+            }
             if let Some(value) = read_actual_position_sysvar(&inner_pair, state)? {
                 return Ok(value);
             }
@@ -763,6 +770,418 @@ fn interpret_tool_selection(
 
     Ok(())
 }
+/// The base name a DEF item declares (`DEF REAL A=1, B[3]`), for local scoping.
+fn declared_base(item: &Pair<Rule>, state: &State) -> Option<String> {
+    match item.as_rule() {
+        Rule::assignment => definition_target_name(item, state),
+        Rule::variable => interpret_variable(item.clone(), state).ok(),
+        Rule::variable_array => interpret_identifier(item.clone().into_inner().next()?).ok(),
+        Rule::assignment_multi => {
+            let array = item.clone().into_inner().next()?;
+            interpret_identifier(array.into_inner().next()?).ok()
+        }
+        _ => None,
+    }
+}
+
+/// If `pair` (a `variable` or `variable_array`) names a variable the external
+/// provider serves, its base name and evaluated indices.
+fn external_target(
+    pair: &Pair<Rule>,
+    state: &mut State,
+) -> Result<Option<(String, Vec<crate::subprogram::ExternalIndex>)>, ParsingError> {
+    use crate::subprogram::ExternalIndex;
+    if !state.ext.has_external() {
+        return Ok(None);
+    }
+    match pair.as_rule() {
+        Rule::variable => {
+            let name = pair.as_str().trim().to_uppercase();
+            Ok(state.ext.is_external(&name).then_some((name, Vec::new())))
+        }
+        Rule::variable_array => {
+            let mut inner = pair.clone().into_inner();
+            let (Some(name_pair), Some(indices_pair)) = (inner.next(), inner.next()) else {
+                return Ok(None);
+            };
+            let name = name_pair.as_str().to_uppercase();
+            if !state.ext.is_external(&name) {
+                return Ok(None);
+            }
+            let mut indices = Vec::new();
+            for index in indices_pair.into_inner() {
+                let text = index.as_str().trim().to_uppercase();
+                // An axis name is passed on as written: its meaning is the provider's.
+                if state.is_axis(&text) {
+                    indices.push(ExternalIndex::Name(text));
+                    continue;
+                }
+                let value = evaluate_expression(index.clone(), state)?;
+                if value.fract() != 0.0 {
+                    return Err(annotate_error(
+                        &index,
+                        "external variable",
+                        format!("index {value} of '{name}' is not an integer"),
+                        state,
+                    ));
+                }
+                indices.push(ExternalIndex::Int(value as i64));
+            }
+            Ok(Some((name, indices)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Turn a provider outcome into the interpreter's error type.
+fn external_result<T>(
+    result: Result<T, crate::subprogram::ExternalError>,
+    name: &str,
+    line_no: usize,
+    preview: String,
+) -> Result<T, ParsingError> {
+    use crate::subprogram::ExternalError;
+    result.map_err(|error| match error {
+        ExternalError::Closed => ParsingError::StreamClosed,
+        ExternalError::Failed(message) => ParsingError::with_context(
+            line_no,
+            preview,
+            "external variable".to_string(),
+            format!("the provider failed on '{name}': {message}"),
+        ),
+    })
+}
+
+/// A PROC header reached in sequence. The main program has no caller, so a
+/// header with parameters there cannot be satisfied.
+fn reject_unbound_parameters(header: &Pair<Rule>, state: &State) -> Result<(), ParsingError> {
+    let has_parameters = header.clone().into_inner().any(|p| p.as_rule() == Rule::proc_params);
+    if has_parameters && state.ext.frames.len() <= 1 {
+        return Err(annotate_error(
+            header,
+            "subprogram header",
+            "this program declares parameters, so it can only run as a subprogram: call it from a main program and pass its text in `subprograms`".to_string(),
+            state,
+        ));
+    }
+    Ok(())
+}
+
+/// One parameter of a PROC header.
+struct ProcParam<'i> {
+    by_reference: bool,
+    is_string: bool,
+    is_array: bool,
+    name: String,
+    default: Option<Pair<'i, Rule>>,
+}
+
+fn proc_params<'i>(header: Option<Pair<'i, Rule>>) -> Vec<ProcParam<'i>> {
+    let Some(params) = header.and_then(|h| h.into_inner().find(|p| p.as_rule() == Rule::proc_params)) else {
+        return Vec::new();
+    };
+    params
+        .into_inner()
+        .map(|param| {
+            let mut spec = ProcParam {
+                by_reference: false,
+                is_string: false,
+                is_array: false,
+                name: String::new(),
+                default: None,
+            };
+            for part in param.into_inner() {
+                match part.as_rule() {
+                    Rule::var_kw => spec.by_reference = true,
+                    Rule::data_type => spec.is_string = part.as_str().to_uppercase().starts_with("STRING"),
+                    Rule::identifier => spec.name = part.as_str().to_uppercase(),
+                    Rule::proc_array => spec.is_array = true,
+                    _ => spec.default = Some(part),
+                }
+            }
+            spec
+        })
+        .collect()
+}
+
+/// The value a parameter starts with, evaluated in the caller's scope.
+enum BoundValue {
+    Number(f64),
+    Text(String),
+    /// VAR scalar: the caller's key and its value.
+    NumberRef(String, f64),
+    TextRef(String, String),
+    /// VAR array: the caller's base name and its elements as (index suffix, value).
+    ArrayRef(String, Vec<(String, f64)>),
+}
+
+/// The numeric value of a call argument or parameter default.
+fn evaluate_call_number(arg: &Pair<Rule>, state: &mut State) -> Result<f64, ParsingError> {
+    // A lone operand is a plain expression; anything else is a string construct.
+    let mut operands = arg.clone().into_inner();
+    if let (Some(operand), None) = (operands.next(), operands.next()) {
+        if let Some(expression) = operand.into_inner().next().filter(|p| p.as_rule() == Rule::expression) {
+            if !expression_is_string(&expression, state) {
+                return evaluate_expression(expression, state);
+            }
+        }
+    }
+    Err(annotate_error(
+        arg,
+        "subprogram call",
+        format!("expected a number but got the string {}", arg.as_str().trim()),
+        state,
+    ))
+}
+
+/// Execute the subprogram `name` for the call `statement`: bind the PROC
+/// parameters, run the body in its own local scope, copy VAR parameters back.
+fn call_subprogram(
+    statement: Pair<Rule>,
+    name: &str,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
+    let (call_line, call_preview) = get_error_context(&statement, state);
+    let arguments = statement.into_inner().nth(1);
+    run_subprogram(name, arguments, call_line, call_preview, output, state)
+}
+
+/// Run the subprogram that replaces an M function programmed in this block,
+/// if one is configured. The replacement does not apply inside itself.
+fn run_m_function_subprograms(
+    block_line: usize,
+    m_codes: &[String],
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
+    for code in m_codes {
+        let Ok(number) = code.trim_start_matches(['M', 'm']).parse::<u32>() else {
+            continue;
+        };
+        let Some(name) = state.ext.m_functions.get(&number).cloned() else {
+            continue;
+        };
+        if state.ext.frames.iter().any(|frame| frame.name == name) {
+            continue;
+        }
+        let preview = state.get_line(block_line).unwrap_or("").to_string();
+        if !state.ext.subprograms.contains_key(&name) {
+            return Err(ParsingError::with_context(
+                block_line,
+                preview,
+                "M function replacement".to_string(),
+                format!("M{number} is mapped to subprogram {name}, which is not among the supplied subprograms"),
+            ));
+        }
+        run_subprogram(&name, None, block_line, preview, output, state)?;
+    }
+    Ok(())
+}
+
+fn run_subprogram(
+    name: &str,
+    arguments: Option<Pair<Rule>>,
+    call_line: usize,
+    call_preview: String,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
+    use pest::Parser;
+    let call_error = |message: String| {
+        ParsingError::with_context(
+            call_line,
+            call_preview.clone(),
+            format!("call of subprogram {name}"),
+            message,
+        )
+    };
+    if state.ext.frames.len() > crate::subprogram::MAX_CALL_DEPTH {
+        return Err(call_error(format!(
+            "calls are nested more than {} levels deep",
+            crate::subprogram::MAX_CALL_DEPTH
+        )));
+    }
+    let subprogram = state
+        .ext
+        .subprograms
+        .get(name)
+        .cloned()
+        .expect("caller checked the name");
+    let text = subprogram.source.as_str();
+    crate::structure_scan::check_structures(text).map_err(|e| call_error(e.to_string()))?;
+    let blocks = crate::types::NCParser::parse(Rule::file, text)
+        .map_err(|e| {
+            let line = match &e.line_col {
+                pest::error::LineColLocation::Pos(pos) => pos.0,
+                pest::error::LineColLocation::Span(start, _) => start.0,
+            };
+            call_error(format!(
+                "line {line} of the subprogram does not parse: {}",
+                crate::interpreter::describe_parse_error(&e)
+            ))
+        })?
+        .next()
+        .and_then(|file| file.into_inner().next())
+        .ok_or_else(|| call_error("the subprogram text is empty".to_string()))?;
+    let blocks: Pair<Rule> = blocks.into();
+    let header = blocks
+        .clone()
+        .into_inner()
+        .flat_map(|block| block.into_inner())
+        .find(|item| item.as_rule() == Rule::proc_header);
+    let params = proc_params(header);
+
+    let arguments: Vec<Pair<Rule>> = arguments
+        .map(|arguments| {
+            // An omitted argument leaves no trace in the parse tree, so
+            // positions after it would shift silently.
+            let raw: String = arguments.as_str().split_whitespace().collect();
+            if raw.starts_with(',') || raw.contains(",,") {
+                return Err(call_error("omitted arguments are not supported".to_string()));
+            }
+            Ok(arguments.into_inner().collect())
+        })
+        .transpose()?
+        .unwrap_or_default();
+    if arguments.len() > params.len() {
+        return Err(call_error(format!(
+            "{} arguments passed, the PROC header declares {}",
+            arguments.len(),
+            params.len()
+        )));
+    }
+
+    // Evaluate everything in the caller's scope before it is hidden.
+    let mut bound: Vec<BoundValue> = Vec::with_capacity(params.len());
+    for (index, param) in params.iter().enumerate() {
+        let argument = arguments.get(index);
+        let value = if param.by_reference {
+            let Some(argument) = argument else {
+                return Err(call_error(format!("VAR parameter {} needs an argument", param.name)));
+            };
+            let key: String = argument.as_str().split_whitespace().collect::<String>().to_uppercase();
+            if param.is_array {
+                let prefix = format!("{key}[");
+                let elements: Vec<(String, f64)> = state
+                    .symbol_table
+                    .iter()
+                    .filter(|(k, _)| k.starts_with(&prefix))
+                    .map(|(k, v)| (k[key.len()..].to_string(), *v))
+                    .collect();
+                if elements.is_empty() {
+                    return Err(call_error(format!(
+                        "'{key}' passed for VAR array parameter {} is not a defined array",
+                        param.name
+                    )));
+                }
+                BoundValue::ArrayRef(key, elements)
+            } else if param.is_string {
+                match state.string_table.get(&key) {
+                    Some(text) => BoundValue::TextRef(key, text.clone()),
+                    None => {
+                        return Err(call_error(format!(
+                            "'{key}' passed for VAR parameter {} is not a defined STRING variable",
+                            param.name
+                        )))
+                    }
+                }
+            } else {
+                match state.symbol_table.get(&key) {
+                    Some(value) => BoundValue::NumberRef(key, *value),
+                    None => {
+                        return Err(call_error(format!(
+                            "'{key}' passed for VAR parameter {} is not a defined variable",
+                            param.name
+                        )))
+                    }
+                }
+            }
+        } else {
+            match argument.or(param.default.as_ref()) {
+                Some(source) if param.is_string => BoundValue::Text(evaluate_string(source.clone(), state)?),
+                Some(source) => BoundValue::Number(evaluate_call_number(source, state)?),
+                // An argument left off the end starts at zero, as on the control.
+                None if param.is_string => BoundValue::Text(String::new()),
+                None => BoundValue::Number(0.0),
+            }
+        };
+        bound.push(value);
+    }
+
+    state.enter_call(name);
+    for (param, value) in params.iter().zip(&bound) {
+        state.declare_local(&param.name);
+        match value {
+            BoundValue::Number(v) | BoundValue::NumberRef(_, v) => {
+                state.symbol_table.insert(param.name.clone(), *v);
+            }
+            BoundValue::Text(t) | BoundValue::TextRef(_, t) => {
+                state.string_table.insert(param.name.clone(), t.clone());
+            }
+            BoundValue::ArrayRef(_, elements) => {
+                for (suffix, v) in elements {
+                    state.symbol_table.insert(format!("{}{suffix}", param.name), *v);
+                }
+            }
+        }
+    }
+    let caller_source = state.swap_source(subprogram.source.clone(), subprogram.line_offsets.clone());
+    let (outer_line, path) = match output.call_context() {
+        Some((line, path)) => (*line, format!("{path}/{name}")),
+        None => (call_line, name.to_string()),
+    };
+    let caller_context = output.set_call_context(Some((outer_line, path)));
+
+    let result = match interpret_blocks(blocks, output, state) {
+        Ok(BlockFlow::Jump(request)) => Err(request.into_not_found_error(state)),
+        Ok(BlockFlow::Continue | BlockFlow::EndProgram) => Ok(()),
+        Err(error) => Err(error),
+    };
+
+    // Read the VAR parameters while the callee's scope still exists.
+    let mut numbers_back: Vec<(String, f64)> = Vec::new();
+    let mut strings_back: Vec<(String, String)> = Vec::new();
+    for (param, value) in params.iter().zip(&bound) {
+        match value {
+            BoundValue::NumberRef(key, _) => {
+                if let Some(v) = state.symbol_table.get(&param.name) {
+                    numbers_back.push((key.clone(), *v));
+                }
+            }
+            BoundValue::TextRef(key, _) => {
+                if let Some(t) = state.string_table.get(&param.name) {
+                    strings_back.push((key.clone(), t.clone()));
+                }
+            }
+            BoundValue::ArrayRef(key, _) => {
+                let prefix = format!("{}[", param.name);
+                for (k, v) in &state.symbol_table {
+                    if k.starts_with(&prefix) {
+                        numbers_back.push((format!("{key}{}", &k[param.name.len()..]), *v));
+                    }
+                }
+            }
+            BoundValue::Number(_) | BoundValue::Text(_) => {}
+        }
+    }
+    state.swap_source(caller_source.0, caller_source.1);
+    output.set_call_context(caller_context);
+    state.leave_call();
+    match result {
+        Ok(()) => {}
+        Err(ParsingError::StreamClosed) => return Err(ParsingError::StreamClosed),
+        Err(error) => return Err(call_error(error.to_string())),
+    }
+    for (key, value) in numbers_back {
+        output.record_variable_change(&key, value);
+        state.symbol_table.insert(key, value);
+    }
+    state.string_table.extend(strings_back);
+    // The rest of the calling block gets a row of its own, after the body's rows.
+    output.start_row(call_line)
+}
+
 fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (&'static str, String) {
     // Log the interpretd function call for debugging
     //println!("Parsed function call: {:?}", function_call);
@@ -833,6 +1252,28 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
         }
         state.string_table.insert(key.clone(), text);
         return Ok((key, None));
+    }
+
+    // A served variable is written to the provider and not stored here.
+    if let Some((name, indices)) = external_target(&variable_pair, state)? {
+        let value = match expression_pair.as_rule() {
+            Rule::expression => evaluate_expression(expression_pair, state)?,
+            _ => {
+                return Err(ParsingError::with_context(
+                    element_line_no,
+                    element_preview,
+                    "external variable".to_string(),
+                    format!("'{name}' is an external variable; only a plain expression can be assigned to it"),
+                ))
+            }
+        };
+        external_result(
+            state.ext.write(&name, &indices, value),
+            &name,
+            element_line_no,
+            element_preview,
+        )?;
+        return Ok((variable_pair.as_str().trim().to_uppercase(), Some(value)));
     }
 
     // All axis values are now stored as LOCAL coordinates.
@@ -1806,6 +2247,11 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
     // precedes the declared names in the grammar).
     let mut is_string = false;
     for pair in pairs {
+        if !state.ext.frames.is_empty() {
+            if let Some(base) = declared_base(&pair, state) {
+                state.declare_local(&base);
+            }
+        }
         match pair.as_rule() {
             Rule::assignment => {
                 let (line_no, preview) = get_error_context(&pair, state);
@@ -2329,6 +2775,8 @@ fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State
             Rule::goto_statement => interpret_goto(pair, state)?,
             Rule::if_goto_statement => interpret_if_goto(pair, state)?,
             Rule::case_statement => interpret_case(pair, state)?,
+            // RET returns like M17; at the top level it ends the program.
+            Rule::return_statement => BlockFlow::EndProgram,
             Rule::gotos_statement => {
                 // GOTOS repeats the program only when the PLC requests it via
                 // <Chan>.basic.out.enableGoToStart; without that request the
@@ -2431,6 +2879,24 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
         let last = output.last_mut().expect("Output vector should not be empty");
         match statement.as_rule() {
             Rule::non_returning_function_call => {
+                if !state.ext.subprograms.is_empty() {
+                    let name = statement
+                        .clone()
+                        .into_inner()
+                        .next()
+                        .map(|p| p.as_str().to_uppercase())
+                        .unwrap_or_default();
+                    if state.ext.subprograms.contains_key(&name) {
+                        // The call stays visible as a marker row ahead of the
+                        // rows its body produces.
+                        last.insert(
+                            "non_returning_function_call",
+                            Value::Str(statement.as_str().trim().to_string()),
+                        );
+                        call_subprogram(statement, &name, output, state)?;
+                        continue;
+                    }
+                }
                 let (line_no, preview) = get_error_context(&statement, state);
                 let (key, value) = interpret_non_returning_function_call(statement);
                 let name = value.split('(').next().unwrap_or("").trim();
@@ -2770,6 +3236,10 @@ pub(crate) fn interpret_block(
                     Rule::control => flow = interpret_control(item, output, state)?,
                     Rule::definition => interpret_definition(item, output, state)?,
                     Rule::frame_op => interpret_frame_op(item, state)?,
+                    // A call binds the header's parameters before the body
+                    // runs; reached in sequence the header does nothing.
+                    Rule::proc_header => reject_unbound_parameters(&item, state)?,
+                    Rule::extern_decl => {}
                     Rule::comment => {
                         let last = output.last_mut().expect("Output vector should not be empty");
                         last.insert("comment", Value::Str(item.as_str().to_string()));
@@ -2789,6 +3259,13 @@ pub(crate) fn interpret_block(
             if had_statements {
                 let last = output.last_mut().expect("Output vector should not be empty");
                 state.finish_block_frame(last, line_no)?;
+                if !state.ext.m_functions.is_empty() {
+                    let m_codes = match last.get("M") {
+                        Some(Value::StrList(codes)) => codes.clone(),
+                        _ => Vec::new(),
+                    };
+                    run_m_function_subprograms(line_no, &m_codes, output, state)?;
+                }
             }
             Ok(flow)
         }
