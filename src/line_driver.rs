@@ -414,7 +414,10 @@ fn interpret_streaming(input: &str, output: &mut Output, state: &mut State) -> R
     // for the decode the indexed driver runs in parallel.
     std::thread::scope(|scope| {
         let (sender, receiver) = std::sync::mpsc::sync_channel::<DecodedChunk>(2);
-        scope.spawn(move || decode_chunks(input, sender));
+        // Executed chunks go back to the decode thread, which refills their
+        // buffers instead of allocating and freeing three per chunk.
+        let (spent_sender, spent) = std::sync::mpsc::channel::<DecodedChunk>();
+        scope.spawn(move || decode_chunks(input, sender, spent));
         // Returning early drops `receiver`, which stops the decode thread.
         for chunk in receiver {
             for (offset, (decoded, line)) in chunk.results.iter().zip(&chunk.lines).enumerate() {
@@ -423,6 +426,7 @@ fn interpret_streaming(input: &str, output: &mut Output, state: &mut State) -> R
                     return Ok(flow);
                 }
             }
+            let _ = spent_sender.send(chunk);
         }
         Ok(BlockFlow::Continue)
     })
@@ -440,16 +444,30 @@ struct DecodedChunk<'a> {
     arena: Vec<Word<'a>>,
 }
 
-fn decode_chunks<'a>(input: &'a str, sender: std::sync::mpsc::SyncSender<DecodedChunk<'a>>) {
+fn decode_chunks<'a>(
+    input: &'a str,
+    sender: std::sync::mpsc::SyncSender<DecodedChunk<'a>>,
+    spent: std::sync::mpsc::Receiver<DecodedChunk<'a>>,
+) {
     let mut lines = input.lines().peekable();
     let mut first_line = 0;
     while lines.peek().is_some() {
-        let mut chunk = DecodedChunk {
-            first_line,
-            lines: lines.by_ref().take(STREAM_CHUNK_LINES).collect(),
-            results: Vec::with_capacity(STREAM_CHUNK_LINES),
-            arena: Vec::with_capacity(STREAM_CHUNK_LINES * 4),
+        let mut chunk = match spent.try_recv() {
+            Ok(mut chunk) => {
+                chunk.lines.clear();
+                chunk.results.clear();
+                chunk.arena.clear();
+                chunk
+            }
+            Err(_) => DecodedChunk {
+                first_line: 0,
+                lines: Vec::with_capacity(STREAM_CHUNK_LINES),
+                results: Vec::with_capacity(STREAM_CHUNK_LINES),
+                arena: Vec::with_capacity(STREAM_CHUNK_LINES * 4),
+            },
         };
+        chunk.first_line = first_line;
+        chunk.lines.extend(lines.by_ref().take(STREAM_CHUNK_LINES));
         for (offset, line) in chunk.lines.iter().enumerate() {
             chunk
                 .results
