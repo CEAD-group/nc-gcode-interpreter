@@ -195,6 +195,18 @@ impl std::fmt::Debug for ExtState {
     }
 }
 
+impl Extensions {
+    /// Names are case-insensitive: two `subprograms` keys for one name would
+    /// shadow each other.
+    pub fn duplicate_subprogram(&self) -> Option<String> {
+        let mut seen = HashSet::new();
+        self.subprograms
+            .keys()
+            .map(|name| name.to_uppercase())
+            .find(|name| !seen.insert(name.clone()))
+    }
+}
+
 impl ExtState {
     pub fn new(extensions: Extensions) -> Self {
         let subprograms = extensions

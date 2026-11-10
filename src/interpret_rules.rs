@@ -1309,6 +1309,7 @@ fn run_subprogram(
     // Read the VAR parameters while the callee's scope still exists.
     let mut numbers_back: Vec<(String, f64)> = Vec::new();
     let mut strings_back: Vec<(String, String)> = Vec::new();
+    let mut written_both_ways: Option<(String, String)> = None;
     for (param, value) in params.iter().zip(&bound) {
         match value {
             // Only a value the subprogram changed goes back, so a direct
@@ -1316,6 +1317,16 @@ fn run_subprogram(
             BoundValue::NumberRef(key, before) => {
                 if let Some(v) = state.symbol_table.get(&param.name) {
                     if v.to_bits() != before.to_bits() {
+                        // The caller's variable is visible here only when it is global and
+                        // the parameter does not shadow it by having the same name.
+                        let direct = *key != param.name
+                            && state
+                                .symbol_table
+                                .get(key)
+                                .is_some_and(|now| now.to_bits() != before.to_bits());
+                        if direct {
+                            written_both_ways = Some((key.clone(), param.name.clone()));
+                        }
                         numbers_back.push((key.clone(), *v));
                     }
                 }
@@ -1349,6 +1360,13 @@ fn run_subprogram(
         Ok(()) => {}
         Err(ParsingError::StreamClosed) => return Err(ParsingError::StreamClosed),
         Err(error) => return Err(call_error(error.to_string())),
+    }
+    // A VAR parameter is copied in and out, not aliased, so the order of the
+    // two writes is lost.
+    if let Some((key, param)) = written_both_ways {
+        return Err(call_error(format!(
+            "the subprogram wrote {key} both directly and through its VAR parameter {param}; that is not supported"
+        )));
     }
     for (key, value) in numbers_back {
         output.record_variable_change(&key, value);
@@ -3138,7 +3156,22 @@ fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State
             Rule::if_goto_statement => interpret_if_goto(pair, state)?,
             Rule::case_statement => interpret_case(pair, state)?,
             // RET returns like M17; at the top level it ends the program.
-            Rule::return_statement => end_of_program(state),
+            Rule::return_statement => {
+                // RET(<target>, ...) continues at a block of the caller.
+                if pair
+                    .clone()
+                    .into_inner()
+                    .any(|part| part.as_rule() == Rule::function_arguments)
+                {
+                    return Err(annotate_error(
+                        &pair,
+                        "RET",
+                        "RET with arguments (a return target) is not supported".to_string(),
+                        state,
+                    ));
+                }
+                end_of_program(state)
+            }
             Rule::gotos_statement => {
                 // GOTOS repeats the program only when the PLC requests it via
                 // <Chan>.basic.out.enableGoToStart; without that request the
@@ -3252,10 +3285,11 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
         if let Some(name) = &state.ext.called_in_block {
             // `NAME P3` or `NAME P=3` repeats the call (manual 4.2.3.3).
             let word: String = statement.as_str().split_whitespace().collect::<String>().to_uppercase();
-            let count = word
-                .strip_prefix('P')
-                .map(|rest| rest.strip_prefix('=').unwrap_or(rest));
-            if count.is_some_and(|count| !count.is_empty() && !count.starts_with(|c: char| c.is_ascii_alphabetic())) {
+            let is_count = word.strip_prefix('P').is_some_and(|rest| {
+                (rest.len() > 1 && rest.starts_with('='))
+                    || (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+            });
+            if is_count {
                 return Err(annotate_error(
                     &statement,
                     "subprogram call",

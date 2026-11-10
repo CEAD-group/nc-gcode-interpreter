@@ -108,6 +108,14 @@ pub fn nc_to_table_with(
         axis_index_map,
         allow_undefined_variables,
     );
+    if let Some(name) = extensions.duplicate_subprogram() {
+        return Err(ParsingError::with_context(
+            0,
+            String::new(),
+            "subprograms".to_string(),
+            format!("more than one entry for {name} (names are not case-sensitive)"),
+        ));
+    }
     state.ext = crate::subprogram::ExtState::new(extensions);
     if let Some(initial_state) = initial_state {
         // Propagate the error instead of exiting: this is library code, and
@@ -326,6 +334,14 @@ pub fn nc_to_batch_stream_with(
         axis_index_map,
         allow_undefined_variables,
     );
+    if let Some(name) = extensions.duplicate_subprogram() {
+        return Err(ParsingError::with_context(
+            0,
+            String::new(),
+            "subprograms".to_string(),
+            format!("more than one entry for {name} (names are not case-sensitive)"),
+        ));
+    }
     let defer_rows = extensions.defer_rows;
     state.ext = crate::subprogram::ExtState::new(extensions);
     if let Some(initial_state) = initial_state {

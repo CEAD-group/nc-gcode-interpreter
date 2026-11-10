@@ -76,6 +76,9 @@ released to PyPI.
 
 ### Changed
 
+- A program that calls `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`, `TRACON` or
+  `TRAFOOF` gets the new `transformation` column, also when it uses none of
+  the new arguments.
 - `PROC`, `EXTERN` and `RET` are reserved words and no longer read as
   subprogram calls. A `PROC` header and an `EXTERN` declaration produce no
   output; `RET` ends the program at the top level like `M17`. Before,
