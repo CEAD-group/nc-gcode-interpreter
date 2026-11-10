@@ -319,16 +319,6 @@ mod python_bindings {
             });
             (names, provider)
         });
-        // Names are case-insensitive; two keys for one name would shadow each other.
-        let mut seen = std::collections::HashSet::new();
-        for name in subprograms.keys() {
-            if !seen.insert(name.to_uppercase()) {
-                return Err(PyErr::new::<PyValueError, _>(format!(
-                    "subprograms has more than one entry for {} (names are not case-sensitive)",
-                    name.to_uppercase()
-                )));
-            }
-        }
         let extensions = Extensions {
             subprograms,
             external,
@@ -336,6 +326,11 @@ mod python_bindings {
             required_subprograms,
             stop_on_setal,
         };
+        if let Some(name) = extensions.duplicate_subprogram() {
+            return Err(PyErr::new::<PyValueError, _>(format!(
+                "subprograms has more than one entry for {name} (names are not case-sensitive)"
+            )));
+        }
         let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, ErrInfo>>(1);
         // Variable-change events are a small sparse side-table sent once at the
         // end; an unbounded channel so the worker never blocks emitting them

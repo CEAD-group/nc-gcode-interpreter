@@ -393,14 +393,14 @@ def test_a_string_cannot_be_assigned_to_an_external_variable():
 
 
 def test_repeat_count_after_a_call_is_an_error():
-    for call in ("FOO P3", "FOO P=3", "FOO(1) P2"):
-        with pytest.raises(NcError, match=r"a repeat count \(P=?\d\) after the call of FOO is not supported"):
-            nc_to_dataframe(f"{call}\nG1 X1\n", subprograms={"FOO": "PROC FOO(REAL Q=0)\nG1 Y1\nM17\n"})
+    for call in ("FOO P3", "FOO P=3", "FOO(1) P2", "FOO P=R1"):
+        with pytest.raises(NcError, match=r"a repeat count \(P=?\w+\) after the call of FOO is not supported"):
+            nc_to_dataframe(f"R1=2\n{call}\nG1 X1\n", subprograms={"FOO": "PROC FOO(REAL Q=0)\nG1 Y1\nM17\n"})
 
 
 def test_save_restores_the_modal_g_functions_of_the_caller():
     body = "PROC FOO SAVE\nG91 G18\nG0 X5\n"
-    df, _ = nc_to_dataframe("G90 G17 G1 X0 F100\nFOO\nG1 X1\n", subprograms={"FOO": body})
+    df, _ = nc_to_dataframe("G90 G17 G1 X0 F100\nFOO\nX1\n", subprograms={"FOO": body})
     after = df.filter(pl.col("subprogram").is_null())[-1]
     assert after["gg14_wp_measure_mode"].item() == "G90"
     assert after["gg06_plane_select"].item() == "G17"
@@ -421,6 +421,14 @@ def test_var_parameter_keeps_a_direct_write_to_the_callers_variable():
     program = "R1=1\nR2=1\nF(R1, R2)\nG1 X=R1 Y=R2\n"
     df, _ = nc_to_dataframe(program, subprograms={"F": "PROC F(VAR REAL PA, VAR REAL PB)\nR1=5\nPB=7\nM17\n"})
     assert (df["X"].to_list()[-1], df["Y"].to_list()[-1]) == (5.0, 7.0)
+    both = "PROC F(VAR REAL PA)\nR1=5\nPA=PA+1\nM17\n"
+    with pytest.raises(NcError, match="wrote R1 both directly and through its VAR parameter PA"):
+        nc_to_dataframe("R1=1\nF(R1)\n", subprograms={"F": both})
+
+
+def test_ret_with_a_return_target_is_an_error():
+    with pytest.raises(NcError, match="RET with arguments"):
+        nc_to_dataframe("FOO\nG1 X1\n", subprograms={"FOO": "G1 Y1\nRET(\"LBL\")\n"})
 
 
 def test_parameter_with_an_axis_name_is_an_error():
