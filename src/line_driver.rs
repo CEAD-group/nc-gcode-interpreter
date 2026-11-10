@@ -123,6 +123,14 @@ enum LineExec<'a, 'i> {
     Blank,
 }
 
+/// A numeric tool selection (`T2`, `T=3`) goes to the row's `T` column, like `T="name"`.
+fn record_tool_number(key: &str, value: f64, output: &mut Output) {
+    if key == "T" {
+        let last = output.last_mut().expect("row was just pushed");
+        last.insert("T", Value::Str(crate::output::tool_number_text(value)));
+    }
+}
+
 /// One type per name (mirrors `interpret_assignment`): assigning a number to
 /// an existing STRING variable is a hard error, also on the fast path.
 fn reject_string_variable(key: &str, state: &State, line_no: usize) -> Result<(), ParsingError> {
@@ -614,6 +622,7 @@ fn execute_decoded(
                         let key = key.to_uppercase();
                         reject_string_variable(&key, state, line.line_no)?;
                         output.record_variable_change(&key, *value);
+                        record_tool_number(&key, *value, output);
                         state.symbol_table.insert(key, *value);
                     }
                 }
@@ -701,6 +710,7 @@ fn execute_decoded(
                         reject_string_variable(&key, state, line.line_no)?;
                         let local_value = increment_local(state, &key, value);
                         output.record_variable_change(&key, local_value);
+                        record_tool_number(&key, local_value, output);
                         state.symbol_table.insert(key, local_value);
                     }
                 }
