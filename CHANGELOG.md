@@ -15,8 +15,44 @@ released to PyPI.
   run only the part after the last checkpoint before the first changed byte,
   with rows, variable events and final state equal to a full run.
   Structure-free, jump-free programs only; others raise `NotResumable`. On a
-  1M-line program an edit of the last line takes 0.04 s instead of 0.5 s
-  (#47).
+  1M-line program an edit of the last line takes 0.04 s instead of 0.5 s.
+  A run keeps at most 1024 checkpoints: past that it keeps every second one
+  and doubles its interval (#47).
+
+## [v0.2.10] - 2026-11-10
+
+### Changed
+
+- `nc_to_batches` and `nc_to_dataframe` do less work per output row. The
+  G-group columns are held as per-batch dictionary codes and written straight
+  to the Arrow string array, instead of one `String` per row per column that
+  the consumer thread then freed; the batch builder finds a cell's column
+  without hashing its name; the streaming driver reuses its decode buffers.
+  Python output is unchanged (same columns, `String` dtype, values and
+  `variable_events`). With `flatten_tolerance`, line numbers and variables on,
+  a 7.2M-row, 442 MiB linear program takes 3.3 s instead of 8.3 s and a
+  22M-row, 1.1 GB program 10.5 s instead of 24 s, at the same peak memory
+  (#89).
+
+- `flatten_tolerance` costs almost nothing on rows that are not curves: the
+  flattener tracked positions with an allocation and a lookup per configured
+  axis for every row, about 2 s on the 7.2M-row program above, now about
+  0.15 s. B-spline flattening reuses one working buffer per curve; a
+  5.4M-row, 380 MB spline program takes 8 s instead of 16 s (#89).
+
+- Rust API: `Column` has a new `Dict(DictColumn)` variant, used for the
+  G-group columns (`values` plus one `u32` code per row,
+  `DictColumn::NULL` for a null cell). Code that matches `Column`
+  exhaustively needs one more arm; `DictColumn::iter` yields the cells as
+  `Option<&str>` (#89).
+
+### Fixed
+
+- A numeric tool selection (`T2`, `T=3`, `T=R1`) now reaches the output table.
+  It is written to the same string `T` column as `T="name"`, as the number's
+  text (`"2"`), on the row of the block that programs it. Before, only named
+  tools appeared and a numeric one was dropped without a warning. The value is
+  still stored as the variable `T` in the final state, as before (#101).
 
 ## [v0.2.9] - 2026-11-01
 

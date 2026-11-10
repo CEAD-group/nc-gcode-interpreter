@@ -2514,6 +2514,9 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                     }
                     None => {
                         state.warn_unsupported_address(&key, line_no);
+                        if key.eq_ignore_ascii_case("T") {
+                            last.insert("T", Value::Str(crate::output::tool_number_text(local_value)));
+                        }
                         output.record_variable_change(&key, local_value);
                     }
                 }

@@ -123,6 +123,14 @@ enum LineExec<'a, 'i> {
     Blank,
 }
 
+/// A numeric tool selection (`T2`, `T=3`) goes to the row's `T` column, like `T="name"`.
+fn record_tool_number(key: &str, value: f64, output: &mut Output) {
+    if key == "T" {
+        let last = output.last_mut().expect("row was just pushed");
+        last.insert("T", Value::Str(crate::output::tool_number_text(value)));
+    }
+}
+
 /// One type per name (mirrors `interpret_assignment`): assigning a number to
 /// an existing STRING variable is a hard error, also on the fast path.
 fn reject_string_variable(key: &str, state: &State, line_no: usize) -> Result<(), ParsingError> {
@@ -457,7 +465,10 @@ fn interpret_streaming(
     // for the decode the indexed driver runs in parallel.
     std::thread::scope(|scope| {
         let (sender, receiver) = std::sync::mpsc::sync_channel::<DecodedChunk>(2);
-        scope.spawn(move || decode_chunks(input, first_line, sender));
+        // Executed chunks go back to the decode thread, which refills their
+        // buffers instead of allocating and freeing three per chunk.
+        let (spent_sender, spent) = std::sync::mpsc::channel::<DecodedChunk>();
+        scope.spawn(move || decode_chunks(input, first_line, sender, spent));
         // Returning early drops `receiver`, which stops the decode thread.
         for chunk in receiver {
             for (offset, (decoded, line)) in chunk.results.iter().zip(&chunk.lines).enumerate() {
@@ -469,6 +480,7 @@ fn interpret_streaming(
                     return Ok(flow);
                 }
             }
+            let _ = spent_sender.send(chunk);
         }
         Ok(BlockFlow::Continue)
     })
@@ -486,16 +498,31 @@ struct DecodedChunk<'a> {
     arena: Vec<Word<'a>>,
 }
 
-fn decode_chunks<'a>(input: &'a str, first_line: usize, sender: std::sync::mpsc::SyncSender<DecodedChunk<'a>>) {
+fn decode_chunks<'a>(
+    input: &'a str,
+    first_line: usize,
+    sender: std::sync::mpsc::SyncSender<DecodedChunk<'a>>,
+    spent: std::sync::mpsc::Receiver<DecodedChunk<'a>>,
+) {
     let mut lines = input.lines().peekable();
     let mut first_line = first_line;
     while lines.peek().is_some() {
-        let mut chunk = DecodedChunk {
-            first_line,
-            lines: lines.by_ref().take(STREAM_CHUNK_LINES).collect(),
-            results: Vec::with_capacity(STREAM_CHUNK_LINES),
-            arena: Vec::with_capacity(STREAM_CHUNK_LINES * 4),
+        let mut chunk = match spent.try_recv() {
+            Ok(mut chunk) => {
+                chunk.lines.clear();
+                chunk.results.clear();
+                chunk.arena.clear();
+                chunk
+            }
+            Err(_) => DecodedChunk {
+                first_line: 0,
+                lines: Vec::with_capacity(STREAM_CHUNK_LINES),
+                results: Vec::with_capacity(STREAM_CHUNK_LINES),
+                arena: Vec::with_capacity(STREAM_CHUNK_LINES * 4),
+            },
         };
+        chunk.first_line = first_line;
+        chunk.lines.extend(lines.by_ref().take(STREAM_CHUNK_LINES));
         for (offset, line) in chunk.lines.iter().enumerate() {
             chunk
                 .results
@@ -668,6 +695,7 @@ fn execute_decoded(
                         let key = key.to_uppercase();
                         reject_string_variable(&key, state, line.line_no)?;
                         output.record_variable_change(&key, *value);
+                        record_tool_number(&key, *value, output);
                         state.symbol_table.insert(key, *value);
                     }
                 }
@@ -755,6 +783,7 @@ fn execute_decoded(
                         reject_string_variable(&key, state, line.line_no)?;
                         let local_value = increment_local(state, &key, value);
                         output.record_variable_change(&key, local_value);
+                        record_tool_number(&key, local_value, output);
                         state.symbol_table.insert(key, local_value);
                     }
                 }

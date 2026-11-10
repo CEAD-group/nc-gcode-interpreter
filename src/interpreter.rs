@@ -1483,6 +1483,7 @@ mod tests {
         let strs = |name: &str| -> Vec<Option<String>> {
             match &table.columns.iter().find(|(n, _)| n == name).unwrap().1 {
                 Column::Str(v) => v.clone(),
+                Column::Dict(v) => v.iter().map(|cell| cell.map(str::to_string)).collect(),
                 other => panic!("column {name} is not a str column: {other:?}"),
             }
         };
