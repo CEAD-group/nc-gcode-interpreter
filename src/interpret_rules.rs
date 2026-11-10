@@ -279,6 +279,15 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
         }
         Rule::expression => evaluate_expression(inner_pair, state),
         Rule::arith_fun => evaluate_arithmetic_function(inner_pair, state),
+        Rule::string_value => Err(annotate_error(
+            &inner_pair,
+            "expression evaluation",
+            format!(
+                "the string {} cannot be used as a number; strings only compare with == and <>",
+                inner_pair.as_str()
+            ),
+            state,
+        )),
         _ => {
             let (line_no, preview) = get_error_context(&inner_pair, state);
             Err(ParsingError::UnexpectedRule {
@@ -483,17 +492,123 @@ fn evaluate_expression(expression: Pair<Rule>, state: &mut State) -> Result<f64,
 /// All tiers produce f64 (BOOL results as 1.0/0.0, like the control's
 /// implicit type conversion).
 fn evaluate_comparison(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> Result<f64, ParsingError> {
-    let mut lhs = evaluate_or(pairs, pos, state)?;
+    let rhs_is_text = lone_primary(pairs, *pos + 2).is_some_and(|p| primary_is_string(&p, state));
+    let mut lhs = comparison_operand(pairs, pos, state, rhs_is_text)?;
     while let Some(pair) = pairs.get(*pos) {
         if pair.as_rule() != Rule::relational_operator {
             break;
         }
         let operator = pair.clone();
         *pos += 1;
-        let rhs = evaluate_or(pairs, pos, state)?;
-        lhs = evaluate_relational_operator(operator, lhs, rhs)? as u8 as f64;
+        let rhs = comparison_operand(pairs, pos, state, matches!(lhs, Operand::Text(_)))?;
+        let result = match (lhs, rhs) {
+            (Operand::Number(a), Operand::Number(b)) => evaluate_relational_operator(operator, a, b)?,
+            // Strings compare for equality only (manual 4.1.3.2).
+            (Operand::Text(a), Operand::Text(b)) => match operator.as_str() {
+                "==" => a == b,
+                "<>" => a != b,
+                other => {
+                    return Err(annotate_error(
+                        &operator,
+                        "comparison",
+                        format!("strings compare with == and <> only, not {other}"),
+                        state,
+                    ))
+                }
+            },
+            _ => {
+                return Err(annotate_error(
+                    &operator,
+                    "comparison",
+                    "a string cannot be compared with a number".to_string(),
+                    state,
+                ))
+            }
+        };
+        lhs = Operand::Number(result as u8 as f64);
     }
-    Ok(lhs)
+    match lhs {
+        Operand::Number(value) => Ok(value),
+        Operand::Text(text) => {
+            let pair = &pairs[(*pos).min(pairs.len()) - 1];
+            Err(annotate_error(
+                pair,
+                "expression evaluation",
+                format!("the string \"{text}\" cannot be used as a number; strings only compare with == and <>"),
+                state,
+            ))
+        }
+    }
+}
+
+/// One side of a comparison.
+enum Operand {
+    Number(f64),
+    Text(String),
+}
+
+/// The operand of `primary` at `at`, if it stands alone as one side of a
+/// comparison (no prefix, no other operator). Plain expressions return None
+/// before any lookup, so only comparisons pay for the string check.
+fn lone_primary<'i>(pairs: &[Pair<'i, Rule>], at: usize) -> Option<Pair<'i, Rule>> {
+    let is_relational = |index: usize| pairs.get(index).map(|p| p.as_rule() == Rule::relational_operator);
+    let before = if at == 0 { None } else { is_relational(at - 1) };
+    let after = is_relational(at + 1);
+    if before == Some(false) || after == Some(false) || (before.is_none() && after.is_none()) {
+        return None;
+    }
+    let pair = pairs.get(at).filter(|p| p.as_rule() == Rule::primary)?;
+    pair.clone().into_inner().next()
+}
+
+/// Whether the operand of a `primary` yields a string: a literal, a STRING
+/// variable, SPRINT/SUBSTR, or one of those in parentheses.
+fn primary_is_string(operand: &Pair<Rule>, state: &State) -> bool {
+    match operand.as_rule() {
+        Rule::string_value => true,
+        Rule::variable => interpret_variable(operand.clone(), state)
+            .map(|k| state.string_table.contains_key(&normalize_reserved_case(k, state)))
+            .unwrap_or(false),
+        Rule::arith_fun => {
+            let name = operand.clone().into_inner().next().map(|n| n.as_str().to_uppercase());
+            matches!(name.as_deref(), Some("SPRINT") | Some("SUBSTR"))
+        }
+        Rule::expression => expression_is_string(operand, state),
+        _ => false,
+    }
+}
+
+/// Evaluate one side of a comparison. A served variable is read as text when
+/// the other side is a string (`want_text`).
+fn comparison_operand(
+    pairs: &[Pair<Rule>],
+    pos: &mut usize,
+    state: &mut State,
+    want_text: bool,
+) -> Result<Operand, ParsingError> {
+    if let Some(operand) = lone_primary(pairs, *pos) {
+        if primary_is_string(&operand, state) {
+            *pos += 1;
+            let text = match operand.as_rule() {
+                Rule::variable => {
+                    let key = normalize_reserved_case(interpret_variable(operand, state)?, state);
+                    state.string_table.get(&key).cloned().unwrap_or_default()
+                }
+                Rule::arith_fun => evaluate_string_function(operand, state)?,
+                _ => evaluate_string(operand, state)?,
+            };
+            return Ok(Operand::Text(text));
+        }
+        if want_text {
+            if let Some((name, indices)) = external_target(&operand, state)? {
+                *pos += 1;
+                let (line_no, preview) = get_error_context(&operand, state);
+                return external_result(state.ext.read_text(&name, &indices), &name, line_no, preview)
+                    .map(Operand::Text);
+            }
+        }
+    }
+    evaluate_or(pairs, pos, state).map(Operand::Number)
 }
 
 /// Validate a bit-by-bit operand: the manual restricts B_AND/B_XOR/B_OR to
@@ -812,7 +927,7 @@ fn external_target(
             for index in indices_pair.into_inner() {
                 let text = index.as_str().trim().to_uppercase();
                 // An axis name is passed on as written: its meaning is the provider's.
-                if state.is_axis(&text) {
+                if state.is_axis(&text) || (is_index_keyword(&text) && !state.symbol_table.contains_key(&text)) {
                     indices.push(ExternalIndex::Name(text));
                     continue;
                 }
@@ -831,6 +946,46 @@ fn external_target(
         }
         _ => Ok(None),
     }
+}
+
+/// Index words that name something on the machine and are no variables: a
+/// machine axis (`AX1`) or a frame component (`$P_UIFR[1, X, TR]`).
+fn is_index_keyword(text: &str) -> bool {
+    matches!(text, "TR" | "FI" | "RT" | "SC" | "MI")
+        || text
+            .strip_prefix("AX")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The terms of a frame chain, arguments evaluated in program order.
+fn frame_terms(chain: Pair<Rule>, state: &mut State) -> Result<Vec<crate::subprogram::FrameTerm>, ParsingError> {
+    use crate::subprogram::{FrameArgument, FrameTerm};
+    let mut terms = Vec::new();
+    for term in chain.into_inner() {
+        let mut parts = term.into_inner();
+        let function = parts
+            .next()
+            .expect("frame_term starts with frame_fun")
+            .as_str()
+            .to_uppercase();
+        let mut arguments = Vec::new();
+        for argument in parts.next().into_iter().flat_map(|args| args.into_inner()) {
+            let text = argument.as_str().trim().to_uppercase();
+            if state.is_axis(&text) || is_index_keyword(&text) {
+                arguments.push(FrameArgument::Axis(text));
+                continue;
+            }
+            let (line_no, preview) = get_error_context(&argument, state);
+            arguments.push(FrameArgument::Number(eval_number_arg(
+                &unwrap_lone_operand(argument),
+                state,
+                line_no,
+                &preview,
+            )?));
+        }
+        terms.push(FrameTerm { function, arguments });
+    }
+    Ok(terms)
 }
 
 /// Turn a provider outcome into the interpreter's error type.
@@ -1221,6 +1376,28 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
         .map(unwrap_lone_operand)
         .ok_or_else(|| ParsingError::InvalidElementCount { expected: 2, actual: 1 })?;
 
+    if expression_pair.as_rule() == Rule::frame_chain {
+        let Some((name, indices)) = external_target(&variable_pair, state)? else {
+            return Err(ParsingError::with_context(
+                element_line_no,
+                element_preview,
+                "frame assignment".to_string(),
+                format!(
+                    "a frame value can only be assigned to a variable served by `external_variables`; '{}' is not",
+                    variable_pair.as_str().trim()
+                ),
+            ));
+        };
+        let frame = frame_terms(expression_pair, state)?;
+        external_result(
+            state.ext.write_frame(&name, &indices, &frame),
+            &name,
+            element_line_no,
+            element_preview,
+        )?;
+        return Ok((variable_pair.as_str().trim().to_uppercase(), None));
+    }
+
     // A string-valued right-hand side: a quoted literal, a `<<` concatenation,
     // or an expression that yields a string (a STRING variable read or a
     // string-returning function such as SPRINT/SUBSTR). All are stored as text.
@@ -1491,20 +1668,9 @@ fn expression_is_string(expression: &Pair<Rule>, state: &State) -> bool {
     let Some(prim) = first.into_inner().next() else {
         return false;
     };
-    match prim.as_rule() {
-        Rule::variable => interpret_variable(prim.clone(), state)
-            .map(|k| state.string_table.contains_key(&normalize_reserved_case(k, state)))
-            .unwrap_or(false),
-        Rule::arith_fun => {
-            let name = prim.into_inner().next().map(|n| n.as_str().to_uppercase());
-            matches!(name.as_deref(), Some("SPRINT") | Some("SUBSTR"))
-        }
-        // Parenthesized: `primary = { ... | "(" ~ expression ~ ")" }` wraps a
-        // nested expression whose own operator count decides string-ness, e.g.
-        // `(DT)` or `(SPRINT(...))`.
-        Rule::expression => expression_is_string(&prim, state),
-        _ => false,
-    }
+    // Parenthesized operands recurse: the nested expression's own operator
+    // count decides string-ness, e.g. `(DT)` or `(SPRINT(...))`.
+    primary_is_string(&prim, state)
 }
 
 /// Evaluate a string-valued construct to its text: a quoted literal, a `<<`
@@ -1544,6 +1710,7 @@ fn evaluate_string(pair: Pair<Rule>, state: &mut State) -> Result<String, Parsin
                         Ok(state.string_table.get(&key).cloned().unwrap_or_default())
                     }
                     Rule::arith_fun => evaluate_string_function(prim, state),
+                    Rule::string_value => evaluate_string(prim, state),
                     // Parenthesized: recurse into the wrapped expression (mirrors
                     // the recursive case in expression_is_string above).
                     Rule::expression => evaluate_string(prim, state),
@@ -2345,6 +2512,7 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
                     output.record_variable_change(&key, 0.0);
                 }
             }
+            Rule::def_attr => {}
             Rule::data_type => {
                 // Numeric types (INT/REAL/BOOL) are all treated as f64;
                 // STRING[n] routes the declared names to the string table.
@@ -2879,14 +3047,31 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
         let last = output.last_mut().expect("Output vector should not be empty");
         match statement.as_rule() {
             Rule::non_returning_function_call => {
-                if !state.ext.subprograms.is_empty() {
+                if state.ext.active() {
                     let name = statement
                         .clone()
                         .into_inner()
                         .next()
                         .map(|p| p.as_str().to_uppercase())
                         .unwrap_or_default();
-                    if state.ext.subprograms.contains_key(&name) {
+                    if !state.ext.subprograms.contains_key(&name) {
+                        if state.ext.required.contains(&name) {
+                            return Err(annotate_error(
+                                &statement,
+                                "subprogram call",
+                                format!("{name} is a required subprogram and is not among the supplied subprograms"),
+                                state,
+                            ));
+                        }
+                        if state.ext.stop_on_setal && name == "SETAL" {
+                            return Err(annotate_error(
+                                &statement,
+                                "alarm",
+                                format!("the program raised an alarm: {}", statement.as_str().trim()),
+                                state,
+                            ));
+                        }
+                    } else {
                         // The call stays visible as a marker row ahead of the
                         // rows its body produces.
                         last.insert(
@@ -2938,6 +3123,9 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                             name, line_no
                         ));
                     }
+                }
+                if let Some(transformation) = crate::output::transformation_value(&value) {
+                    last.insert(crate::output::TRANSFORMATION_COLUMN, Value::Str(transformation));
                 }
                 last.insert(key, Value::Str(value));
             }
@@ -3239,7 +3427,7 @@ pub(crate) fn interpret_block(
                     // A call binds the header's parameters before the body
                     // runs; reached in sequence the header does nothing.
                     Rule::proc_header => reject_unbound_parameters(&item, state)?,
-                    Rule::extern_decl => {}
+                    Rule::extern_decl | Rule::redef_decl => {}
                     Rule::comment => {
                         let last = output.last_mut().expect("Output vector should not be empty");
                         last.insert("comment", Value::Str(item.as_str().to_string()));

@@ -35,8 +35,30 @@ released to PyPI.
   ends the run and propagates unchanged.
 - Rust API: `interpreter::nc_to_table_with` and
   `interpreter::nc_to_batch_stream_with` take a `subprogram::Extensions`
-  value with the same three extensions; the provider is the
+  value with the same extensions; the provider is the
   `subprogram::ExternalVariables` trait.
+- `required_subprograms`: a call of a listed name that is not among
+  `subprograms` is an error that names the call path, where it would
+  otherwise stay an opaque cell.
+- `stop_on_setal`: a `SETAL` call ends the run with an error that carries the
+  call as written and the call path.
+- String comparison with `==` and `<>` in conditions and expressions
+  (`IF (KIND == "MILL")`). Other operators on strings, and a string compared
+  with a number, are errors. A served external variable compared with a
+  string is read from the provider as text (`read` returns a `str`).
+- A frame value assigned to a served external variable
+  (`$P_UIFR[7] = CTRANS(X, 10) : CROT(Z, 90)`) reaches the provider's `write`
+  as `[("CTRANS", ("X", 10.0)), ("CROT", ("Z", 90.0))]`. Assigned to any
+  other variable it is an error.
+- Machine axis names (`AX1`) and frame components (`TR`, `FI`, `RT`, `SC`,
+  `MI`) are passed to the provider as index names.
+- `transformation` column: the last `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`,
+  `TRACON` or `TRAFOOF` call as written, forward-filled like a modal G group.
+  The call also stays in `non_returning_function_call`.
+- Definition files parse: the `DEF` attributes for range, preprocessing stop,
+  access rights, unit and limits (`DEF CHAN APW 4 REAL LLI 0 ULI 10 NAME`),
+  the `CHAR` type, and attribute-only `REDEF` lines are accepted and not
+  interpreted.
 
 ### Changed
 

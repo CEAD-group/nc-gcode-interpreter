@@ -39,6 +39,35 @@ pub enum ExternalError {
 pub trait ExternalVariables: Send {
     fn read(&mut self, name: &str, indices: &[ExternalIndex]) -> Result<f64, ExternalError>;
     fn write(&mut self, name: &str, indices: &[ExternalIndex], value: f64) -> Result<(), ExternalError>;
+    /// The text of a served STRING variable, asked for where the program
+    /// compares it with a string.
+    fn read_text(&mut self, name: &str, _indices: &[ExternalIndex]) -> Result<String, ExternalError> {
+        Err(ExternalError::Failed(format!("{name} is not served as a string")))
+    }
+    /// A frame value assigned to a served variable: `CTRANS(X, 10) : CROT(Z, 90)`.
+    fn write_frame(
+        &mut self,
+        name: &str,
+        _indices: &[ExternalIndex],
+        _frame: &[FrameTerm],
+    ) -> Result<(), ExternalError> {
+        Err(ExternalError::Failed(format!("{name} does not accept a frame")))
+    }
+}
+
+/// One function of a frame chain, with its arguments as written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameTerm {
+    /// CTRANS, CROT, CROTS, CSCALE, CMIRROR or CFINE.
+    pub function: String,
+    pub arguments: Vec<FrameArgument>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FrameArgument {
+    /// An axis identifier, uppercased.
+    Axis(String),
+    Number(f64),
 }
 
 /// Caller-supplied extensions of one run.
@@ -52,6 +81,11 @@ pub struct Extensions {
     /// runs at the end of every block that programs the M function, as the
     /// control does for a tool-change cycle on M6.
     pub m_functions: HashMap<u32, String>,
+    /// Names that must be among `subprograms` when the program calls them; a
+    /// call of any other unknown name stays an opaque output cell.
+    pub required_subprograms: Vec<String>,
+    /// Fail the run at a SETAL call, reporting the alarm and the call path.
+    pub stop_on_setal: bool,
 }
 
 /// A subprogram text with its line-start table, shared across calls.
@@ -87,6 +121,8 @@ type SharedProvider = Arc<Mutex<Box<dyn ExternalVariables>>>;
 pub(crate) struct ExtState {
     pub subprograms: Arc<HashMap<String, Subprogram>>,
     pub m_functions: Arc<HashMap<u32, String>>,
+    pub required: Arc<HashSet<String>>,
+    pub stop_on_setal: bool,
     external_names: Arc<HashSet<String>>,
     provider: Option<SharedProvider>,
     /// The batch sink to flush before a provider call, when rows are streamed.
@@ -130,6 +166,14 @@ impl ExtState {
             .map(|(number, name)| (number, name.to_uppercase()))
             .collect();
         ExtState {
+            required: Arc::new(
+                extensions
+                    .required_subprograms
+                    .iter()
+                    .map(|n| n.to_uppercase())
+                    .collect(),
+            ),
+            stop_on_setal: extensions.stop_on_setal,
             m_functions: Arc::new(m_functions),
             subprograms: Arc::new(subprograms),
             external_names: Arc::new(names),
@@ -141,7 +185,11 @@ impl ExtState {
 
     /// Whether any extension is in use; the line fast path is bypassed then.
     pub fn active(&self) -> bool {
-        !self.subprograms.is_empty() || self.provider.is_some() || !self.m_functions.is_empty()
+        !self.subprograms.is_empty()
+            || self.provider.is_some()
+            || !self.m_functions.is_empty()
+            || !self.required.is_empty()
+            || self.stop_on_setal
     }
 
     pub fn has_external(&self) -> bool {
@@ -176,6 +224,24 @@ impl ExtState {
             .lock()
             .expect("provider mutex poisoned")
             .write(name, indices, value)
+    }
+
+    pub fn read_text(&self, name: &str, indices: &[ExternalIndex]) -> Result<String, ExternalError> {
+        let provider = self.provider.as_ref().expect("external name without provider");
+        self.flush_rows()?;
+        provider
+            .lock()
+            .expect("provider mutex poisoned")
+            .read_text(name, indices)
+    }
+
+    pub fn write_frame(&self, name: &str, indices: &[ExternalIndex], frame: &[FrameTerm]) -> Result<(), ExternalError> {
+        let provider = self.provider.as_ref().expect("external name without provider");
+        self.flush_rows()?;
+        provider
+            .lock()
+            .expect("provider mutex poisoned")
+            .write_frame(name, indices, frame)
     }
 
     /// Start tracking locals: everything defined from here on belongs to the
@@ -276,6 +342,7 @@ mod tests {
                 .filter(|(name, _)| *name == "TOOLCHANGE")
                 .map(|(name, _)| (6, name.to_string()))
                 .collect(),
+            ..Default::default()
         };
         nc_to_table_with(program, None, None, None, 1000, true, None, false, None, extensions)
             .map_err(|e| e.to_string())

@@ -205,3 +205,122 @@ def test_header_declaration_and_return_are_not_calls():
     df, _ = nc_to_dataframe("PROC MAIN SAVE\nEXTERN HELPER(INT)\nG1 X1\nRET\nG1 X2\n")
     assert df["X"].to_list() == [1.0]
     assert "non_returning_function_call" not in df.columns
+
+
+class Station:
+    """Serves a STRING state, a frame variable and machine-axis positions."""
+
+    names = ("STATION_STATE", "$P_UIFR", "$AA_IW")
+
+    def __init__(self, state: str):
+        self.state = state
+        self.writes: list[tuple] = []
+        self.reads: list[tuple] = []
+
+    def read(self, name, indices):
+        self.reads.append((name, indices))
+        if name == "STATION_STATE":
+            return self.state
+        return 12.5
+
+    def write(self, name, indices, value):
+        self.writes.append((name, indices, value))
+
+
+def test_definition_file_attributes_are_accepted_and_ignored():
+    gud = (
+        "DEF CHAN SYNRW REAL REACH[4]\n"
+        "DEF NCK APW 4 INT COUNT\n"
+        "DEF CHAN REAL APWB 7 LLI 0 ULI 100.5 PHU 4 LIMITED = 5\n"
+        "DEF CHAN CHAR CODE\n"
+        "REDEF COUNT APW 7\n"
+        "REDEF LIMITED PRLOC\n"
+    )
+    _, state = nc_to_dataframe("COUNT = COUNT + 2\nREACH[3] = LIMITED\n", initial_state=gud)
+    assert state["symbol_table"]["COUNT"] == 2
+    assert state["symbol_table"]["REACH[3]"] == 5
+    # A name that only starts like an attribute stays a variable.
+    _, state = nc_to_dataframe("DEF REAL CHANNEL = 3\n")
+    assert state["symbol_table"]["CHANNEL"] == 3
+
+
+def test_redef_with_a_value_fails_loudly():
+    with pytest.raises(NcError):
+        nc_to_dataframe("DEF REAL A\nREDEF A INIPO(5)\n")
+
+
+def test_string_comparison_in_conditions():
+    program = (
+        'DEF STRING[20] KIND = "MILL"\n'
+        'IF (KIND == "MILL")\nX1\nENDIF\n'
+        'IF KIND <> "MILL"\nX2\nENDIF\n'
+        'IF ("MILL" == KIND) AND (KIND <> "mill")\nX3\nENDIF\n'
+        'R1 = (KIND == "DRILL")\n'
+    )
+    df, state = nc_to_dataframe(program)
+    assert df["X"].drop_nulls().to_list() == [1.0, 3.0]
+    assert state["symbol_table"]["R1"] == 0
+
+
+@pytest.mark.parametrize(
+    ("line", "message"),
+    [
+        ('IF KIND < "MILL" GOTOF END', "== and <>"),
+        ("IF KIND == 1 GOTOF END", "compared with a number"),
+        ('R1 = 1 + "A"', "cannot be used as a number"),
+    ],
+)
+def test_string_misuse_in_expressions_is_an_error(line, message):
+    with pytest.raises(NcError, match=message):
+        nc_to_dataframe(f'DEF STRING[20] KIND = "MILL"\n{line}\nEND:\n')
+
+
+def test_served_string_variable_is_read_as_text_in_a_comparison():
+    program = 'IF (STATION_STATE == "READY")\nX1\nELSE\nX2\nENDIF\n'
+    station = Station("READY")
+    df, _ = nc_to_dataframe(program, external_variables=station)
+    assert df["X"].drop_nulls().to_list() == [1.0]
+    assert station.reads == [("STATION_STATE", ())]
+    # A number where the program needs text is the provider's error.
+    station.read = lambda name, indices: 1.0
+    with pytest.raises(TypeError):
+        nc_to_dataframe(program, external_variables=station)
+
+
+def test_frame_assignment_reaches_the_provider():
+    station = Station("READY")
+    program = "R1 = 90\n$P_UIFR[7] = CTRANS(X, 10, Y, R1 / 2) : CROT(Z, R1)\nX = $AA_IW[AX1]\n"
+    df, _ = nc_to_dataframe(program, external_variables=station)
+    assert station.writes == [("$P_UIFR", (7,), [("CTRANS", ("X", 10.0, "Y", 45.0)), ("CROT", ("Z", 90.0))])]
+    assert station.reads == [("$AA_IW", ("AX1",))]
+    assert df["X"].drop_nulls().to_list() == [12.5]
+    with pytest.raises(NcError, match="external_variables"):
+        nc_to_dataframe("$P_UIFR[7] = CTRANS(X, 10)\n")
+
+
+def test_transformation_column_is_modal():
+    program = "X1\nTRAORI(1)\nX2\nCALLED(1)\nX3\nTRAFOOF\nX4\n"
+    df, _ = nc_to_dataframe(program)
+    assert df["transformation"].to_list() == [None, "TRAORI(1)", "TRAORI(1)", "TRAORI(1)", "TRAORI(1)", "TRAFOOF", "TRAFOOF"]
+    assert df["non_returning_function_call"].drop_nulls().to_list() == ["TRAORI(1)", "CALLED(1)", "TRAFOOF"]
+    assert "transformation" not in nc_to_dataframe("X1\nCALLED(1)\n")[0].columns
+
+
+def test_stop_on_setal_reports_the_alarm_and_the_call_path():
+    cycles = {"OUTER": "PROC OUTER\nINNER\nM17\n", "INNER": 'PROC INNER\nX1\nSETAL(65010, "no tool")\nX2\nM17\n'}
+    df, _ = nc_to_dataframe("OUTER\n", subprograms=cycles)
+    assert df["X"].drop_nulls().unique(maintain_order=True).to_list() == [1.0, 2.0]
+    with pytest.raises(NcError) as error:
+        nc_to_dataframe("OUTER\n", subprograms=cycles, stop_on_setal=True)
+    text = str(error.value)
+    assert 'SETAL(65010, "no tool")' in text
+    assert "OUTER" in text and "INNER" in text
+
+
+def test_required_subprogram_that_is_not_supplied_is_an_error():
+    cycles = {"OUTER": "PROC OUTER\nATTACH(2)\nM17\n"}
+    df, _ = nc_to_dataframe("OUTER\n", subprograms=cycles)
+    assert "ATTACH(2)" in df["non_returning_function_call"].to_list()
+    with pytest.raises(NcError, match="ATTACH is a required subprogram") as error:
+        nc_to_dataframe("OUTER\n", subprograms=cycles, required_subprograms=["attach"])
+    assert "OUTER" in str(error.value)

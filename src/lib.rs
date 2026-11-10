@@ -69,7 +69,7 @@ mod python_bindings {
     use crate::interpreter::{nc_to_batch_stream_with, nc_to_row_stream, SourceText};
     use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table, VariableEvents};
     use crate::state::FinalState;
-    use crate::subprogram::{Extensions, ExternalError, ExternalIndex, ExternalVariables};
+    use crate::subprogram::{Extensions, ExternalError, ExternalIndex, ExternalVariables, FrameArgument, FrameTerm};
     use crate::types::Value;
 
     pyo3::create_exception!(
@@ -301,6 +301,8 @@ mod python_bindings {
         subprograms: HashMap<String, String>,
         external_names: Option<Vec<String>>,
         m_functions: HashMap<u32, String>,
+        required_subprograms: Vec<String>,
+        stop_on_setal: bool,
     ) -> PyResult<(
         mpsc::Receiver<WorkerMessage>,
         mpsc::Receiver<Result<FinalState, ErrInfo>>,
@@ -321,6 +323,8 @@ mod python_bindings {
             subprograms,
             external,
             m_functions,
+            required_subprograms,
+            stop_on_setal,
         };
         let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, ErrInfo>>(1);
         // Variable-change events are a small sparse side-table sent once at the
@@ -370,10 +374,21 @@ mod python_bindings {
             indices: Vec<ExternalIndex>,
             reply: mpsc::SyncSender<Result<f64, String>>,
         },
+        ReadText {
+            name: String,
+            indices: Vec<ExternalIndex>,
+            reply: mpsc::SyncSender<Result<String, String>>,
+        },
         Write {
             name: String,
             indices: Vec<ExternalIndex>,
             value: f64,
+            reply: mpsc::SyncSender<Result<(), String>>,
+        },
+        WriteFrame {
+            name: String,
+            indices: Vec<ExternalIndex>,
+            frame: Vec<FrameTerm>,
             reply: mpsc::SyncSender<Result<(), String>>,
         },
     }
@@ -420,6 +435,61 @@ mod python_bindings {
                 answer,
             )
         }
+
+        fn read_text(&mut self, name: &str, indices: &[ExternalIndex]) -> Result<String, ExternalError> {
+            let (reply, answer) = mpsc::sync_channel(1);
+            self.ask(
+                WorkerMessage::ReadText {
+                    name: name.to_string(),
+                    indices: indices.to_vec(),
+                    reply,
+                },
+                answer,
+            )
+        }
+
+        fn write_frame(
+            &mut self,
+            name: &str,
+            indices: &[ExternalIndex],
+            frame: &[FrameTerm],
+        ) -> Result<(), ExternalError> {
+            let (reply, answer) = mpsc::sync_channel(1);
+            self.ask(
+                WorkerMessage::WriteFrame {
+                    name: name.to_string(),
+                    indices: indices.to_vec(),
+                    frame: frame.to_vec(),
+                    reply,
+                },
+                answer,
+            )
+        }
+    }
+
+    /// A frame chain as the Python provider receives it:
+    /// `[("CTRANS", ("X", 10.0)), ("CROT", ("Z", 90.0))]`.
+    fn frame_to_py<'py>(py: Python<'py>, frame: &[FrameTerm]) -> PyResult<Bound<'py, PyList>> {
+        let terms: Vec<Py<PyAny>> = frame
+            .iter()
+            .map(|term| {
+                let arguments: Vec<Py<PyAny>> = term
+                    .arguments
+                    .iter()
+                    .map(|argument| {
+                        Ok(match argument {
+                            FrameArgument::Axis(a) => a.into_pyobject(py)?.into_any().unbind(),
+                            FrameArgument::Number(n) => n.into_pyobject(py)?.into_any().unbind(),
+                        })
+                    })
+                    .collect::<PyResult<_>>()?;
+                Ok((term.function.as_str(), PyTuple::new(py, arguments)?)
+                    .into_pyobject(py)?
+                    .into_any()
+                    .unbind())
+            })
+            .collect::<PyResult<_>>()?;
+        PyList::new(py, terms)
     }
 
     /// The index tuple handed to the Python provider: ints and axis names.
@@ -791,6 +861,25 @@ mod python_bindings {
                             .and_then(|value| value.extract::<f64>());
                         self.reply(py, reply, answer)?;
                     }
+                    WorkerMessage::ReadText { name, indices, reply } => {
+                        let answer = self
+                            .provider(py)?
+                            .call_method1("read", (name, indices_to_py(py, &indices)?))
+                            .and_then(|value| value.extract::<String>());
+                        self.reply(py, reply, answer)?;
+                    }
+                    WorkerMessage::WriteFrame {
+                        name,
+                        indices,
+                        frame,
+                        reply,
+                    } => {
+                        let answer = self
+                            .provider(py)?
+                            .call_method1("write", (name, indices_to_py(py, &indices)?, frame_to_py(py, &frame)?))
+                            .map(|_| ());
+                        self.reply(py, reply, answer)?;
+                    }
                     WorkerMessage::Write {
                         name,
                         indices,
@@ -843,7 +932,7 @@ mod python_bindings {
     /// thread. Wrapping each with `pl.DataFrame` and concatenating reconstructs
     /// `nc_to_dataframe`.
     #[pyfunction]
-    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false, subprograms = None, external_variables = None, m_function_subprograms = None))]
+    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false, subprograms = None, external_variables = None, m_function_subprograms = None, required_subprograms = None, stop_on_setal = false))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_batches(
         input: PyBackedStr,
@@ -862,6 +951,8 @@ mod python_bindings {
         subprograms: Option<HashMap<String, String>>,
         external_variables: Option<Py<PyAny>>,
         m_function_subprograms: Option<HashMap<u32, String>>,
+        required_subprograms: Option<Vec<String>>,
+        stop_on_setal: bool,
         py: Python<'_>,
     ) -> PyResult<NcBatchIterator> {
         // The provider declares the variable names it serves.
@@ -890,6 +981,8 @@ mod python_bindings {
             subprograms.unwrap_or_default(),
             external_names,
             m_function_subprograms.unwrap_or_default(),
+            required_subprograms.unwrap_or_default(),
+            stop_on_setal,
         )?;
 
         Ok(NcBatchIterator {

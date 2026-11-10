@@ -20,7 +20,7 @@ comment             = @{ ";" ~ (!newline ~ ANY)* }
 // therefore can never parse as a statement. definition and frame_op must
 // stay in front: DEF/TRANS/... are not reserved words, so a statement would
 // otherwise swallow them as function calls or assignments.
-block               =  { block_number_set? ~ (label_def ~ !structure_line_kw)? ~ ((proc_header | extern_decl | definition | frame_op | statement+ | control) ~ !body_end_kw)? ~ comment? }
+block               =  { block_number_set? ~ (label_def ~ !structure_line_kw)? ~ ((proc_header | extern_decl | redef_decl | definition | frame_op | statement+ | control) ~ !body_end_kw)? ~ comment? }
 // A block with a control-structure keyword carries no label (alarm 12630); a
 // conditional jump (IF ... GOTO) is no structure and keeps its label.
 structure_line_kw   = _{ body_end_kw | structure_head_kw | (block_if_kw ~ condition ~ comment? ~ (newline | EOI)) }
@@ -119,8 +119,19 @@ return_statement = { ret_kw ~ ("(" ~ function_arguments? ~ ")")? }
 ret_kw           = @{ ^"RET" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // local variable definitions
-definition = { ^"DEF" ~ data_type ~ (assignment_multi | assignment | variable_array | variable) ~ ("," ~ (assignment_multi | assignment | variable_array | variable))* }
-data_type  = { ^"INT" | ^"REAL" | ^"BOOL" | (^"STRING" ~ "[" ~ ASCII_DIGIT+ ~ "]") }
+// The attributes of a definition-file DEF (range, preprocessing stop, access
+// rights, unit, limits; manual 4.1.1.4) are accepted and not interpreted.
+definition = { ^"DEF" ~ def_attr* ~ data_type ~ def_attr* ~ (assignment_multi | assignment | variable_array | variable) ~ ("," ~ (assignment_multi | assignment | variable_array | variable))* }
+data_type  = { ^"INT" | ^"REAL" | ^"BOOL" | ^"CHAR" | (^"STRING" ~ "[" ~ ASCII_DIGIT+ ~ "]") }
+def_attr   = @{
+    ((^"NCK" | ^"CHAN" | ^"SYNRW" | ^"SYNR" | ^"SYNW" | ^"INIPO" | ^"INIRE" | ^"INICF" | ^"PRLOC") ~ !(ASCII_ALPHANUMERIC | "_"))
+  | ((^"APROP" | ^"APWOP" | ^"APRP" | ^"APWP" | ^"APRB" | ^"APWB" | ^"APR" | ^"APW" | ^"PHU") ~ (" " | "\t")* ~ ASCII_DIGIT+ ~ !(ASCII_ALPHANUMERIC | "_"))
+  | ((^"LLI" | ^"ULI") ~ (" " | "\t")* ~ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT*)? ~ !(ASCII_ALPHANUMERIC | "_"))
+}
+// REDEF changes attributes only (manual 4.1.1.5); nothing is executed. A
+// parenthesized value is left unparsed so it fails loudly.
+redef_decl = { redef_kw ~ (!(newline | ";" | "(") ~ ANY)* }
+redef_kw   = @{ ^"REDEF" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 // basic math expression interpreter
 expression =  { prefix* ~ primary ~ (op ~ prefix* ~ primary)* }
@@ -151,6 +162,7 @@ reserved   = _{
   | ^"PROC"
   | ^"EXTERN"
   | ^"RET"
+  | ^"REDEF"
 }
 
 // Sinumerik user variables may begin with an underscore: CAM post-processors
@@ -182,11 +194,11 @@ assignment     = {
   // The variable may be an axis or a normal variable; sorted out after parsing.
   // One rule for every right-hand side (expression, quoted string, << chain)
   // so it is parsed once: separate alternatives parsed it twice (#78).
-  | (variable ~ "=" ~ (axis_increment | string_expression))
+  | (variable ~ "=" ~ (axis_increment | frame_chain | string_expression))
 
   // Never an axis: a numeric or string element, or the single-character write
   // STRING[<index>] = "<char>" (manual 4.1.4.8).
-  | (variable_array ~ "=" ~ string_expression)
+  | (variable_array ~ "=" ~ (frame_chain | string_expression))
 }
 axis_increment = { ^"IC" ~ "(" ~ expression ~ ")" }
 // A quoted string. Compound-atomic ($): no implicit WHITESPACE is skipped
@@ -241,7 +253,8 @@ neg              =  { "-" }
 // identifiers such as NOTCH out of the operator rule; prefixes are tried
 // before `primary`, so a bare NOT never parses as a variable read.
 not_op           = @{ ^"NOT" ~ !(ASCII_ALPHANUMERIC | "_") }
-primary          =  { arith_fun | value | variable_array | variable | "(" ~ expression ~ ")" }
+// A quoted string is an operand only of == and <> (manual 4.1.3.2).
+primary          =  { arith_fun | value | string_value | variable_array | variable | "(" ~ expression ~ ")" }
 float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* ~ !ASCII_ALPHA } // Ensure floats are not followed by letters
 integer          = @{ "-"? ~ ASCII_DIGIT+ ~ !ASCII_ALPHA } // Ensure integers are not followed by letters
 // Any call-shaped name is accepted here; the interpreter dispatches on the
@@ -259,6 +272,11 @@ tool_selection = { ^"T" ~ "=" ~ string_value }
 // instruction like `TRANS` resets the frame component). The keyword is
 // atomic so that identifiers such as TRANSFORM cannot half-match.
 frame_op = { frame_kw ~ assignment* }
+// A frame value: CTRANS(X, 10) : CROT(Z, 90). Only assignable to a variable
+// the external provider serves.
+frame_chain = { frame_term ~ (":" ~ frame_term)* }
+frame_term  = { frame_fun ~ "(" ~ function_arguments? ~ ")" }
+frame_fun   = @{ (^"CTRANS" | ^"CROTS" | ^"CROT" | ^"CSCALE" | ^"CMIRROR" | ^"CFINE") ~ !(ASCII_ALPHANUMERIC | "_") }
 frame_kw = @{
     (^"AMIRROR" | ^"AROTS" | ^"AROT" | ^"ASCALE" | ^"ATRANS" | ^"CROTS" | ^"MIRROR" | ^"ROTS" | ^"ROT" | ^"SCALE" | ^"TRANS") ~ !(ASCII_ALPHANUMERIC | "_")
 }

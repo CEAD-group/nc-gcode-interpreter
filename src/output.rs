@@ -920,12 +920,26 @@ pub const SUBPROGRAM_COLUMN: &str = "subprogram";
 /// The line of that row's block inside the innermost subprogram's text.
 pub const SUBPROGRAM_LINE_COLUMN: &str = "subprogram_line";
 
+/// The kinematic transformation in effect: the last TRAORI, TRANSMIT, TRACYL,
+/// TRAANG, TRACON or TRAFOOF call as written. Modal, so forward-filled.
+pub const TRANSFORMATION_COLUMN: &str = "transformation";
+
+/// The [`TRANSFORMATION_COLUMN`] value of a call, if it selects or deselects
+/// a transformation: uppercased, without whitespace.
+pub fn transformation_value(call: &str) -> Option<String> {
+    let name = call.split('(').next().unwrap_or("").trim();
+    ["TRAORI", "TRANSMIT", "TRACYL", "TRAANG", "TRACON", "TRAFOOF"]
+        .iter()
+        .any(|kw| kw.eq_ignore_ascii_case(name))
+        .then(|| call.split_whitespace().collect::<String>().to_uppercase())
+}
+
 pub fn is_string_column(name: &str) -> bool {
     MODAL_G_GROUPS.contains(&name)
         || NON_MODAL_G_GROUPS.contains(&name)
         || matches!(
             name,
-            "T" | "non_returning_function_call" | "comment" | SUBPROGRAM_COLUMN
+            "T" | "non_returning_function_call" | "comment" | SUBPROGRAM_COLUMN | TRANSFORMATION_COLUMN
         )
 }
 
@@ -940,7 +954,7 @@ pub fn is_forward_filled_column(name: &str) -> bool {
         && name != SUBPROGRAM_LINE_COLUMN
         && !is_string_column(name)
         && !BLOCK_ADDRESSES.contains(&name);
-    is_value || MODAL_G_GROUPS.contains(&name)
+    is_value || MODAL_G_GROUPS.contains(&name) || name == TRANSFORMATION_COLUMN
 }
 
 /// Per-block dwell-time column: on a `G4` block the `F` word is the dwell
@@ -1015,7 +1029,12 @@ fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
                 && *name != DWELL_COLUMN
                 && !matches!(
                     *name,
-                    "T" | "M" | "non_returning_function_call" | "comment" | SUBPROGRAM_COLUMN | SUBPROGRAM_LINE_COLUMN
+                    "T" | "M"
+                        | "non_returning_function_call"
+                        | "comment"
+                        | SUBPROGRAM_COLUMN
+                        | SUBPROGRAM_LINE_COLUMN
+                        | TRANSFORMATION_COLUMN
                 )
         })
         .collect();
@@ -1028,6 +1047,7 @@ fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
     push_if_present(intern_column(DWELL_COLUMN), &mut ordered);
     push_if_present(intern_column(FLATTENED_COLUMN), &mut ordered);
     for name in [
+        TRANSFORMATION_COLUMN,
         "T",
         "M",
         "non_returning_function_call",

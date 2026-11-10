@@ -742,6 +742,9 @@ fn execute_decoded(
                     ));
                 }
                 let last = output.last_mut().expect("row was just pushed");
+                if let Some(transformation) = crate::output::transformation_value(value) {
+                    last.insert(crate::output::TRANSFORMATION_COLUMN, Value::Str(transformation));
+                }
                 last.insert("non_returning_function_call", Value::Str(value.to_string()));
             }
             Word::GCommand(group, as_written) => {
@@ -867,7 +870,7 @@ fn parse_number(line: &str, i: &mut usize) -> Option<f64> {
 /// to parse), so the fast path must reject it to the grammar.
 const RESERVED_WORDS: &[&str] = &[
     "IF", "ELSE", "ENDIF", "GOTOB", "GOTOF", "GOTOC", "GOTOS", "GOTO", "CASE", "OF", "DEFAULT", "LOOP", "FOR", "WHILE",
-    "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP", "PROC", "EXTERN", "RET",
+    "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP", "PROC", "EXTERN", "RET", "REDEF",
 ];
 
 /// The grammar's word operators (op_int_div .. op_or). After a constant
