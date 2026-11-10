@@ -75,6 +75,10 @@ released to PyPI.
 
 ### Changed
 
+- Two subprogram calls in one block (`FOO BAR`) are an error. Before, the
+  second silently replaced the first. Keyword G commands such as `SOFT`
+  next to a call are unaffected (part of #105).
+
 - `PROC`, `EXTERN` and `RET` are reserved words and no longer read as
   subprogram calls. A `PROC` header and an `EXTERN` declaration produce no
   output; `RET` ends the program at the top level like `M17`. Before,

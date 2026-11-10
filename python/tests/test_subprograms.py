@@ -390,3 +390,16 @@ def test_pcall_calls_the_named_subprogram(capfd):
     assert "PCALL path '/_N_WKS_DIR/_N_SHAFT_WPD/' (line 1) is not interpreted" in capfd.readouterr().err
     with pytest.raises(NcError):
         nc_to_dataframe("PCALL\n")
+
+
+@pytest.mark.parametrize("line", ["FOO BAR", "FOO(1) BAR(2)", "G1 X1 FOO TRAFOOF", "FOO P2 BAR"])
+def test_two_calls_in_one_block_are_an_error(line):
+    with pytest.raises(NcError, match="in the same block"):
+        nc_to_dataframe(f"G1 X0\n{line}\n")
+    with pytest.raises(NcError, match="in the same block"):
+        nc_to_dataframe(f"G1 X0\n{line}\n", subprograms={"FOO": "G1 X2\n"})
+
+
+def test_keyword_g_commands_next_to_a_call_stay_g_commands():
+    df, _ = nc_to_dataframe("G1 X0\nSOFT FOO\n")
+    assert df["non_returning_function_call"].drop_nulls().to_list() == ["FOO"]

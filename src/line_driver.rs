@@ -1543,6 +1543,8 @@ mod tests {
         ] {
             assert_paths_agree(program, false);
         }
+        // a second call in a block: identical error on both paths
+        assert_paths_agree("X1\nFOO BAR", false);
         // frame keyword mid-block: identical UnsupportedStatement error
         assert_paths_agree("G1 CROTS X0", false);
     }

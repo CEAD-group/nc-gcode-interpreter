@@ -1458,6 +1458,43 @@ fn call_repetition_count(pair: Pair<Rule>, state: &mut State) -> Result<u32, Par
     Ok(value as u32)
 }
 
+/// A block holds one subprogram call: the output row has one call cell, and
+/// a second call would silently replace the first.
+pub(crate) fn reject_second_call(block: &Pair<Rule>, state: &State) -> Result<(), ParsingError> {
+    let mut first: Option<Pair<Rule>> = None;
+    for statement in block.clone().into_inner().filter(|p| p.as_rule() == Rule::statement) {
+        let Some(call) = statement
+            .into_inner()
+            .next()
+            .filter(|p| p.as_rule() == Rule::non_returning_function_call)
+        else {
+            continue;
+        };
+        let parts = call_parts(&call);
+        let is_g_keyword = !parts.text.contains('(')
+            && !parts.pcall
+            && parts.repetitions.is_none()
+            && crate::modal_groups::classify_g_command(&parts.name).is_some();
+        if is_g_keyword {
+            continue;
+        }
+        if let Some(first) = &first {
+            return Err(annotate_error(
+                &call,
+                "subprogram call",
+                format!(
+                    "{} follows the call {} in the same block; program one call per block",
+                    call.as_str().trim(),
+                    first.as_str().trim()
+                ),
+                state,
+            ));
+        }
+        first = Some(call);
+    }
+    Ok(())
+}
+
 /// Axis and block-address names are case-insensitive; normalize them to
 /// uppercase so state lookups and output columns are consistent regardless
 /// of the case used in the program (`x=10` must hit the same axis, column and
@@ -3643,6 +3680,7 @@ pub(crate) fn interpret_block(
         Rule::block => {
             // Start this block's output row, flushing the previous one.
             let line_no = element.line_col().0;
+            reject_second_call(&element, state)?;
             output.start_row(line_no)?;
 
             let mut flow = BlockFlow::Continue;

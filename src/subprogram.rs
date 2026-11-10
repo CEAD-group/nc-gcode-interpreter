@@ -451,6 +451,12 @@ mod tests {
     }
 
     #[test]
+    fn second_call_in_a_block_is_an_error() {
+        let error = run("FOO BAR\n", &[("FOO", "G1 X1\n")]).unwrap_err();
+        assert!(error.contains("BAR follows the call FOO in the same block"), "{error}");
+    }
+
+    #[test]
     fn header_and_return_are_not_calls() {
         let (table, _) = run("PROC MAIN SAVE\nEXTERN FOO(INT)\nG1 X1\nRET\nX2\n", &[]).unwrap();
         assert_eq!(floats(&table, "X"), [Some(1.0)]);
