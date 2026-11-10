@@ -1347,11 +1347,13 @@ fn run_subprogram_pass(
             BoundValue::NumberRef(key, before) => {
                 if let Some(v) = state.symbol_table.get(&param.name) {
                     if v.to_bits() != before.to_bits() {
-                        // The caller's variable is visible here only when it is global.
-                        let direct = state
-                            .symbol_table
-                            .get(key)
-                            .is_some_and(|now| now.to_bits() != before.to_bits());
+                        // The caller's variable is visible here only when it is global and
+                        // the parameter does not shadow it by having the same name.
+                        let direct = *key != param.name
+                            && state
+                                .symbol_table
+                                .get(key)
+                                .is_some_and(|now| now.to_bits() != before.to_bits());
                         if direct {
                             written_both_ways = Some((key.clone(), param.name.clone()));
                         }

@@ -504,6 +504,17 @@ def test_var_parameter_keeps_a_direct_write_to_the_callers_variable():
         nc_to_dataframe("R1=1\nF(R1)\n", subprograms={"F": both})
 
 
+def test_var_parameter_named_like_the_callers_variable():
+    """The parameter shadows the caller's variable; writing it is not a direct write."""
+    program = "DEF BOOL FLAG\nFLAG = FALSE\nSUB(FLAG)\nIF FLAG\nX1\nENDIF\n"
+    for body in ("PROC SUB(VAR BOOL FLAG)\nFLAG = TRUE\nM17\n", "PROC SUB(VAR BOOL OUTV)\nOUTV = TRUE\nM17\n"):
+        df, _ = nc_to_dataframe(program, subprograms={"SUB": body})
+        assert df["X"].to_list()[-1] == 1.0
+    # The same with a global the caller passes under its own name.
+    df, _ = nc_to_dataframe("R1=1\nSUB(R1)\nG1 X=R1\n", subprograms={"SUB": "PROC SUB(VAR REAL R1)\nR1=4\nM17\n"})
+    assert df["X"].to_list()[-1] == 4.0
+
+
 def test_ret_with_a_return_target_is_an_error():
     with pytest.raises(NcError, match="RET with arguments"):
         nc_to_dataframe("FOO\nG1 X1\n", subprograms={"FOO": "G1 Y1\nRET(\"LBL\")\n"})
