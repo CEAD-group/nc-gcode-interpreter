@@ -43,7 +43,7 @@ def apply(matrix, point):
 
 def test_trans_then_arot_rotates_about_the_translated_origin():
     df, state = nc_to_dataframe(
-        nc_lines("G1 X0 Y0 Z0", "TRANS X10 Y20", "AROT Z90", "G1 X1 Y0")
+        nc_lines("G1 F1000 X0 Y0 Z0", "TRANS X10 Y20", "AROT Z90", "G1 F1000 X1 Y0")
     )
     # Local +X points along machine +Y after a +90 turn about Z.
     assert_xyz(df, (10.0, 21.0, 0.0))
@@ -55,7 +55,7 @@ def test_trans_then_arot_rotates_about_the_translated_origin():
 def test_rot_replaces_the_whole_frame_including_trans():
     """ROT is absolute: it deletes a previously programmed TRANS (3.12.2.1)."""
     df, state = nc_to_dataframe(
-        nc_lines("G1 X0 Y0 Z0", "TRANS X10", "ROT Z90", "G1 X1 Y0")
+        nc_lines("G1 F1000 X0 Y0 Z0", "TRANS X10", "ROT Z90", "G1 F1000 X1 Y0")
     )
     assert_xyz(df, (0.0, 1.0, 0.0))
     assert state["translation"]["X"] == 0.0
@@ -64,7 +64,7 @@ def test_rot_replaces_the_whole_frame_including_trans():
 def test_trans_after_arot_deletes_the_rotation():
     """3.12.2.4 example 1 relies on TRANS resetting an earlier AROT."""
     df, state = nc_to_dataframe(
-        nc_lines("G1 X0 Y0 Z0", "AROT RPL=45", "TRANS X20 Y40", "G1 X1 Y0")
+        nc_lines("G1 F1000 X0 Y0 Z0", "AROT RPL=45", "TRANS X20 Y40", "G1 F1000 X1 Y0")
     )
     assert_xyz(df, (21.0, 40.0, 0.0))
     assert state["rotation"] == [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
@@ -73,10 +73,10 @@ def test_trans_after_arot_deletes_the_rotation():
 def test_arot_composes_in_program_order():
     """AROT chains onto the rotated axes, so X-then-Y differs from Y-then-X."""
     x_then_y, _ = nc_to_dataframe(
-        nc_lines("G1 X0 Y0 Z0", "AROT X90", "AROT Y90", "G1 X1 Y2 Z3")
+        nc_lines("G1 F1000 X0 Y0 Z0", "AROT X90", "AROT Y90", "G1 F1000 X1 Y2 Z3")
     )
     y_then_x, _ = nc_to_dataframe(
-        nc_lines("G1 X0 Y0 Z0", "AROT Y90", "AROT X90", "G1 X1 Y2 Z3")
+        nc_lines("G1 F1000 X0 Y0 Z0", "AROT Y90", "AROT X90", "G1 F1000 X1 Y2 Z3")
     )
     # Rx(90) * Ry(90) * (1, 2, 3) and Ry(90) * Rx(90) * (1, 2, 3), by hand.
     assert_xyz(x_then_y, (3.0, 1.0, 2.0))
@@ -88,13 +88,13 @@ def test_rot_block_angles_follow_z_then_y_then_x():
     (3.12.2.4 "Rotation sequence"), which equals AROT Z, AROT Y, AROT X in
     that order and not the reverse."""
     one_block, _ = nc_to_dataframe(
-        nc_lines("G1 X0 Y0 Z0", "ROT X30 Y40 Z50", "G1 X1 Y2 Z3")
+        nc_lines("G1 F1000 X0 Y0 Z0", "ROT X30 Y40 Z50", "G1 F1000 X1 Y2 Z3")
     )
     chained, _ = nc_to_dataframe(
-        nc_lines("G1 X0 Y0 Z0", "AROT Z50", "AROT Y40", "AROT X30", "G1 X1 Y2 Z3")
+        nc_lines("G1 F1000 X0 Y0 Z0", "AROT Z50", "AROT Y40", "AROT X30", "G1 F1000 X1 Y2 Z3")
     )
     reversed_chain, _ = nc_to_dataframe(
-        nc_lines("G1 X0 Y0 Z0", "AROT X30", "AROT Y40", "AROT Z50", "G1 X1 Y2 Z3")
+        nc_lines("G1 F1000 X0 Y0 Z0", "AROT X30", "AROT Y40", "AROT Z50", "G1 F1000 X1 Y2 Z3")
     )
     assert xyz(one_block) == pytest.approx(xyz(chained), abs=1e-9)
     assert xyz(one_block) != pytest.approx(xyz(reversed_chain), abs=1e-6)
@@ -103,25 +103,25 @@ def test_rot_block_angles_follow_z_then_y_then_x():
 @pytest.mark.parametrize(
     "plane, local, expected",
     [
-        ("G17", "G1 X1 Y0 Z0", (0.0, 1.0, 0.0)),  # about Z: +X onto +Y
-        ("G18", "G1 X0 Y0 Z1", (1.0, 0.0, 0.0)),  # about Y: +Z onto +X
-        ("G19", "G1 X0 Y1 Z0", (0.0, 0.0, 1.0)),  # about X: +Y onto +Z
+        ("G17", "G1 F1000 X1 Y0 Z0", (0.0, 1.0, 0.0)),  # about Z: +X onto +Y
+        ("G18", "G1 F1000 X0 Y0 Z1", (1.0, 0.0, 0.0)),  # about Y: +Z onto +X
+        ("G19", "G1 F1000 X0 Y1 Z0", (0.0, 0.0, 1.0)),  # about X: +Y onto +Z
     ],
 )
 def test_rpl_rotates_about_the_active_plane_normal(plane, local, expected):
-    df, _ = nc_to_dataframe(nc_lines(plane, "G1 X0 Y0 Z0", "AROT RPL=90", local))
+    df, _ = nc_to_dataframe(nc_lines(plane, "G1 F1000 X0 Y0 Z0", "AROT RPL=90", local))
     assert_xyz(df, expected)
 
 
 def test_rpl_equals_rot_about_the_plane_normal():
-    via_rpl, _ = nc_to_dataframe(nc_lines("G18", "G1 X0 Y0 Z0", "ROT RPL=33", "G1 X1 Y2 Z3"))
-    via_axis, _ = nc_to_dataframe(nc_lines("G18", "G1 X0 Y0 Z0", "ROT Y33", "G1 X1 Y2 Z3"))
+    via_rpl, _ = nc_to_dataframe(nc_lines("G18", "G1 F1000 X0 Y0 Z0", "ROT RPL=33", "G1 F1000 X1 Y2 Z3"))
+    via_axis, _ = nc_to_dataframe(nc_lines("G18", "G1 F1000 X0 Y0 Z0", "ROT Y33", "G1 F1000 X1 Y2 Z3"))
     assert xyz(via_rpl) == pytest.approx(xyz(via_axis), abs=1e-12)
 
 
 def test_bare_rot_deletes_an_active_rotation():
     df, state = nc_to_dataframe(
-        nc_lines("G1 X0 Y0 Z0", "ROT Z90", "G1 X1 Y0", "ROT", "G1 X1 Y0")
+        nc_lines("G1 F1000 X0 Y0 Z0", "ROT Z90", "G1 F1000 X1 Y0", "ROT", "G1 F1000 X1 Y0")
     )
     assert_xyz(df, (0.0, 1.0, 0.0), row=1)
     assert_xyz(df, (1.0, 0.0, 0.0), row=2)
@@ -129,7 +129,7 @@ def test_bare_rot_deletes_an_active_rotation():
 
 
 def test_bare_arot_is_a_noop():
-    df, _ = nc_to_dataframe(nc_lines("G1 X0 Y0 Z0", "ROT Z90", "AROT", "G1 X1 Y0"))
+    df, _ = nc_to_dataframe(nc_lines("G1 F1000 X0 Y0 Z0", "ROT Z90", "AROT", "G1 F1000 X1 Y0"))
     assert_xyz(df, (0.0, 1.0, 0.0))
 
 
@@ -137,7 +137,7 @@ def test_atrans_after_arot_offsets_in_the_rotated_system():
     """3.12.2.4 example 2 programs ATRANS X5 after AROT Y30: the additive
     offset refers to the last programmed (rotated) frame (3.12.2.1)."""
     df, state = nc_to_dataframe(
-        nc_lines("G1 X0 Y0 Z0", "AROT Z90", "ATRANS X5", "G1 X0 Y0")
+        nc_lines("G1 F1000 X0 Y0 Z0", "AROT Z90", "ATRANS X5", "G1 F1000 X0 Y0")
     )
     assert_xyz(df, (0.0, 5.0, 0.0))
     # The translation is reported in machine components.
@@ -147,7 +147,7 @@ def test_atrans_after_arot_offsets_in_the_rotated_system():
 
 def test_ic_increments_the_local_coordinate_under_a_rotation():
     df, _ = nc_to_dataframe(
-        nc_lines("G1 X1 Y0 Z0", "AROT Z90", "G1 X=IC(1)", "G1 Y=IC(2)")
+        nc_lines("G1 F1000 X1 Y0 Z0", "AROT Z90", "G1 F1000 X=IC(1)", "G1 F1000 Y=IC(2)")
     )
     # The machine stays at (1, 0, 0) through the AROT. IC(1) on X then moves
     # 1 along the rotated X (machine +Y), IC(2) on Y moves 2 along machine -X.
@@ -158,11 +158,11 @@ def test_ic_increments_the_local_coordinate_under_a_rotation():
 def test_orientation_axes_are_never_rotated():
     df, _ = nc_to_dataframe(
         nc_lines(
-            "G1 X1 Y0 Z0 A10 B20 C30",
+            "G1 F1000 X1 Y0 Z0 A10 B20 C30",
             "AROT Z90",
-            "G1 X1 A10 B20 C30",
+            "G1 F1000 X1 A10 B20 C30",
             "ATRANS A5",
-            "G1 A10",
+            "G1 F1000 A10",
         )
     )
     # X=1 along the rotated X from machine (1, 0, 0) lands on (1, 1, 0).
@@ -176,7 +176,7 @@ def test_unpositioned_axis_coupled_by_the_rotation_is_emitted():
     """A 2D program tilted about X: Z joins the geometry triple (taken at
     machine 0, with a warning) and is reported from then on; a local Y move
     becomes machine Z motion."""
-    df, _ = nc_to_dataframe(nc_lines("G1 X0 Y1", "AROT X90", "G1 X1", "G1 Y2"))
+    df, _ = nc_to_dataframe(nc_lines("G1 F1000 X0 Y1", "AROT X90", "G1 F1000 X1", "G1 F1000 Y2"))
     assert_xyz(df, (1.0, 1.0, 0.0), row=1)
     assert_xyz(df, (1.0, 1.0, 2.0), row=2)
 
@@ -187,11 +187,11 @@ def test_frame_change_does_not_move_the_machine():
     the others only through the rotation. Rows, `$AA_IM` and `$AA_IW` agree."""
     df, state = nc_to_dataframe(
         nc_lines(
-            "G1 X1 Y0 Z0",
+            "G1 F1000 X1 Y0 Z0",
             "ROT Z90",
-            "G1 X2",
+            "G1 F1000 X2",
             "ROT",
-            "G1 X3",
+            "G1 F1000 X3",
             "R1=$AA_IM[X]",
             "R2=$AA_IM[Y]",
             "R3=$AA_IW[Y]",
@@ -209,11 +209,11 @@ def test_frame_change_does_not_move_the_machine():
 def test_actual_machine_position_includes_the_rotation():
     _, state = nc_to_dataframe(
         nc_lines(
-            "G1 X1 Y0 Z0",
+            "G1 F1000 X1 Y0 Z0",
             "AROT Z90",
             "R1=$AA_IM[Y]",
             "R2=$AA_IW[Y]",
-            "G1 X2",
+            "G1 F1000 X2",
             "R3=$AA_IM[X]",
             "R4=$AA_IM[Y]",
         )
@@ -231,7 +231,7 @@ def test_coupled_axis_can_be_read_after_the_rotation():
     """An axis the rotation pulls into the geometry triple has a machine
     position from then on, consistent with the rows."""
     df, state = nc_to_dataframe(
-        nc_lines("G1 X0 Y1", "AROT X90", "G1 X1", "R1=$AA_IM[Z]", "R2=$AA_IM[Y]")
+        nc_lines("G1 F1000 X0 Y1", "AROT X90", "G1 F1000 X1", "R1=$AA_IM[Z]", "R2=$AA_IM[Y]")
     )
     assert state["symbol_table"]["R1"] == pytest.approx(df["Z"][-1], abs=1e-12)
     assert state["symbol_table"]["R2"] == pytest.approx(df["Y"][-1], abs=1e-12)
@@ -242,7 +242,7 @@ def test_trans_after_a_move_keeps_the_machine_position():
     is the machine setpoint, $AA_IW the WCS one) and an IC() increment then
     moves from the current position (3.1.1.5), not from the old local value."""
     df, state = nc_to_dataframe(
-        nc_lines("G1 Z0", "TRANS Z5", "G1 X10", "R1=$AA_IM[Z]", "R2=$AA_IW[Z]", "G1 Z=IC(1)")
+        nc_lines("G1 F1000 Z0", "TRANS Z5", "G1 F1000 X10", "R1=$AA_IM[Z]", "R2=$AA_IW[Z]", "G1 F1000 Z=IC(1)")
     )
     assert df["Z"].to_list() == [0.0, 0.0, 1.0]
     assert state["symbol_table"]["R1"] == 0.0
@@ -269,9 +269,9 @@ def test_arc_under_rpl_flattens_to_the_rotated_arc():
 
 
 def test_cr_arc_under_an_in_plane_rotation_matches_the_baked_arc():
-    program = nc_lines("G1 X0 Y0 Z0 F100", "AROT Z30", "G3 X10 Y0 CR=5")
+    program = nc_lines("G1 F1000 X0 Y0 Z0 F100", "AROT Z30", "G3 X10 Y0 CR=5")
     end = apply(rot_z(30), (10.0, 0.0, 0.0))
-    baked = nc_lines("G1 X0 Y0 Z0 F100", f"G3 X{end[0]!r} Y{end[1]!r} CR=5")
+    baked = nc_lines("G1 F1000 X0 Y0 Z0 F100", f"G3 X{end[0]!r} Y{end[1]!r} CR=5")
     flat, _ = nc_to_dataframe(program, flatten_tolerance=0.01)
     flat_baked, _ = nc_to_dataframe(baked, flatten_tolerance=0.01)
     assert_frame_equal(
@@ -288,10 +288,10 @@ def test_arc_under_a_tilting_rotation_errors(arc):
     """An arc whose plane no longer coincides with the machine plane is not
     modeled; it must fail instead of flattening a wrong arc."""
     with pytest.raises(ValueError, match="tilts the G17 plane"):
-        nc_to_dataframe(nc_lines("G1 X0 Y0 Z0 F100", "AROT X30", arc))
+        nc_to_dataframe(nc_lines("G1 F1000 X0 Y0 Z0 F100", "AROT X30", arc))
     # A half turn keeps the plane parallel but reverses it: also unsupported.
     with pytest.raises(ValueError, match="tilts the G17 plane"):
-        nc_to_dataframe(nc_lines("G1 X0 Y0 Z0 F100", "AROT Y180", arc))
+        nc_to_dataframe(nc_lines("G1 F1000 X0 Y0 Z0 F100", "AROT Y180", arc))
 
 
 def test_arc_in_another_plane_checks_that_plane():
@@ -312,30 +312,30 @@ def test_arc_in_another_plane_checks_that_plane():
 )
 def test_unsupported_rotation_syntax_errors(block, match):
     with pytest.raises(ValueError, match=match):
-        nc_to_dataframe(nc_lines("G1 X0 Y0 Z0", block, "G1 X1"))
+        nc_to_dataframe(nc_lines("G1 F1000 X0 Y0 Z0", block, "G1 F1000 X1"))
 
 
 def test_rotation_moving_an_unconfigured_geometry_axis_errors():
     # Without a Z axis a rotation about Z is representable, a tilt is not.
     df, _ = nc_to_dataframe(
-        nc_lines("G1 X1 Y0", "AROT Z90", "G1 X1"), axis_identifiers=["X", "Y"]
+        nc_lines("G1 F1000 X1 Y0", "AROT Z90", "G1 F1000 X1"), axis_identifiers=["X", "Y"]
     )
     assert (df["X"][-1], df["Y"][-1]) == pytest.approx((1.0, 1.0), abs=1e-12)
     with pytest.raises(ValueError, match="geometry axis Z, which is not a configured axis"):
-        nc_to_dataframe(nc_lines("G1 X1 Y0", "AROT X30", "G1 X1"), axis_identifiers=["X", "Y"])
+        nc_to_dataframe(nc_lines("G1 F1000 X1 Y0", "AROT X30", "G1 F1000 X1"), axis_identifiers=["X", "Y"])
 
 
 FRAME_PROGRAM = nc_lines(
     "G17 G1 X0 Y0 Z0 F100",
     "TRANS X10 Y20 Z5",
     "AROT Z30",
-    "G1 X10 Y0",
-    "G1 X10 Y10",
-    "G1 X0 Y10 Z2",
+    "G1 F1000 X10 Y0",
+    "G1 F1000 X10 Y10",
+    "G1 F1000 X0 Y10 Z2",
     "G2 X0 Y0 I0 J-5",
-    "G1 X=IC(3) Y=IC(-1)",
+    "G1 F1000 X=IC(3) Y=IC(-1)",
     "ATRANS Y1",
-    "G1 X0 Y0 Z0",
+    "G1 F1000 X0 Y0 Z0",
     "M30",
 )
 

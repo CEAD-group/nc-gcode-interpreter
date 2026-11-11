@@ -72,6 +72,35 @@ pub enum ColKind {
     Modal,
 }
 
+/// Declared type of a user variable (DEF), used to check the values passed in
+/// through `variables` and `start` before the main program runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VarType {
+    Int,
+    Real,
+    Bool,
+    Char,
+    /// STRING[n] with its maximum length.
+    Str(usize),
+}
+
+impl VarType {
+    /// The type of a grammar `data_type` such as `INT` or `STRING[13]`.
+    pub fn from_data_type(text: &str) -> Self {
+        let upper = text.to_uppercase();
+        if let Some(rest) = upper.strip_prefix("STRING") {
+            let digits: String = rest.chars().filter(char::is_ascii_digit).collect();
+            return VarType::Str(digits.parse().unwrap_or(usize::MAX));
+        }
+        match upper.as_str() {
+            "INT" => VarType::Int,
+            "BOOL" => VarType::Bool,
+            "CHAR" => VarType::Char,
+            _ => VarType::Real,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct State {
     /// Local (workpiece) coordinate of every axis a block has positioned. A
@@ -135,6 +164,19 @@ pub struct State {
     one_letter_keys: [Option<(ColKind, &'static str)>; 128],
     /// Subprogram texts, the external-variable provider and the call stack (#48).
     pub(crate) ext: crate::subprogram::ExtState,
+    /// Declared type per variable base name (uppercase), recorded by DEF.
+    pub var_types: HashMap<String, VarType>,
+    /// Modal G group values (group column, code) at the end of the run, as the
+    /// output rows carried them. Filled when the run finishes.
+    pub g_groups: Vec<(String, String)>,
+    /// The F column value at the end of the run. Filled when the run finishes.
+    pub feed: Option<f64>,
+    /// The T and transformation column values at the end of the run.
+    pub tool: Option<String>,
+    pub transformation: Option<String>,
+    /// The FGROUP value and FGREF radii (axis, radius) at the end of the run.
+    pub fgroup: Option<String>,
+    pub fgref: Vec<(String, f64)>,
 }
 
 impl State {
@@ -186,6 +228,13 @@ impl State {
                 .or_insert((ColKind::Block, crate::output::intern_column(block)));
         }
 
+        // Feed per tooth (modal) and non-modal feed (Axes and spindles 7.2.1, 7.4.10).
+        for (name, kind) in [("FZ", ColKind::Modal), ("FB", ColKind::Block)] {
+            output_keys
+                .entry(name.to_string())
+                .or_insert((kind, crate::output::intern_column(name)));
+        }
+
         for axis in &axis_identifiers {
             let axis = axis.to_uppercase();
             if NON_AXIS_ADDRESSES.contains(&axis.as_str()) {
@@ -230,6 +279,13 @@ impl State {
             output_keys,
             one_letter_keys,
             ext: crate::subprogram::ExtState::default(),
+            var_types: HashMap::new(),
+            g_groups: Vec::new(),
+            feed: None,
+            tool: None,
+            transformation: None,
+            fgroup: None,
+            fgref: Vec::new(),
         }
     }
 
@@ -716,7 +772,8 @@ impl State {
     /// numeric maps (`axes`, `symbol_table`, `translation`) and the string
     /// variables (`string_table`, from `DEF STRING`) are carried apart because
     /// they have different value types; the Python binding renders them as one
-    /// dict `{axes, symbol_table, translation, rotation, string_table}`.
+    /// dict `{axes, symbol_table, translation, rotation, string_table,
+    /// g_groups, feed}`, the shape `start` accepts.
     #[allow(dead_code)]
     pub fn final_state(&self) -> FinalState {
         FinalState {
@@ -725,6 +782,12 @@ impl State {
             translation: self.translation.clone(),
             rotation: self.rotation,
             string_table: self.string_table.clone(),
+            g_groups: self.g_groups.clone(),
+            feed: self.feed,
+            tool: self.tool.clone(),
+            transformation: self.transformation.clone(),
+            fgroup: self.fgroup.clone(),
+            fgref: self.fgref.clone(),
         }
     }
 }
@@ -732,7 +795,8 @@ impl State {
 /// End-of-run interpreter state handed to Python as the `.state` dict. The
 /// numeric sub-tables keep their `f64` values; `string_table` carries the
 /// `DEF STRING` variables (a numeric sub-dict cannot hold them). The Python
-/// binding turns this into `{axes, symbol_table, translation, rotation, string_table}`.
+/// binding turns this into `{axes, symbol_table, translation, rotation,
+/// string_table, g_groups, feed, tool, transformation, fgroup, fgref}`.
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)] // fields read only by the python-feature bindings, not the bin
 pub struct FinalState {
@@ -743,4 +807,13 @@ pub struct FinalState {
     /// translation for X, Y, Z). The identity when no ROT/AROT is active.
     pub rotation: Matrix3,
     pub string_table: HashMap<String, String>,
+    /// Modal G group values at the end of the run, sorted by group.
+    pub g_groups: Vec<(String, String)>,
+    /// The F column value at the end of the run.
+    pub feed: Option<f64>,
+    pub tool: Option<String>,
+    pub transformation: Option<String>,
+    pub fgroup: Option<String>,
+    /// FGREF reference radius per axis, sorted by axis.
+    pub fgref: Vec<(String, f64)>,
 }

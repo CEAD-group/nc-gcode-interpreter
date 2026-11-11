@@ -10,6 +10,7 @@ orange, flattener-generated samples blue.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 
@@ -115,11 +116,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="initialize undefined variables to 0.0 instead of erroring (as in the interpreter CLI)",
     )
     parser.add_argument(
-        "--initial-state",
+        "--definitions",
+        type=Path,
+        action="append",
+        default=None,
+        metavar="FILE",
+        help="definition file (GUD/MGUD .DEF) read before the program; repeat for several",
+    )
+    parser.add_argument(
+        "--variables",
         type=Path,
         default=None,
         metavar="FILE",
-        help="initial-state MPF file (variables / start positions)",
+        help='JSON object of variable values, e.g. {"COUNT": 3}',
+    )
+    parser.add_argument(
+        "--start",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="JSON object with the machine state at program start (the shape of the returned state)",
     )
     return parser
 
@@ -140,10 +156,13 @@ def main(argv: list[str] | None = None) -> int:
     from . import nc_to_dataframe
 
     tolerance = None if args.no_flatten else args.flatten_tolerance
-    initial_state = args.initial_state.read_text() if args.initial_state else None
+    variables = json.loads(args.variables.read_text()) if args.variables else None
+    start = json.loads(args.start.read_text()) if args.start else None
     df, _state = nc_to_dataframe(
         args.input,
-        initial_state=initial_state,
+        definitions=args.definitions,
+        variables=variables,
+        start=start,
         extra_axes=args.extra_axes,
         axis_index_map=args.axis_index_map,
         allow_undefined_variables=args.allow_undefined_variables,

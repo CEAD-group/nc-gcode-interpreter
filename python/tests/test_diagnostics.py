@@ -8,7 +8,7 @@ def test_unknown_g_code_errors():
     """A bare G<digits> word that matches no G group is an unknown G code
     (alarm 12470 on a real control), not a silent subprogram call."""
     with pytest.raises(ValueError, match="not a G code"):
-        nc_to_dataframe("G1 X10\nG999\nX5")
+        nc_to_dataframe("G1 F1000 X10\nG999\nX5")
 
 
 def test_lowercase_unknown_g_code_errors():
@@ -19,7 +19,7 @@ def test_lowercase_unknown_g_code_errors():
 def test_axis_word_typo_warns_but_keeps_call_semantics(capfd):
     """Y2O (letter O typo for Y20) stays a subprogram call, but the silent
     loss of the intended axis move is flagged on stderr."""
-    df, _state = nc_to_dataframe("G1 X10 Y2O\nX5")
+    df, _state = nc_to_dataframe("G1 F1000 X10 Y2O\nX5")
     assert df["non_returning_function_call"][0] == "Y2O"
     assert "Y2O" in capfd.readouterr().err
 
@@ -33,7 +33,7 @@ def test_parse_errors_use_human_phrasing():
     """Grammar-internal rule names (label_name, frame_kw, ...) must not
     leak into parse error messages."""
     with pytest.raises(ValueError) as excinfo:
-        nc_to_dataframe("G1 X10 Y=")
+        nc_to_dataframe("G1 F1000 X10 Y=")
     message = str(excinfo.value)
     assert "label_name" not in message
     assert "frame_kw" not in message

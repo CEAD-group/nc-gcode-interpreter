@@ -46,11 +46,11 @@ def run_both(program, **kwargs):
         # plain flood shapes
         "X1 Y2 Z3\nX4 Y5 Z6",
         "N10 X1.5 Y-2. Z0.001\nN20 X2 F2400 S8000 D1",
-        "G1 X1 Y1\nG0 X0\nG54\nG17 G94 G90",
-        "BSPLINE\nX1 Y1 PW=1.5\nX2 Y2 PW=0.5\nG1",
+        "G1 F1000 X1 Y1\nG0 X0\nG54\nG17 G94 G90",
+        "BSPLINE F1000\nX1 Y1 PW=1.5\nX2 Y2 PW=0.5\nG1",
         "X1 A=0.0 B=-1.5 C=90. ELX=3087.022334",
         # arcs: I/J/K/CR interpolation parameters are per-block, never sticky
-        "G1 X0 Y0 F1000\nG2 X100 Y0 I50 J0\nG1 X100 Y50\nG3 X0 Y50 CR=60\nG1 X0 Y0",
+        "G1 F1000 X0 Y0 F1000\nG2 X100 Y0 I50 J0\nG1 X100 Y50\nG3 X0 Y50 CR=60\nG1 X0 Y0",
         # comments, blanks, N-only lines
         "; header\nX1 ; move\n\nN100\nX2",
         # M codes incl. end-of-program mid-file
@@ -64,10 +64,10 @@ def run_both(program, **kwargs):
         "CASE(5) OF 7 GOTOF SEVEN DEFAULT GOTOF OTHER\nSEVEN: X7\nGOTOF ENDE\nOTHER: X0\nENDE: M30",
         "GOTOS\nX1",
         # deferred IC() product words (computed extrusion multipliers)
-        "E_MULTIPLIER = 1\nE=0\nG1 X1 E=IC(E_MULTIPLIER*0.02988)\n"
+        "E_MULTIPLIER = 1\nE=0\nG1 F1000 X1 E=IC(E_MULTIPLIER*0.02988)\n"
         "E_MULTIPLIER = 2\nX2 E=IC(E_MULTIPLIER*0.5)\nE=IC(0.25*E_MULTIPLIER)\nE=IC(2)",
         # underscore-leading identifiers in deferred product words
-        "_MULT = 2\nE=0\nG1 X1 E=IC(_MULT*0.5)\nX2 E=IC(0.25*_MULT)\n_MULT = 4\nX3 E=IC(_MULT*1.5)",
+        "_MULT = 2\nE=0\nG1 F1000 X1 E=IC(_MULT*0.5)\nX2 E=IC(0.25*_MULT)\n_MULT = 4\nX3 E=IC(_MULT*1.5)",
         # NOT is an operator, not a constant: these must reject to pest
         "YNEG = 0\nYNEG = NOT YNEG\nX=YNEG\nR1 = NOT 0\nX=R1",
         # deferred paren product words and constant-expression folding
@@ -82,10 +82,10 @@ def run_both(program, **kwargs):
         "DEF REAL DEPTH=2.5\nX=DEPTH\nTRANS X10\nX1\nTRANS\nX2",
         # frame rotations: the ROT/AROT lines go to pest, the moves after them
         # through the fast path, which must rotate them identically
-        "G1 X0 Y0 Z0\nTRANS X10 Y20\nAROT Z90\nG1 X1 Y0\nX2 Y3 Z1\nX=IC(1)",
-        "G1 X0 Y0 Z0 F100\nAROT RPL=30\nG2 X10 Y0 I5 J0\nG1 X0 Y0\nG3 X10 Y0 CR=5",
-        "G1 X0 Y0 Z0\nAROT Y90\nX1 Y2 Z3 A4\nATRANS X5\nX1\nROT\nX1",
-        "G18\nG1 X0 Y0 Z0\nAROT RPL=90\nX1\nG17\nZ1",
+        "G1 F1000 X0 Y0 Z0\nTRANS X10 Y20\nAROT Z90\nG1 X1 Y0\nX2 Y3 Z1\nX=IC(1)",
+        "G1 F1000 X0 Y0 Z0 F100\nAROT RPL=30\nG2 X10 Y0 I5 J0\nG1 X0 Y0\nG3 X10 Y0 CR=5",
+        "G1 F1000 X0 Y0 Z0\nAROT Y90\nX1 Y2 Z3 A4\nATRANS X5\nX1\nROT\nX1",
+        "G18\nG1 F1000 X0 Y0 Z0\nAROT RPL=90\nX1\nG17\nZ1",
         "R1=1+2\nX=R1*3\nY=SIN(30)\nZ=IC(5)",
         "T=\"drill\"\nX1\nT5",
         "x100\nX100",  # lowercase bare word is a call, uppercase an axis move
@@ -131,11 +131,12 @@ EXAMPLES = pathlib.Path(__file__).parent.parent.parent / "examples"
 )
 def test_fast_path_matches_on_examples(mpf):
     """The shipped examples through both paths, with the same kwargs as the
-    golden-CSV test (initial_state, extra axes, index map) so the fast path
+    golden-CSV test (definitions, start, extra axes, index map) so the fast path
     is differentially covered in CI, where the mill-sim corpus is absent."""
     run_both(
         mpf.read_text(),
-        initial_state=(EXAMPLES / "defaults.mpf").read_text(),
+        definitions=[EXAMPLES / "defaults.def"],
+        start={"axes": {"X": 1600.0, "Y": 900.0, "Z": 0.0, "E": 0.0}},
         iteration_limit=10000,
         extra_axes=["ELX"],
         axis_index_map={"E": 4},
@@ -164,11 +165,11 @@ def test_fast_path_matches_on_real_corpus(mpf):
 @pytest.mark.parametrize(
     "program, expected",
     [
-        ("G1 X0\nT2\nX1", [None, "2", None]),
-        ("G1 X0\nT=3\nX1", [None, "3", None]),
-        ("G1 X0\nt4\nX1", [None, "4", None]),
-        ("R1=7\nG1 X0\nT=R1\nX1", [None, "7", None]),
-        ('G1 X0\nT="NOZ_A"\nT5 X1', [None, "NOZ_A", "5"]),
+        ("G1 F1000 X0\nT2\nX1", [None, "2", None]),
+        ("G1 F1000 X0\nT=3\nX1", [None, "3", None]),
+        ("G1 F1000 X0\nt4\nX1", [None, "4", None]),
+        ("R1=7\nG1 F1000 X0\nT=R1\nX1", [None, "7", None]),
+        ('G1 F1000 X0\nT="NOZ_A"\nT5 X1', [None, "NOZ_A", "5"]),
     ],
     ids=["T2", "T=3", "lowercase", "expression", "mixed with a named tool"],
 )

@@ -29,7 +29,8 @@ The **NC-GCode-Interpreter** offers a streamlined and efficient solution for int
 - **Curve flattening**: pass `flatten_tolerance` (Python) or `--flatten-tolerance` (CLI) to convert curved motions — `G2`/`G3` arcs (`I`/`J`/`K` centre offsets or `CR=` radius form, `G17`/`G18`/`G19` planes, helical third axis with `TURN=` multi-turn support, full circles) and `ASPLINE`/`BSPLINE`/`CSPLINE` splines (including `PW` weights and `SD` degree) — into runs of plain `G1` rows in the same table format. `CIP`/`CT`/`POLY`/thread/involute blocks pass through unchanged with a warning; spline start/end conditions (`BAUTO`/`BNAT`/... ) are approximated by natural (CSPLINE) / Akima (ASPLINE) boundaries — see the `flatten` module docs for the full list of checked approximations. The single tolerance is the maximum deviation between the emitted polyline and the true curve, in path units: arcs use the exact sagitta bound, splines adaptive subdivision. The interpolation addresses (`I`/`J`/`K`/`CR`/`PW`/`SD`/`PL`) are consumed and do not appear in the output; sampled rows keep the source block's line number, and its other cells (`F`, `M`, comments, ...) ride on the first sample so modal behavior is preserved. Generated samples carry a `flattened = 1` marker column (never forward-filled); programmed positions stay null there, so filtering on null recovers the original toolpath points.
 - **Toolpath visualization** (optional): with the `viz` extra (`pip install 'nc-gcode-interpreter[viz]'`), `nc_gcode_interpreter.viz.view_toolpath(df)` renders an interpreted toolpath in [threejs-viewer](https://pypi.org/project/threejs-viewer/) as an extruded bead tube with a draw-range animation replaying the program at feed-rate-proportional speed. Combined with `flatten_tolerance`, programmed points render orange and flattener-generated samples blue. The extra also installs the `nc-view` command: `nc-view part.mpf` interprets, flattens (default tolerance 0.1, `--no-flatten` to skip) and opens the animated toolpath in the browser; `--speed` sets the time-lapse factor (default 60 = one machine-minute per second).
 - **Custom Axes**: Allows users to define additional axes beyond the standard `X`, `Y`, `Z`.
-- **Initial State Configuration**: Enables the use of an initial state MPF file to set default values for multiple runs.
+- **Definitions, variables and start state**: `definitions` takes the definition files a control loads (GUD/MGUD/UGUD `.DEF`: DEF and REDEF statements, assignments, comments; M17/M30/M2 ends a file), `variables` takes variable values checked against their declared type, and `start` takes the machine state at program start in the shape of the returned `state` dict (axes, frame, variables, modal G groups, feed, tool, transformation, FGROUP and FGREF radii). The G groups, feed, tool, transformation, FGROUP and FGREF fill the first output row; seeded G groups have the same `pl.Enum` dtype as the rest of the column. They are applied in that order, before the main program. In a definition file `CHANDATA(1)` is ignored, another channel is an error, `TRAFOOF` sets the start transformation to off (a later `start["transformation"]` wins), M0 and M1 are ignored, a subprogram call is an error, and assigning to an undeclared name is an error unless it is an R parameter or `allow_undefined_variables` is set.
+- **Feed check**: a path motion (G1, G2, G3, CIP, splines) with no feed programmed is an error, as alarm 10860 is on the control; a change of feed unit (inverse time, per minute, per revolution) deletes F; `FZ=` counts as a feed under a revolutional feed type and `FB=` for its own block. FGROUP does not change this: a block moving only axes outside the FGROUP, or only rotary axes, needs F too. Pass the control's default feed (SD42110 `$SC_DEFAULT_FEED`) as `start["feed"]`. The check is off when F is not a configured axis. On the CLI: `--definitions FILE` (repeatable), `--variables FILE.json` and `--start FILE.json`.
 - **CLI Options**: Numerous command-line options to customize the processing, such as axis overriding, loop limits, and more.
 
 ## Example Usage
@@ -67,7 +68,9 @@ Arguments:
 Options:
   -a, --axes <AXIS>                    Override default axis identifiers (comma-separated, e.g., "X,Y,Z")
   -e, --extra-axes <EXTRA_AXIS>        Add extra axis identifiers (comma-separated, e.g., "RA1,RA2")
-  -i, --initial_state <INITIAL_STATE>  Optional initial state file to e.g. define global variables or set axis positions
+      --definitions <FILE>             Definition file (GUD/MGUD .DEF) to read before the program; repeat for several, read in order
+      --variables <FILE>               JSON object of variable values applied after the definitions, e.g. {"COUNT": 3}
+      --start <FILE>                   JSON object with the machine state at program start (the shape of the returned state)
   -l, --iteration_limit <LIMIT>        Maximum number of iterations for loops [default: 10000]
   -f, --disable-forward-fill           Disable forward-filling of null values in axes columns
   -h, --help                           Print help
@@ -214,7 +217,9 @@ Arguments:
 Options:
   -a, --axes <AXIS>                    Override default axis identifiers (comma-separated, e.g., "X,Y,Z")
   -e, --extra-axes <EXTRA_AXIS>        Add extra axis identifiers (comma-separated, e.g., "RA1,RA2")
-  -i, --initial_state <INITIAL_STATE>  Optional initial_state file to initialize state
+      --definitions <FILE>             Definition file (GUD/MGUD .DEF) to read before the program; repeat for several, read in order
+      --variables <FILE>               JSON object of variable values applied after the definitions, e.g. {"COUNT": 3}
+      --start <FILE>                   JSON object with the machine state at program start (the shape of the returned state)
   -l, --iteration_limit <LIMIT>             Maximum number of iterations for loops [default: 10000]
   -f, --disable-forward-fill           Disable forward-filling of null values in axes columns
   -h, --help                           Print help

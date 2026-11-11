@@ -11,6 +11,7 @@ pub mod interpreter;
 mod line_driver;
 mod modal_groups;
 pub mod output;
+pub mod start;
 mod state;
 mod structure_scan;
 pub mod subprogram;
@@ -25,7 +26,7 @@ mod python_bindings {
     use pyo3::prelude::*;
     use pyo3::pybacked::PyBackedStr;
     use pyo3::types::PyCapsule;
-    use pyo3::types::{PyDict, PyList, PyTuple};
+    use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
     use pyo3::wrap_pyfunction;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -68,6 +69,7 @@ mod python_bindings {
     use crate::errors::ErrorLocation;
     use crate::interpreter::{nc_to_batch_stream_with, nc_to_row_stream, SourceText};
     use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table, VariableEvents};
+    use crate::start::{StartInputs, StartState, VariableValue};
     use crate::state::FinalState;
     use crate::subprogram::{Extensions, ExternalError, ExternalIndex, ExternalVariables, FrameArgument, FrameTerm};
     use crate::types::Value;
@@ -92,6 +94,7 @@ mod python_bindings {
         message: String,
         kind: &'static str,
         location: Option<ErrorLocation>,
+        definition_file: Option<usize>,
     }
 
     impl ErrInfo {
@@ -100,6 +103,7 @@ mod python_bindings {
                 message: error.to_string(),
                 kind: error.kind(),
                 location: error.location(),
+                definition_file: error.definition_index(),
             }
         }
 
@@ -118,6 +122,7 @@ mod python_bindings {
             let _ = value.setattr("column", column);
             let _ = value.setattr("context", context);
             let _ = value.setattr("line_text", line_text);
+            let _ = value.setattr("definition_file", self.definition_file);
             err
         }
     }
@@ -135,7 +140,165 @@ mod python_bindings {
         let rotation: Vec<Vec<f64>> = state.rotation.iter().map(|row| row.to_vec()).collect();
         dict.set_item("rotation", rotation)?;
         dict.set_item("string_table", state.string_table.clone())?;
+        let g_groups = PyDict::new(py);
+        for (group, code) in &state.g_groups {
+            g_groups.set_item(group, code)?;
+        }
+        dict.set_item("g_groups", g_groups)?;
+        dict.set_item("feed", state.feed)?;
+        dict.set_item("tool", state.tool.clone())?;
+        dict.set_item("transformation", state.transformation.clone())?;
+        dict.set_item("fgroup", state.fgroup.clone())?;
+        let fgref = PyDict::new(py);
+        for (axis, radius) in &state.fgref {
+            fgref.set_item(axis, radius)?;
+        }
+        dict.set_item("fgref", fgref)?;
         Ok(dict)
+    }
+
+    fn input_error(message: String) -> PyErr {
+        PyErr::new::<PyValueError, _>(message)
+    }
+
+    /// One `variables` value: bool before int, since a Python bool is an int.
+    fn variable_value(name: &str, value: &Bound<'_, PyAny>) -> PyResult<VariableValue> {
+        if value.is_instance_of::<PyBool>() {
+            Ok(VariableValue::Bool(value.extract()?))
+        } else if value.is_instance_of::<PyInt>() {
+            value
+                .extract::<i64>()
+                .map(VariableValue::Int)
+                .map_err(|_| input_error(format!("variables['{name}'] is an integer out of range")))
+        } else if value.is_instance_of::<PyFloat>() {
+            Ok(VariableValue::Real(value.extract()?))
+        } else if value.is_instance_of::<PyString>() {
+            Ok(VariableValue::Text(value.extract()?))
+        } else {
+            Err(input_error(format!(
+                "variables['{name}'] must be a float, int, bool or str, not {}",
+                value.get_type().name()?
+            )))
+        }
+    }
+
+    fn number_items(value: &Bound<'_, PyAny>, field: &str) -> PyResult<Vec<(String, f64)>> {
+        let dict = value
+            .cast::<PyDict>()
+            .map_err(|_| input_error(format!("start['{field}'] must be a dict of numbers")))?;
+        dict.iter()
+            .map(|(key, value)| {
+                let key: String = key.extract()?;
+                let number = value
+                    .extract::<f64>()
+                    .map_err(|_| input_error(format!("start['{field}']['{key}'] must be a number")))?;
+                Ok((key, number))
+            })
+            .collect()
+    }
+
+    fn string_items(value: &Bound<'_, PyAny>, field: &str) -> PyResult<Vec<(String, String)>> {
+        let dict = value
+            .cast::<PyDict>()
+            .map_err(|_| input_error(format!("start['{field}'] must be a dict of strings")))?;
+        dict.iter()
+            .map(|(key, value)| {
+                let key: String = key.extract()?;
+                let text = value
+                    .extract::<String>()
+                    .map_err(|_| input_error(format!("start['{field}']['{key}'] must be a str")))?;
+                Ok((key, text))
+            })
+            .collect()
+    }
+
+    /// The `start` dict, in the shape of the returned `state` dict.
+    fn start_state(start: &Bound<'_, PyDict>) -> PyResult<StartState> {
+        let mut state = StartState::default();
+        for (key, value) in start.iter() {
+            let key: String = key.extract()?;
+            match key.as_str() {
+                "axes" => state.axes = number_items(&value, &key)?,
+                "translation" => state.translation = number_items(&value, &key)?,
+                "symbol_table" => state.symbol_table = number_items(&value, &key)?,
+                "string_table" => state.string_table = string_items(&value, &key)?,
+                "g_groups" => state.g_groups = string_items(&value, &key)?,
+                "feed" => {
+                    state.feed = value
+                        .extract::<Option<f64>>()
+                        .map_err(|_| input_error("start['feed'] must be a number or None".to_string()))?
+                }
+                "tool" => {
+                    state.tool = if value.is_none() {
+                        None
+                    } else if let Ok(text) = value.extract::<String>() {
+                        Some(text)
+                    } else {
+                        let number = value
+                            .extract::<f64>()
+                            .map_err(|_| input_error("start['tool'] must be a str, a number or None".to_string()))?;
+                        Some(crate::output::tool_number_text(number))
+                    }
+                }
+                "transformation" => {
+                    state.transformation = value
+                        .extract::<Option<String>>()
+                        .map_err(|_| input_error("start['transformation'] must be a str or None".to_string()))?
+                }
+                "fgroup" => {
+                    state.fgroup = value
+                        .extract::<Option<String>>()
+                        .map_err(|_| input_error("start['fgroup'] must be a str or None".to_string()))?
+                }
+                "fgref" => state.fgref = number_items(&value, &key)?,
+                "rotation" => {
+                    let rows = value
+                        .extract::<Vec<Vec<f64>>>()
+                        .map_err(|_| input_error("start['rotation'] must be a 3x3 list of numbers".to_string()))?;
+                    if rows.len() != 3 || rows.iter().any(|row| row.len() != 3) {
+                        return Err(input_error("start['rotation'] must be a 3x3 list of numbers".to_string()));
+                    }
+                    let mut rotation = [[0.0; 3]; 3];
+                    for (i, row) in rows.iter().enumerate() {
+                        rotation[i].copy_from_slice(row);
+                    }
+                    state.rotation = Some(rotation);
+                }
+                other => {
+                    return Err(input_error(format!(
+                        "start has an unknown key '{other}' (expected axes, translation, rotation, symbol_table, string_table, g_groups, feed, tool, transformation, fgroup, fgref)"
+                    )))
+                }
+            }
+        }
+        Ok(state)
+    }
+
+    /// Collect `definitions`, `variables` and `start` before the worker starts,
+    /// so a malformed argument raises at the call.
+    fn start_inputs(
+        definitions: Option<Vec<String>>,
+        variables: Option<&Bound<'_, PyDict>>,
+        start: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<StartInputs> {
+        let variables = match variables {
+            Some(dict) => dict
+                .iter()
+                .map(|(key, value)| {
+                    let name: String = key
+                        .extract()
+                        .map_err(|_| input_error("variables keys must be str".to_string()))?;
+                    let value = variable_value(&name, &value)?;
+                    Ok((name, value))
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+            None => Vec::new(),
+        };
+        Ok(StartInputs {
+            definitions: definitions.unwrap_or_default(),
+            variables,
+            start: start.map(start_state).transpose()?,
+        })
     }
 
     /// Build one Arrow [`RecordBatch`](arrow::record_batch::RecordBatch) directly
@@ -271,7 +434,7 @@ mod python_bindings {
     #[allow(clippy::too_many_arguments)]
     fn spawn_stream(
         input: SourceText,
-        initial_state: Option<String>,
+        inputs: StartInputs,
         axis_identifiers: Option<Vec<String>>,
         extra_axes: Option<Vec<String>>,
         iteration_limit: usize,
@@ -291,7 +454,7 @@ mod python_bindings {
             .spawn(move || {
                 let outcome = nc_to_row_stream(
                     input,
-                    initial_state.as_deref(),
+                    Some(&inputs),
                     axis_identifiers,
                     extra_axes,
                     iteration_limit,
@@ -320,7 +483,7 @@ mod python_bindings {
     fn spawn_batch_stream(
         input: SourceText,
         batch_size: usize,
-        initial_state: Option<String>,
+        inputs: StartInputs,
         axis_identifiers: Option<Vec<String>>,
         extra_axes: Option<Vec<String>>,
         iteration_limit: usize,
@@ -376,7 +539,7 @@ mod python_bindings {
             .spawn(move || {
                 let outcome = nc_to_batch_stream_with(
                     input,
-                    initial_state.as_deref(),
+                    Some(&inputs),
                     axis_identifiers,
                     extra_axes,
                     iteration_limit,
@@ -702,7 +865,7 @@ mod python_bindings {
         }
 
         /// The final interpreter state
-        /// (`{axes, symbol_table, translation, rotation, string_table}`), available once
+        /// (`{axes, symbol_table, translation, rotation, string_table, g_groups, feed, tool, transformation, fgroup, fgref}`), available once
         /// the iterator is exhausted.
         #[getter]
         fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
@@ -716,11 +879,13 @@ mod python_bindings {
     /// worker thread. Rows are forward-filled like the batch DataFrame
     /// unless `forward_fill` is false.
     #[pyfunction]
-    #[pyo3(signature = (input, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, forward_fill = true, include_variables = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None))]
+    #[pyo3(signature = (input, definitions = None, variables = None, start = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, forward_fill = true, include_variables = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_rows(
         input: PyBackedStr,
-        initial_state: Option<String>,
+        definitions: Option<Vec<String>>,
+        variables: Option<Bound<'_, PyDict>>,
+        start: Option<Bound<'_, PyDict>>,
         axis_identifiers: Option<Vec<String>>,
         extra_axes: Option<Vec<String>>,
         iteration_limit: usize,
@@ -736,9 +901,10 @@ mod python_bindings {
         // as an immediate, clean error. Otherwise the worker borrows the
         // Python str's UTF-8 buffer for the run instead of copying it.
         let input = source_text(input, input_is_path)?;
+        let inputs = start_inputs(definitions, variables.as_ref(), start.as_ref())?;
         let (row_receiver, result_receiver, handle) = spawn_stream(
             input,
-            initial_state,
+            inputs,
             axis_identifiers,
             extra_axes,
             iteration_limit,
@@ -936,7 +1102,7 @@ mod python_bindings {
         }
 
         /// The final interpreter state
-        /// (`{axes, symbol_table, translation, rotation, string_table}`), available once
+        /// (`{axes, symbol_table, translation, rotation, string_table, g_groups, feed, tool, transformation, fgroup, fgref}`), available once
         /// the iterator is exhausted.
         #[getter]
         fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
@@ -971,12 +1137,14 @@ mod python_bindings {
     /// thread. Wrapping each with `pl.DataFrame` and concatenating reconstructs
     /// `nc_to_dataframe`.
     #[pyfunction]
-    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false, subprograms = None, external_variables = None, m_function_subprograms = None, required_subprograms = None, stop_on_setal = false, defer_rows = false))]
+    #[pyo3(signature = (input, batch_size = 500_000, definitions = None, variables = None, start = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false, subprograms = None, external_variables = None, m_function_subprograms = None, required_subprograms = None, stop_on_setal = false, defer_rows = false))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_batches(
         input: PyBackedStr,
         batch_size: usize,
-        initial_state: Option<String>,
+        definitions: Option<Vec<String>>,
+        variables: Option<Bound<'_, PyDict>>,
+        start: Option<Bound<'_, PyDict>>,
         axis_identifiers: Option<Vec<String>>,
         extra_axes: Option<Vec<String>>,
         iteration_limit: usize,
@@ -1005,10 +1173,11 @@ mod python_bindings {
         }
         // Read the program here when given a path (see nc_to_rows).
         let input = source_text(input, input_is_path)?;
+        let inputs = start_inputs(definitions, variables.as_ref(), start.as_ref())?;
         let (batch_receiver, result_receiver, events_receiver, handle) = spawn_batch_stream(
             input,
             batch_size,
-            initial_state,
+            inputs,
             axis_identifiers,
             extra_axes,
             iteration_limit,

@@ -14,12 +14,15 @@ mod interpreter;
 mod line_driver;
 mod modal_groups;
 mod output;
+mod start;
 mod state;
 mod structure_scan;
 mod subprogram;
 mod types;
 
 use interpreter::nc_to_table;
+use serde_json::Value as Json;
+use start::{StartInputs, StartState, VariableValue};
 use std::path::PathBuf;
 
 fn main() -> io::Result<()> {
@@ -52,11 +55,26 @@ fn main() -> io::Result<()> {
                 .value_parser(clap::value_parser!(String)),
         )
         .arg(
-            Arg::new("initial_state")
-                .short('i')
-                .long("initial_state")
-                .value_name("INITIAL_STATE")
-                .help("Optional initial state file to e.g. define global variables or set axis positions")
+            Arg::new("definitions")
+                .long("definitions")
+                .value_name("FILE")
+                .help("Definition file (GUD/MGUD .DEF) to read before the program; repeat for several, read in order")
+                .action(ArgAction::Append)
+                .value_parser(clap::value_parser!(String)),
+        )
+        .arg(
+            Arg::new("variables")
+                .long("variables")
+                .value_name("FILE")
+                .help("JSON object of variable values applied after the definitions, e.g. {\"COUNT\": 3}")
+                .num_args(1)
+                .value_parser(clap::value_parser!(String)),
+        )
+        .arg(
+            Arg::new("start")
+                .long("start")
+                .value_name("FILE")
+                .help("JSON object with the machine state at program start (the shape of the returned state)")
                 .num_args(1)
                 .value_parser(clap::value_parser!(String)),
         )
@@ -133,18 +151,20 @@ fn main() -> io::Result<()> {
     let input = std::fs::read_to_string(matches.get_one::<String>("input").unwrap())
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error reading input file: {}", e)))?;
 
-    let initial_state = matches
-        .get_one::<String>("initial_state")
-        .map(std::fs::read_to_string)
-        .transpose()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Error reading initial state file: {}", e)))?;
+    let inputs = match read_start_inputs(&matches) {
+        Ok(inputs) => inputs,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+    };
 
     let allow_undefined_variables = matches.get_flag("allow_undefined_variables");
     let flatten_tolerance = matches.get_one::<f64>("flatten_tolerance").copied();
 
     match nc_to_table(
         input,
-        initial_state.as_deref(),
+        Some(&inputs),
         axes_override.clone(),
         extra_axes,
         *iteration_limit,
@@ -166,4 +186,133 @@ fn main() -> io::Result<()> {
             std::process::exit(1);
         }
     }
+}
+
+fn read_file(path: &str, what: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("Error reading {what} file '{path}': {e}"))
+}
+
+fn read_json_object(path: &str, what: &str) -> Result<serde_json::Map<String, Json>, String> {
+    match serde_json::from_str::<Json>(&read_file(path, what)?) {
+        Ok(Json::Object(map)) => Ok(map),
+        Ok(_) => Err(format!("{what} file '{path}' must hold a JSON object")),
+        Err(e) => Err(format!("{what} file '{path}' is not valid JSON: {e}")),
+    }
+}
+
+fn variable_value(name: &str, value: &Json) -> Result<VariableValue, String> {
+    match value {
+        Json::Bool(b) => Ok(VariableValue::Bool(*b)),
+        Json::Number(n) => Ok(n
+            .as_i64()
+            .map(VariableValue::Int)
+            .unwrap_or_else(|| VariableValue::Real(n.as_f64().unwrap_or(f64::NAN)))),
+        Json::String(s) => Ok(VariableValue::Text(s.clone())),
+        _ => Err(format!("variables['{name}'] must be a number, a boolean or a string")),
+    }
+}
+
+fn number_map(value: &Json, field: &str) -> Result<Vec<(String, f64)>, String> {
+    let Json::Object(map) = value else {
+        return Err(format!("start['{field}'] must be an object of numbers"));
+    };
+    map.iter()
+        .map(|(key, v)| {
+            v.as_f64()
+                .map(|n| (key.clone(), n))
+                .ok_or_else(|| format!("start['{field}']['{key}'] must be a number"))
+        })
+        .collect()
+}
+
+fn string_map(value: &Json, field: &str) -> Result<Vec<(String, String)>, String> {
+    let Json::Object(map) = value else {
+        return Err(format!("start['{field}'] must be an object of strings"));
+    };
+    map.iter()
+        .map(|(key, v)| {
+            v.as_str()
+                .map(|s| (key.clone(), s.to_string()))
+                .ok_or_else(|| format!("start['{field}']['{key}'] must be a string"))
+        })
+        .collect()
+}
+
+fn start_state(map: &serde_json::Map<String, Json>) -> Result<StartState, String> {
+    let mut start = StartState::default();
+    for (key, value) in map {
+        match key.as_str() {
+            "axes" => start.axes = number_map(value, key)?,
+            "translation" => start.translation = number_map(value, key)?,
+            "symbol_table" => start.symbol_table = number_map(value, key)?,
+            "string_table" => start.string_table = string_map(value, key)?,
+            "g_groups" => start.g_groups = string_map(value, key)?,
+            "feed" => start.feed = if value.is_null() { None } else { Some(value.as_f64().ok_or("start['feed'] must be a number")?) },
+            "tool" => {
+                start.tool = match value {
+                    Json::Null => None,
+                    Json::String(text) => Some(text.clone()),
+                    Json::Number(n) => Some(n.to_string()),
+                    _ => return Err("start['tool'] must be a string or a number".to_string()),
+                }
+            }
+            "transformation" => {
+                start.transformation = match value {
+                    Json::Null => None,
+                    Json::String(text) => Some(text.clone()),
+                    _ => return Err("start['transformation'] must be a string".to_string()),
+                }
+            }
+            "fgroup" => {
+                start.fgroup = match value {
+                    Json::Null => None,
+                    Json::String(text) => Some(text.clone()),
+                    _ => return Err("start['fgroup'] must be a string".to_string()),
+                }
+            }
+            "fgref" => start.fgref = number_map(value, key)?,
+            "rotation" => {
+                let rows = value.as_array().filter(|rows| rows.len() == 3).ok_or("start['rotation'] must be a 3x3 list")?;
+                let mut rotation = [[0.0; 3]; 3];
+                for (i, row) in rows.iter().enumerate() {
+                    let row = row.as_array().filter(|row| row.len() == 3).ok_or("start['rotation'] must be a 3x3 list")?;
+                    for (j, v) in row.iter().enumerate() {
+                        rotation[i][j] = v.as_f64().ok_or("start['rotation'] must hold numbers")?;
+                    }
+                }
+                start.rotation = Some(rotation);
+            }
+            other => {
+                return Err(format!(
+                    "start has an unknown key '{other}' (expected axes, translation, rotation, symbol_table, string_table, g_groups, feed, tool, transformation, fgroup, fgref)"
+                ))
+            }
+        }
+    }
+    Ok(start)
+}
+
+fn read_start_inputs(matches: &clap::ArgMatches) -> Result<StartInputs, String> {
+    let definitions = matches
+        .get_many::<String>("definitions")
+        .into_iter()
+        .flatten()
+        .map(|path| read_file(path, "definitions"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let variables = match matches.get_one::<String>("variables") {
+        Some(path) => read_json_object(path, "variables")?
+            .iter()
+            .map(|(name, value)| Ok((name.clone(), variable_value(name, value)?)))
+            .collect::<Result<Vec<_>, String>>()?,
+        None => Vec::new(),
+    };
+    let start = match matches.get_one::<String>("start") {
+        Some(path) => Some(start_state(&read_json_object(path, "start")?)?),
+        None => None,
+    };
+    Ok(StartInputs {
+        definitions,
+        variables,
+        start,
+    })
 }

@@ -120,7 +120,7 @@ def test_batch_variable_events_absent_without_flag():
 
 
 def test_batch_variable_events_empty_when_no_assignments():
-    it = nc_to_batches("G1 X10\nX20 Y5", include_variables=True)
+    it = nc_to_batches("G1 F1000 X10\nX20 Y5", include_variables=True)
     list(it)
     assert isinstance(it.variable_events, pl.DataFrame)
     assert it.variable_events.height == 0
@@ -133,18 +133,21 @@ def test_string_table_round_trips_through_state_dict():
         'MSG="HELLO WORLD"',
         "DEF STRING[8] TAG",
         'TAG="ABC"',
-        "G1 X1",
+        "G1 F1000 X1",
     )
     _df, state = nc_to_dataframe(program)
     assert state["string_table"] == {"MSG": "HELLO WORLD", "TAG": "ABC"}
     # The existing numeric sub-tables are untouched by the new key.
-    assert set(state) == {"axes", "symbol_table", "translation", "rotation", "string_table"}
+    assert set(state) == {
+        "axes", "symbol_table", "translation", "rotation", "string_table", "g_groups", "feed",
+        "tool", "transformation", "fgroup", "fgref",
+    }
     # The string variable never leaks into the numeric symbol table.
     assert "MSG" not in state["symbol_table"]
 
 
 def test_string_table_on_streaming_and_batch_iterators():
-    program = 'DEF STRING[8] MSG\nMSG="HI"\nG1 X1'
+    program = 'DEF STRING[8] MSG\nMSG="HI"\nG1 F1000 X1'
     rows = nc_to_rows(program)
     list(rows)
     assert rows.state["string_table"] == {"MSG": "HI"}

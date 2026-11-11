@@ -98,6 +98,82 @@ released to PyPI.
 
 ### Changed
 
+- **Breaking:** `initial_state` is removed from `nc_to_dataframe`,
+  `nc_to_batches`, `nc_to_rows`, the Rust interpreter functions and the CLIs
+  (`-i/--initial_state`, `--initial-state`). It ran a string of NC text before
+  the program and discarded its rows, which mixed three jobs. Three inputs
+  replace it, applied in this order before the main program:
+  - `definitions`: a list of definition files (GUD/MGUD/UGUD `.DEF`), each
+    read on its own. A file may hold DEF and REDEF statements, assignments to
+    variables and comments; the `%_N_..._DEF` header and `$PATH=` line are
+    skipped. M17, M30 or M2 ends that file and reading goes on with the next,
+    so several files no longer need their end codes stripped. `CHANDATA(1)`
+    is accepted and ignored; another channel number is an error. `TRAFOOF`
+    on a block of its own sets the start transformation to off, in the first
+    row and the returned state, unless `start["transformation"]` gives
+    another, so a restore program (CHANDATA(1), TRAFOOF, SET array
+    assignments, M30) reads unchanged. The program stops M0 and M1 are
+    ignored. A subprogram call stays an error naming the call. Assigning
+    to a name the files have not declared is an error, unless it is an R
+    parameter or `allow_undefined_variables` is set. Motion, G codes or
+    anything else is an error naming the file (`NcError.definition_file`,
+    its index in the list) and the line within it. Migration: pass the DEF
+    files as a list instead of concatenating them into `initial_state`.
+  - `variables`: a dict of values (`float`, `int`, `bool`, `str`) written
+    straight into the variable tables and checked against the declared type
+    (2.5 into an INT, or a string into a REAL or an R parameter, is an
+    error). Names must be
+    defined unless they are R parameters, system variables or
+    `allow_undefined_variables` is set. Migration: replace generated
+    `NAME=VALUE` lines with `variables={"NAME": value}`; strings now work.
+  - `start`: the machine state at program start, in the shape of the
+    returned state dict (`axes`, `translation`, `rotation`, `symbol_table`,
+    `string_table`, plus the new `g_groups`, `feed`, `tool`,
+    `transformation`, `fgroup` and `fgref`), so a returned state can be
+    passed back. `fgroup` is the FGROUP column value and `fgref` maps a
+    channel axis to its FGREF reference radius. Modal G groups
+    are checked against the G group table, and they, `feed`, `tool` (the `T`
+    column), `transformation`, `fgroup` and `fgref` fill the first output row, so those columns
+    no longer start as null. Axis positions and the frame only seed the internal state.
+    A name in both `variables` and `start` is an error. Migration: replace
+    axis words and frame instructions in `initial_state` with
+    `start={"axes": {...}, "translation": {...}}`, and modal G codes and F
+    with `start={"g_groups": {...}, "feed": ...}`.
+  The returned state gains `g_groups` (modal G group column to code, as of
+  the last row), `feed`, `tool`, `transformation`, `fgroup` and `fgref`. The CLIs take `--definitions FILE` (repeatable),
+  `--variables FILE.json` and `--start FILE.json`. The Rust functions take
+  `Option<&start::StartInputs>` where they took `Option<&str>`.
+
+- **Breaking:** a block that traverses a path (G1, G2, G3, CIP, splines and
+  the other path motions) while no feed is programmed is an error
+  (`NcError.kind == "feed_not_programmed"`), as alarm 10860 is on the
+  control. G0, the G4 dwell, G74/G75 and the thread commands need no F;
+  G63 tapping does. A change of feed unit deletes F and FZ (Axes and
+  spindles manual 7.2.1, 7.2.2): inverse time (G93), traversing time
+  (G931), per minute (G94, G961, G971, G942) and per revolution (G95, G96,
+  G97, G952, G973); G962 and G972 keep the unit that was active. A change
+  within one unit (G95 to G96) keeps F. When the previous feed type is
+  unknown (never programmed, not in `start["g_groups"]`) nothing is
+  deleted. A feed seeded from `start` is start state, not an F of the first
+  block, so a feed type change there deletes it too. `FZ=` (feed per tooth)
+  counts as a feed under a revolutional feed type and `FB=` (non-modal feed,
+  7.4.10) for its own block; both are now output columns (`FZ`
+  forward-filled, `FB` not), where they used to become variables. G4 with
+  axis words in the same block is an error (G4 stands alone, manual
+  3.14.7). G93 recommends but does not
+  require F in every block, so that is not checked. The control's default
+  feed SD42110 `$SC_DEFAULT_FEED` (0 unless set) is evaluated at program
+  start: pass it as `start["feed"]`. The check is off when F is not a
+  configured axis. FGROUP only selects the axes F refers to, so a block
+  moving only synchronized or rotary axes needs F the same way, and FGROUP
+  and FGREF neither move nor delete F. Tree walker, VM and line fast path
+  raise the same error.
+  Migration: program F before the first path motion or pass
+  `start={"feed": ...}`. The examples `simple`, `trans_ic`, `r_param`,
+  `axis_index_assignment`, `multiple_m_codes` and `function_calls` gained
+  `F1000` on their first path motion, and their expected CSVs gained the
+  `F` column (no other column changed).
+
 - **Breaking:** every G-group column (`gg01_motion`, `gg02_wait`, ...) in the
   output of `nc_to_batches`, `nc_to_dataframe` and `sanitize_dataframe` is
   now a `pl.Enum` instead of `String`. Its categories are that group's
@@ -127,6 +203,7 @@ released to PyPI.
 
 - **Breaking:** the minimum polars version is now 1.32 (was 1.9). The Enum
   handoff relies on the Arrow field metadata polars reads from 1.32 on.
+
 - A program that calls `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`, `TRACON` or
   `TRAFOOF` gets the new `transformation` column, also when it uses none of
   the new arguments.

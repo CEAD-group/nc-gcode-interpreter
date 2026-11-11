@@ -904,7 +904,7 @@ fn interpret_tool_selection(
     Ok(())
 }
 /// The base name a DEF item declares (`DEF REAL A=1, B[3]`), for local scoping.
-fn declared_base(item: &Pair<Rule>, state: &State) -> Option<String> {
+pub(crate) fn declared_base(item: &Pair<Rule>, state: &State) -> Option<String> {
     match item.as_rule() {
         Rule::assignment => definition_target_name(item, state),
         Rule::variable => interpret_variable(item.clone(), state).ok(),
@@ -2803,7 +2803,7 @@ fn read_actual_position_sysvar(pair: &Pair<Rule>, state: &mut State) -> Result<O
                     preview,
                     "actual-position system variable".to_string(),
                     format!(
-                        "{name}[{axis}] is read before axis {axis} has a position; set a start position (e.g. via an initial-state file) or pass allow_undefined_variables"
+                        "{name}[{axis}] is read before axis {axis} has a position; set a start position (e.g. in start['axes']) or pass allow_undefined_variables"
                     ),
                 ))
             }
@@ -2893,7 +2893,14 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
     // Whether this DEF declares STRING[n] variables (the data_type pair
     // precedes the declared names in the grammar).
     let mut is_string = false;
+    let mut declared = crate::state::VarType::Real;
     for pair in pairs {
+        // Kept so `variables` and `start` can check a value against the type.
+        if let Some(base) = declared_base(&pair, state) {
+            state
+                .var_types
+                .insert(crate::subprogram::base_name(&base).to_uppercase(), declared);
+        }
         if !state.ext.frames.is_empty() {
             if let Some(base) = declared_base(&pair, state) {
                 if state.ext.is_external(&base.to_uppercase()) {
@@ -3006,6 +3013,7 @@ fn interpret_definition(element: Pair<Rule>, output: &mut Output, state: &mut St
                 // Numeric types (INT/REAL/BOOL) are all treated as f64;
                 // STRING[n] routes the declared names to the string table.
                 is_string = pair.as_str().to_uppercase().starts_with("STRING");
+                declared = crate::state::VarType::from_data_type(pair.as_str());
             }
             _ => Err(ParsingError::UnexpectedRule {
                 rule: pair.as_rule(),

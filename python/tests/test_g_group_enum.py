@@ -16,7 +16,7 @@ from nc_gcode_interpreter import (
 )
 from polars.testing import assert_frame_equal
 
-PROGRAM = 'G1 G64 X1\nX2\nG4 F0.5\nG0 X3 T="TOOL"\nG17 X4 ; note\nFOO()\nG2 X5 CR=3\nM30\n'
+PROGRAM = 'G1 G64 F1000 X1\nX2\nG4 F0.5\nG0 X3 T="TOOL"\nG17 X4 ; note\nFOO()\nG2 X5 CR=3\nM30\n'
 
 
 def _assert_g_group_dtypes(frame: pl.DataFrame) -> None:
@@ -37,7 +37,7 @@ def test_g_group_columns_arrive_as_enum_without_a_cast():
     # Bypasses _batch_frame: red here means polars no longer reads the Enum tag Rust writes.
     from nc_gcode_interpreter import _internal
 
-    batches = _internal.nc_to_batches(PROGRAM, 3, None, None, None, 10000, False, None, False, False, None, False, False)
+    batches = _internal.nc_to_batches(PROGRAM, batch_size=3)
     seen = set()
     for batch in batches:
         frame = pl.DataFrame(batch)
@@ -96,8 +96,21 @@ def test_unknown_g_command_is_a_loud_error():
         nc_to_dataframe("G01 X1\n")
     assert info.value.kind == "unknown_g_command"
     with pytest.raises(NcError, match="G01") as info:
-        nc_to_dataframe("X1\n", initial_state="G01\n")
-    assert info.value.kind == "unknown_g_command"
+        nc_to_dataframe("X1\n", start={"g_groups": {"gg01_motion": "G01"}})
+    assert info.value.kind == "invalid_input"
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 500_000])
+def test_g_groups_seeded_from_start_have_the_enum_dtype_of_later_rows(batch_size):
+    start = {"g_groups": {"gg01_motion": "G1", "gg06_plane_select": "G18"}, "feed": 100.0}
+    program = "X1\nG0 X2\nG17 X3\n"
+    df, _ = nc_to_dataframe(program, start=start)
+    frames = list(nc_to_batches(program, start=start, batch_size=batch_size))
+    for frame in [df, *frames]:
+        _assert_g_group_dtypes(frame)
+    assert df["gg01_motion"].to_list() == ["G1", "G0", "G0"]
+    assert df["gg06_plane_select"].to_list() == ["G18", "G18", "G17"]
+    assert_frame_equal(pl.concat(frames, how="diagonal").select(df.columns), df)
 
 
 def test_literal_comparison_and_manual_order_sort():

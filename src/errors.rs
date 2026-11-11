@@ -30,8 +30,9 @@ Line: {preview}
 Details: Undefined array element '{variable}'.
 This error occurs when an array element or an indexed system variable is
 read before any value was assigned to it. Define it before use, for example
-in an initial state file, or set the `allow_undefined_variables` flag to
-true (this will initialize undefined variables to 0.0).
+in a definition file (`definitions`) with a value from `variables`, or set
+the `allow_undefined_variables` flag to true (this will initialize undefined
+variables to 0.0).
 "#
     )]
     UnknownVariable {
@@ -47,10 +48,10 @@ Line: {preview}
 
 Details: Undefined variable '{name}'.
 This error occurs when using an undefined variable in an expression.
-To fix this, make sure to define the variable before using it. This can 
-be done by adding common definitions to an initial state file, or by
-setting the `allow_undefined_variables` flag to true (this will initialize
-undefined variables to 0.0).
+To fix this, make sure to define the variable before using it. This can
+be done by passing the definition files that declare it (`definitions`),
+or by setting the `allow_undefined_variables` flag to true (this will
+initialize undefined variables to 0.0).
 "#
     )]
     UndefinedVariable {
@@ -233,6 +234,28 @@ Details: Function {name} expects {expected} argument(s), but received {actual}.
         expected: usize,
         actual: usize,
     },
+    /// A block traverses a path with no feed rate programmed (alarm 10860).
+    #[error(
+        r#"
+Feed rate not programmed on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: {message}
+"#
+    )]
+    FeedNotProgrammed {
+        line_no: usize,
+        preview: String,
+        message: String,
+    },
+    /// An error while reading one of the `definitions` files. The inner error's
+    /// line is the line within that file.
+    #[error("In definitions[{index}]:{error}")]
+    InDefinitionFile { index: usize, error: Box<ParsingError> },
+    /// A `variables` or `start` entry that cannot be applied.
+    #[error("Invalid {field}: {message}")]
+    InvalidInput { field: String, message: String },
 }
 
 /// Structured location of an error, for callers that want the position as data
@@ -299,6 +322,7 @@ impl ParsingError {
             | Self::UnmatchedStructure { line_no, preview, .. }
             | Self::UnknownGCommand { line_no, preview, .. }
             | Self::InvalidFunctionArity { line_no, preview, .. }
+            | Self::FeedNotProgrammed { line_no, preview, .. }
             // Semantic/validation errors: the offending block is known at raise
             // time, so they anchor to a line (no column) like the others above.
             | Self::UnexpectedAxis { line_no, preview, .. }
@@ -309,7 +333,18 @@ impl ParsingError {
             | Self::InvalidCondition
             | Self::UnexpectedOperator { .. }
             | Self::LoopLimit { .. }
-            | Self::StreamClosed => None,
+            | Self::StreamClosed
+            | Self::InvalidInput { .. } => None,
+            Self::InDefinitionFile { error, .. } => error.location(),
+        }
+    }
+
+    /// The position in the `definitions` list of the file the error is in, or
+    /// `None` for an error in the main program or a subprogram.
+    pub fn definition_index(&self) -> Option<usize> {
+        match self {
+            Self::InDefinitionFile { index, .. } => Some(*index),
+            _ => None,
         }
     }
 
@@ -340,6 +375,9 @@ impl ParsingError {
             Self::UnmatchedStructure { .. } => "unmatched_structure",
             Self::UnknownGCommand { .. } => "unknown_g_command",
             Self::InvalidFunctionArity { .. } => "invalid_function_arity",
+            Self::InDefinitionFile { error, .. } => error.kind(),
+            Self::InvalidInput { .. } => "invalid_input",
+            Self::FeedNotProgrammed { .. } => "feed_not_programmed",
         }
     }
 }

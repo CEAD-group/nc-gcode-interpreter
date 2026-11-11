@@ -8,10 +8,10 @@ def test_undefined_variables(capsys):
     """
     # Test with allow_undefined_variables=False (default)
     with pytest.raises(ValueError):
-        nc_to_dataframe("G1 X=AA")  # AA is undefined
+        nc_to_dataframe("G1 F1000 X=AA")  # AA is undefined
     
     # Test with allow_undefined_variables=True
-    df, state = nc_to_dataframe("G1 X=AA", allow_undefined_variables=True)
+    df, state = nc_to_dataframe("G1 F1000 X=AA", allow_undefined_variables=True)
 
     assert df["X"][0] == 0.0  # Undefined variable AA should be treated as 0
     assert "AA" in state["symbol_table"]  # Verify AA is added to the symbol table

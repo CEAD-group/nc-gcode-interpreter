@@ -103,6 +103,7 @@ pub fn classify_g_command(word: &str) -> Option<(&'static str, bool)> {
 
 /// The commands of a G-group column in manual order: the categories of
 /// its Enum dtype. `None` when `group` is not a G-group column.
+#[cfg_attr(not(feature = "python"), allow(dead_code))] // read by the Python bindings only
 pub fn g_group_values(group: &str) -> Option<&'static [&'static str]> {
     Some(match group {
         "gg01_motion" => &[
