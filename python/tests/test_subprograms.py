@@ -548,31 +548,3 @@ def test_dataframe_with_a_provider_equals_the_batch_stream():
     # The stream hands rows over before each access; the whole table need not.
     assert len(batches) > 1
     assert whole.equals(pl.concat(batches, how="diagonal_relaxed"), null_equal=True)
-
-
-@pytest.mark.parametrize("end", ["M30", "M17", "M2", "RET"])
-@pytest.mark.parametrize("subprograms", [None, {"SETUP": "PROC SETUP\nLOADED = 1\nM17\nLOADED = 2\n"}])
-def test_initial_state_reads_past_the_end_of_each_definition_file(end, subprograms):
-    # Definition files each end in M30 or M17; a caller concatenates them.
-    defs = (
-        f";$PATH=/_N_DEF_DIR\nDEF NCK REAL SPEED=10\n{end}\n"
-        f";$PATH=/_N_DEF_DIR\nDEF NCK REAL FEED=20, LOADED\n{end}\n"
-    )
-    if subprograms:
-        defs += "SETUP\n"
-    df, state = nc_to_dataframe(
-        f"G1 X=SPEED F=FEED\n{end}\nG1 X99\n", initial_state=defs, subprograms=subprograms
-    )
-    assert state["symbol_table"]["FEED"] == 20
-    # A subprogram called from the initial state still returns at its M17.
-    assert state["symbol_table"]["LOADED"] == (1 if subprograms else 0)
-    # In the main program the same code still ends the run.
-    assert df["X"].to_list()[0] == 10.0
-    assert 99.0 not in df["X"].to_list()
-
-
-def test_initial_state_with_control_structures_reads_past_m30():
-    defs = "DEF REAL SPEED=10\nIF SPEED > 5\nSPEED = 5\nENDIF\nM30\nDEF REAL FEED=20\nM30\n"
-    _, state = nc_to_dataframe("G1 X=SPEED F=FEED\n", initial_state=defs)
-    assert state["symbol_table"]["SPEED"] == 5
-    assert state["symbol_table"]["FEED"] == 20

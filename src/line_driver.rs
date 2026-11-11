@@ -793,7 +793,7 @@ fn execute_decoded(
                 let preview = state.get_line(line.line_no).unwrap_or("").to_string();
                 insert_m_key(last, code, line.line_no, preview)?;
                 if is_end_of_program_m_code(code) {
-                    flow = crate::interpret_rules::end_of_program(state);
+                    flow = BlockFlow::EndProgram;
                 }
             }
         }

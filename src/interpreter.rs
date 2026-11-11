@@ -122,7 +122,7 @@ pub fn nc_to_table_with(
         // process::exit would kill e.g. a host Python interpreter. The rows
         // of the initial-state file are discarded; only the state matters.
         let mut discard = OutputRows::collect();
-        interpret_initial_state(initial_state, &mut state, &mut discard)?;
+        interpret_file(initial_state, &mut state, &mut discard)?;
     }
 
     // Now interpret the main input using the axis_index_map from state
@@ -211,7 +211,7 @@ pub fn nc_to_row_stream(
     );
     if let Some(initial_state) = initial_state {
         let mut discard = OutputRows::collect();
-        interpret_initial_state(initial_state, &mut state, &mut discard)?;
+        interpret_file(initial_state, &mut state, &mut discard)?;
     }
     let mut output = OutputRows::stream(sender);
     install_flattener(&mut output, &state, flatten_tolerance)?;
@@ -346,7 +346,7 @@ pub fn nc_to_batch_stream_with(
     state.ext = crate::subprogram::ExtState::new(extensions);
     if let Some(initial_state) = initial_state {
         let mut discard = OutputRows::collect();
-        interpret_initial_state(initial_state, &mut state, &mut discard)?;
+        interpret_file(initial_state, &mut state, &mut discard)?;
     }
     state.ext.begin_main();
     let mut output = OutputRows::batch_stream_to(
@@ -367,15 +367,6 @@ pub fn nc_to_batch_stream_with(
 }
 
 /// Interpret a file, pushing rows into `output`.
-/// Run the initial state: definitions and presets, possibly several
-/// definition files one after the other, each ending in M30 or M17.
-fn interpret_initial_state(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
-    state.in_initial_state = true;
-    let result = interpret_file(input, state, output);
-    state.in_initial_state = false;
-    result
-}
-
 fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
     interpret_source(SourceText::from(input), state, output)
 }

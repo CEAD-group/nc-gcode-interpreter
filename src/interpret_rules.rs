@@ -3170,7 +3170,7 @@ fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State
                         state,
                     ));
                 }
-                end_of_program(state)
+                BlockFlow::EndProgram
             }
             Rule::gotos_statement => {
                 // GOTOS repeats the program only when the PLC requests it via
@@ -3244,16 +3244,6 @@ pub(crate) fn insert_m_key(
 pub(crate) fn is_end_of_program_m_code(code: &str) -> bool {
     let digits = code.trim_start_matches(['M', 'm']);
     matches!(digits.trim_start_matches('0'), "2" | "17" | "30")
-}
-
-/// The flow after M2, M17, M30 or RET. In the top level of the initial state
-/// these end one definition file of several, so interpretation continues.
-pub(crate) fn end_of_program(state: &State) -> BlockFlow {
-    if state.in_initial_state && state.ext.frames.is_empty() {
-        BlockFlow::Continue
-    } else {
-        BlockFlow::EndProgram
-    }
 }
 
 /// True for words that look like an axis word with a typo or a missing
@@ -3399,7 +3389,7 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                 insert_m_key(last, &value, line_no, preview)?;
                 // The whole block still executes; interpretation stops after it.
                 if is_end_of_program_m_code(&value) {
-                    flow = end_of_program(state);
+                    flow = BlockFlow::EndProgram;
                 }
             }
             // axis_word is the hoisted fast-path form of assignment's first

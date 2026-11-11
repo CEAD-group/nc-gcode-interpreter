@@ -130,9 +130,6 @@ pub struct State {
     one_letter_keys: [Option<(ColKind, &'static str)>; 128],
     /// Subprogram texts, the external-variable provider and the call stack (#48).
     pub(crate) ext: crate::subprogram::ExtState,
-    /// Set while the initial state runs: its end-of-program codes close a
-    /// definition file, not the run.
-    pub(crate) in_initial_state: bool,
 }
 
 impl State {
@@ -218,7 +215,6 @@ impl State {
             output_keys,
             one_letter_keys,
             ext: crate::subprogram::ExtState::default(),
-            in_initial_state: false,
         }
     }
 

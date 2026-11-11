@@ -119,8 +119,6 @@ def nc_to_dataframe(
         The G-code input as a string or a file-like object.
     initial_state: TextFileLike | str | None, optional
         An optional initial state string or a file-like object to initialize the interpreter's state.
-        It may hold several definition files one after the other: M2, M17, M30 and RET at its
-        top level do not end it.
     axis_identifiers: list[str] | None, optional
         A list of axis identifiers to override the default axes (e.g., ['X', 'Y', 'Z']).
     extra_axes: list[str] | None, optional
