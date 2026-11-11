@@ -4,7 +4,21 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
-## [Unreleased]
+## [v0.3.0] - 2026-11-11
+
+This release changes the API and the output. To upgrade:
+
+- Replace `initial_state` with `definitions` (definition files),
+  `variables` (values) and `start` (machine state); see the first entry
+  under Changed.
+- Program a feed before the first path motion, or pass it in `start` (key
+  `"feed"`): a missing feed is now the `feed_not_programmed` error, as on
+  the control (alarm 10860).
+- The G-group columns are `pl.Enum`, and polars 1.32 or newer is required.
+  `cast(pl.String)` restores the old dtype.
+- New loud errors for constructs that used to be misread: two calls in one
+  block, `G4` with axis words, `FGROUP`/`FGREF` on non-axes, reading
+  `FGREF`, and others listed below.
 
 ### Added
 
