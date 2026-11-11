@@ -342,6 +342,7 @@ pub fn nc_to_batch_stream_with(
             format!("more than one entry for {name} (names are not case-sensitive)"),
         ));
     }
+    let defer_rows = extensions.defer_rows;
     state.ext = crate::subprogram::ExtState::new(extensions);
     if let Some(initial_state) = initial_state {
         let mut discard = OutputRows::collect();
@@ -356,7 +357,7 @@ pub fn nc_to_batch_stream_with(
         events_sender,
         emit_line_no,
     );
-    if state.ext.has_external() {
+    if state.ext.has_external() && !defer_rows {
         state.ext.flush = output.share_batch_sink();
     }
     install_flattener(&mut output, &state, flatten_tolerance)?;
@@ -383,8 +384,7 @@ fn interpret_source(source: SourceText, state: &mut State, output: &mut OutputRo
     // interpreted line by line - trivial lines through the byte decoder,
     // the rest through pest, retaining one line at a time when there are no
     // jumps. NC_STAGE1=0 disables it.
-    // Calls and external variables are dispatched by the block walker only.
-    if !shape.has_block_structures && crate::line_driver::stage1_enabled() && !state.ext.active() {
+    if !shape.has_block_structures && crate::line_driver::stage1_enabled() {
         return match crate::line_driver::interpret_lines(input, output, state)? {
             BlockFlow::Continue | BlockFlow::EndProgram => Ok(()),
             BlockFlow::Jump(request) => Err(request.into_not_found_error(state)),

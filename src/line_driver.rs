@@ -267,7 +267,7 @@ pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> R
             t_pass1.elapsed().as_secs_f64()
         );
     }
-    let result = run_lines(&execs, &chunk_arenas, &targets, output, state);
+    let result = run_lines(&lines, &execs, &chunk_arenas, &targets, output, state);
     state.jump_scopes.pop();
     result
 }
@@ -491,8 +491,12 @@ fn execute_streamed(
 ) -> Result<BlockFlow, ParsingError> {
     match decoded {
         DecodeResult::Blank => Ok(BlockFlow::Continue),
-        DecodeResult::Trivial(decoded, _) => execute_decoded(decoded, arena, output, state),
-        DecodeResult::NeedsGrammar => interpret_block(parse_single_line(line, index, state)?, output, state),
+        DecodeResult::Trivial(decoded, _) if !needs_extension(decoded, arena, state) => {
+            execute_decoded(decoded, arena, output, state)
+        }
+        DecodeResult::Trivial(..) | DecodeResult::NeedsGrammar => {
+            interpret_block(parse_single_line(line, index, state)?, output, state)
+        }
     }
 }
 
@@ -565,6 +569,7 @@ fn decode_all_lines<'a>(lines: &[&'a str], input_bytes: usize) -> (Vec<Vec<Word<
 }
 
 fn run_lines(
+    lines: &[&str],
     execs: &[LineExec],
     chunk_arenas: &[Vec<Word>],
     targets: &HashMap<String, Vec<usize>>,
@@ -576,6 +581,9 @@ fn run_lines(
     while index < execs.len() {
         let flow = match &execs[index] {
             LineExec::Blank => BlockFlow::Continue,
+            LineExec::Decoded(line, chunk_idx) if needs_extension(line, &chunk_arenas[*chunk_idx], state) => {
+                interpret_block(parse_single_line(lines[index], index, state)?, output, state)?
+            }
             LineExec::Decoded(line, chunk_idx) => execute_decoded(line, &chunk_arenas[*chunk_idx], output, state)?,
             LineExec::Parsed(block) => interpret_block(block.clone(), output, state)?,
         };
@@ -602,6 +610,25 @@ fn run_lines(
         }
     }
     Ok(BlockFlow::Continue)
+}
+
+/// Whether a decoded line touches a caller extension (a call, an M function
+/// mapped to a subprogram, a variable the provider serves); such a line runs
+/// through the grammar path, which dispatches them.
+fn needs_extension(line: &DecodedLine, arena: &[Word], state: &State) -> bool {
+    if !state.ext.active() {
+        return false;
+    }
+    let external = |name: &str| state.ext.has_external() && state.ext.is_external(&name.to_uppercase());
+    arena[line.words.clone()].iter().any(|word| match word {
+        Word::Call { .. } => true,
+        Word::MCode(code) => code[1..]
+            .parse::<u32>()
+            .is_ok_and(|number| state.ext.m_functions.contains_key(&number)),
+        Word::Assign(key, _) => external(key),
+        Word::AssignDynamic { key, ident, .. } => external(key) || ident.is_some_and(external),
+        Word::GCommand(..) => false,
+    })
 }
 
 /// Execute a decoded trivial line: the exact effects of `interpret_block`
@@ -753,6 +780,10 @@ fn execute_decoded(
                 // The plane feeds the frame model, exactly as interpret_g_command does.
                 if *group == "gg06_plane_select" {
                     state.set_plane(&code);
+                }
+                // A PROC with SAVE restores these, as interpret_g_command records them.
+                if state.ext.active() && classify_g_command(&code).is_some_and(|(_, modal)| modal) {
+                    state.ext.modal_g.insert(group, code.clone());
                 }
                 let last = output.last_mut().expect("row was just pushed");
                 last.insert(group, Value::Str(code));

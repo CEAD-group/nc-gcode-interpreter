@@ -10,7 +10,9 @@
 
 use crate::interpreter::SourceText;
 use crate::output::BatchStreamSink;
+use crate::types::{Pair, Rule};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 /// Deepest call nesting before the run fails (a recursive cycle never ends).
@@ -86,6 +88,9 @@ pub struct Extensions {
     pub required_subprograms: Vec<String>,
     /// Fail the run at a SETAL call, reporting the alarm and the call path.
     pub stop_on_setal: bool,
+    /// Keep finished rows batched across provider calls instead of sending
+    /// them first; for a consumer that reads no row before the run ends.
+    pub defer_rows: bool,
 }
 
 /// A subprogram text with its line-start table, shared across calls.
@@ -93,6 +98,47 @@ pub struct Extensions {
 pub(crate) struct Subprogram {
     pub source: SourceText,
     pub line_offsets: Arc<[usize]>,
+}
+
+type Blocks<'a> = Pair<'a, Rule>;
+
+self_cell::self_cell!(
+    /// A subprogram body parsed once per run: later calls reuse the parse tree.
+    pub(crate) struct ParsedBody {
+        owner: SourceText,
+        #[covariant]
+        dependent: Blocks,
+    }
+);
+
+impl ParsedBody {
+    /// Check and parse `source`; the error is the message for the calling line.
+    fn parse(source: SourceText) -> Result<Self, String> {
+        use pest::Parser;
+        ParsedBody::try_new(source, |source| {
+            let text = source.as_str();
+            crate::structure_scan::check_structures(text).map_err(|e| e.to_string())?;
+            crate::types::NCParser::parse(Rule::file, text)
+                .map_err(|e| {
+                    let line = match &e.line_col {
+                        pest::error::LineColLocation::Pos(pos) => pos.0,
+                        pest::error::LineColLocation::Span(start, _) => start.0,
+                    };
+                    format!(
+                        "line {line} of the subprogram does not parse: {}",
+                        crate::interpreter::describe_parse_error(&e)
+                    )
+                })?
+                .next()
+                .and_then(|file| file.into_inner().next())
+                .map(Pair::from)
+                .ok_or_else(|| "the subprogram text is empty".to_string())
+        })
+    }
+
+    pub fn blocks(&self) -> Pair<'_, Rule> {
+        self.borrow_dependent().clone()
+    }
 }
 
 /// The variables of one active program level.
@@ -133,6 +179,8 @@ pub(crate) struct ExtState {
     /// Active modal G function per G group, as far as the program set them;
     /// a PROC with the SAVE attribute restores these on return.
     pub modal_g: HashMap<&'static str, String>,
+    /// Bodies parsed so far in this run, by subprogram name.
+    parsed: HashMap<String, Rc<ParsedBody>>,
 }
 
 impl std::fmt::Debug for ExtState {
@@ -196,7 +244,24 @@ impl ExtState {
             flush: None,
             frames: Vec::new(),
             modal_g: HashMap::new(),
+            parsed: HashMap::new(),
         }
+    }
+
+    /// The parsed body of the supplied subprogram `name`, parsed on its first call.
+    pub fn parsed_body(&mut self, name: &str) -> Result<Rc<ParsedBody>, String> {
+        if let Some(body) = self.parsed.get(name) {
+            return Ok(body.clone());
+        }
+        let source = self
+            .subprograms
+            .get(name)
+            .expect("caller checked the name")
+            .source
+            .clone();
+        let body = Rc::new(ParsedBody::parse(source)?);
+        self.parsed.insert(name.to_string(), body.clone());
+        Ok(body)
     }
 
     /// Whether any extension is in use; the line fast path is bypassed then.
@@ -391,6 +456,18 @@ mod tests {
             texts(&table, "non_returning_function_call")[1].as_deref(),
             Some("GOTO_X(5, 2)")
         );
+    }
+
+    #[test]
+    fn a_body_is_parsed_once_per_run() {
+        let sub = "PROC TWICE(REAL TARGET)\nG1 X=TARGET\n";
+        let (table, mut state) = run("TWICE(1)\nTWICE(2)\n", &[("TWICE", sub)]).unwrap();
+        assert_eq!(floats(&table, "X"), [None, Some(1.0), None, Some(2.0)]);
+        let first = state.ext.parsed_body("TWICE").unwrap();
+        assert!(Rc::ptr_eq(&first, &state.ext.parsed_body("TWICE").unwrap()));
+        assert_eq!(state.ext.parsed.len(), 1);
+        let error = run("BROKEN\n", &[("BROKEN", "G1 X=(\n")]).unwrap_err();
+        assert!(error.contains("line 1 of the subprogram does not parse"), "{error}");
     }
 
     #[test]
