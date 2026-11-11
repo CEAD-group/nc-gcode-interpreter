@@ -55,7 +55,7 @@ def test_mpf_file_to_csv(mpf_file, initial_state):
         df_expected.drop_in_place("M")
         df.drop_in_place("M")
 
-    assert_frame_equal(df_expected, df, abs_tol=1e-3)
+    assert_frame_equal(df_expected, df, atol=1e-3)
 
 
 def test_mpf_file_roundtrip(mpf_file, tmp_path, initial_state):
@@ -69,4 +69,4 @@ def test_mpf_file_roundtrip(mpf_file, tmp_path, initial_state):
 
     df, _state = nc_to_dataframe(tmp_file.read_text(), axis_index_map=axis_index_map)
 
-    assert_frame_equal(df_expected, df, abs_tol=1e-3)
+    assert_frame_equal(df_expected, df, atol=1e-3)

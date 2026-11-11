@@ -213,11 +213,9 @@ mod python_bindings {
 
     /// One G-group column as an Arrow dictionary whose values are the group's
     /// full command list in manual order and whose keys index that list, so
-    /// every batch carries the same categories. The field metadata is what
-    /// polars reads to import it as `pl.Enum` (`_PL_ENUM_VALUES` up to 1.31,
-    /// `_PL_ENUM_VALUES2` from 1.32); older versions see a Categorical, which
-    /// the Python wrapper casts. A value outside the list is an error, never a
-    /// null.
+    /// every batch carries the same categories. The `_PL_ENUM_VALUES2` field
+    /// metadata is what polars (>= 1.32) reads to import it as `pl.Enum`. A
+    /// value outside the list is an error, never a null.
     fn g_group_enum_array(
         name: &str,
         categories: &'static [&'static str],
@@ -234,10 +232,7 @@ mod python_bindings {
         let array = DictionaryArray::<UInt8Type>::try_new(keys, Arc::new(values))
             .map_err(|e| PyErr::new::<PyValueError, _>(format!("G-group column '{}': {}", name, e)))?;
         let encoded: String = categories.iter().map(|c| format!("{};{}", c.len(), c)).collect();
-        let metadata = HashMap::from([
-            ("_PL_ENUM_VALUES".to_string(), encoded.clone()),
-            ("_PL_ENUM_VALUES2".to_string(), encoded),
-        ]);
+        let metadata = HashMap::from([("_PL_ENUM_VALUES2".to_string(), encoded)]);
         let field = Field::new(name, array.data_type().clone(), true).with_metadata(metadata);
         Ok((field, Arc::new(array)))
     }

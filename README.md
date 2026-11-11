@@ -133,7 +133,7 @@ The Python bindings also return the state of the program after execution, which 
 
 #### Column dtypes
 
-Axis and other value columns are `Float64`, `N` is `Int64` and `M` is `List(String)`. Each G-group column (`gg01_motion`, `gg06_plane_select`, ...) is a `pl.Enum` whose categories are that group's commands in manual order; `G_GROUP_DTYPES` maps every G-group column name to its dtype, for building matching schemas or empty frames. Every batch and every run has the same Enum per column, so frames concatenate without a cast. `T`, `comment`, `non_returning_function_call` and other free-text columns stay `String`. `nc_to_rows` yields plain `str` values.
+Axis and other value columns are `Float64`, `N` is `Int64` and `M` is `List(String)`. Each G-group column (`gg01_motion`, `gg06_plane_select`, ...) is a `pl.Enum` whose categories are that group's commands in manual order; `G_GROUP_DTYPES` maps every G-group column name to its dtype, for building matching schemas or empty frames. Every batch and every run has the same Enum per column, so frames concatenate without a cast. The Python package requires polars 1.32 or newer. `T`, `comment`, `non_returning_function_call` and other free-text columns stay `String`. `nc_to_rows` yields plain `str` values.
 
 Things that differ from a `String` column:
 

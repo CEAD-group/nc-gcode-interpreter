@@ -14,8 +14,7 @@ released to PyPI.
   commands in manual order, the same in every batch and every run, so batches
   and runs concatenate without a cast and a value outside the group cannot
   occur. Rust hands the codes over as an Arrow dictionary that polars imports
-  as `Enum` directly (polars 1.20 and newer; older versions are cast in
-  Python). The new `G_GROUP_DTYPES` maps each G-group column name to its
+  as `Enum` directly, with no cast. The new `G_GROUP_DTYPES` maps each G-group column name to its
   `pl.Enum`, for matching schemas and empty frames. `T`, `comment`,
   `non_returning_function_call` and other free-text columns stay `String`,
   and `nc_to_rows` still yields `str`. On a 1M-row program the G-group cells
@@ -35,6 +34,9 @@ released to PyPI.
     `assert_frame_equal` against `String` frames, fails on the dtype.
   - Migration: `df.with_columns(pl.col(c).cast(pl.String) for c in
     G_GROUP_DTYPES if c in df.columns)` restores the old dtype.
+
+- **Breaking:** the minimum polars version is now 1.32 (was 1.9). The Enum
+  handoff relies on the Arrow field metadata polars reads from 1.32 on.
 
 ## [v0.2.10] - 2026-11-10
 

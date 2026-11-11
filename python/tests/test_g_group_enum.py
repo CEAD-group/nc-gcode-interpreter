@@ -33,6 +33,21 @@ def test_dtypes_cover_every_group_in_manual_order():
     assert G_GROUP_DTYPES["gg01_motion"].categories.to_list()[:4] == ["G0", "G1", "G2", "G3"]
 
 
+def test_g_group_columns_arrive_as_enum_without_a_cast():
+    # Bypasses _batch_frame: red here means polars no longer reads the Enum tag Rust writes.
+    from nc_gcode_interpreter import _internal
+
+    batches = _internal.nc_to_batches(PROGRAM, 3, None, None, None, 10000, False, None, False, False, None, False, False)
+    seen = set()
+    for batch in batches:
+        frame = pl.DataFrame(batch)
+        for name, dtype in frame.schema.items():
+            if name in G_GROUP_DTYPES:
+                assert dtype == G_GROUP_DTYPES[name], f"{name} arrived as {dtype}"
+                seen.add(name)
+    assert {"gg01_motion", "gg02_wait", "gg06_plane_select"} <= seen
+
+
 def test_batches_share_one_enum_dtype_and_concat_vertically():
     frames = list(nc_to_batches(PROGRAM, batch_size=2))
     assert len(frames) > 2

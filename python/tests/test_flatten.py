@@ -165,7 +165,7 @@ def test_flattening_example_csvs_are_current():
         if "M" in df.columns:
             df = df.with_columns(pl.col("M").list.join(","))
         expected = pl.read_csv(d / f"flatten_demo_{suffix}.csv", schema_overrides=G_GROUP_DTYPES)
-        assert_frame_equal(expected, df, abs_tol=1e-3)
+        assert_frame_equal(expected, df, atol=1e-3)
     # The flattened variant is G1-only with the marker column present.
     flat = pl.read_csv(d / "flatten_demo_flattened.csv")
     assert set(flat["gg01_motion"].drop_nulls().to_list()) == {"G1"}

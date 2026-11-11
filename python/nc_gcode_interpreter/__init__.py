@@ -247,8 +247,9 @@ G_GROUP_DTYPES: dict[str, pl.Enum] = {
 def _batch_frame(batch: Any) -> pl.DataFrame:
     """Wrap one Arrow batch from Rust, with every G-group column as its Enum.
 
-    Rust tags the G-group dictionaries so polars >= 1.20 imports them as Enum
-    directly; older polars reads a Categorical, cast here.
+    Rust tags the G-group dictionaries so polars imports them as Enum
+    directly. The cast is a safety net should polars stop reading that tag;
+    ``test_g_group_columns_arrive_as_enum_without_a_cast`` turns red if it does.
     """
     frame = pl.DataFrame(batch)
     casts = [
