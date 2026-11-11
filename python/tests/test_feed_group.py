@@ -51,7 +51,17 @@ def test_column_order_after_axes():
 
 @pytest.mark.parametrize(
     "program",
-    ["FGROUP(X,NOPE)\n", "FGROUP(1)\n", "FGREF[NOPE]=1\n", "FGREF[1]=1\n"],
+    [
+        "FGROUP(X,NOPE)\n",
+        "FGROUP(1)\n",
+        "FGREF[NOPE]=1\n",
+        "FGREF[1]=1\n",
+        # N, F, S, D and T are in the default axis list but are not channel axes.
+        "FGROUP(X,F)\n",
+        "FGROUP(N)\n",
+        "FGREF[S]=1\n",
+        "FGREF[T]=1\n",
+    ],
 )
 def test_unknown_axis_errors(program):
     with pytest.raises(NcError) as exc:
@@ -96,3 +106,12 @@ def test_flattened_arc_keeps_feed_group_on_first_sample():
     )
     assert df["FGROUP"].to_list()[0] is None
     assert set(df["FGROUP"].to_list()[1:]) == {"X,Y"}
+
+
+@pytest.mark.parametrize("options", [{}, {"axis_index_map": {"RA1": 1}, "allow_undefined_variables": True}])
+def test_reading_fgref_errors(options):
+    """FGREF can be set but not read back; a read used to give 0 under these options."""
+    with pytest.raises(NcError) as exc:
+        nc_to_dataframe("FGREF[RA1]=300\nR1=FGREF[RA1]\nX=R1\n", **options)
+    assert exc.value.kind == "unsupported_statement"
+    assert exc.value.line == 2

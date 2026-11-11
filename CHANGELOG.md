@@ -18,7 +18,9 @@ released to PyPI.
   subprogram call in `non_returning_function_call` and `FGREF[<axis>]` needed
   an `axis_index_map` entry and became the variable `FGREF[<index>]`; it now
   resolves by axis name and is no longer a variable. An argument that is not
-  a configured axis is an `unexpected_axis` error (#107).
+  a configured channel axis (including N, F, S, D and T) is an
+  `unexpected_axis` error. Reading `FGREF[<axis>]` is an
+  `unsupported_statement` error, and so is a user array named `FGREF` (#107).
 
 ## [v0.2.10] - 2026-11-10
 

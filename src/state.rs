@@ -58,6 +58,9 @@ const UNSUPPORTED_ADDRESSES: &[(&str, &str)] = &[
     ("K1", "CIP intermediate point (I1= J1= K1=)"),
 ];
 
+/// Addresses in the configured axis list that are not channel axes (FGROUP, FGREF).
+pub const NON_AXIS_ADDRESSES: &[&str] = &["N", "F", "S", "D", "T"];
+
 /// Which kind of output column an assignment key resolves to. Variables (which
 /// never appear as output cells) are represented by the absence of a resolution
 /// (see [`State::resolve_output_key`]).
@@ -182,7 +185,11 @@ impl State {
         }
 
         for axis in &axis_identifiers {
-            let column = crate::output::fgref_column(&axis.to_uppercase());
+            let axis = axis.to_uppercase();
+            if NON_AXIS_ADDRESSES.contains(&axis.as_str()) {
+                continue;
+            }
+            let column = crate::output::fgref_column(&axis);
             let interned = crate::output::intern_column(&column);
             output_keys.insert(column, (ColKind::Modal, interned));
         }

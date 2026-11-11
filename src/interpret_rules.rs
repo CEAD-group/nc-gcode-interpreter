@@ -251,6 +251,15 @@ fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, Pars
             if let Some(value) = read_actual_position_sysvar(&inner_pair, state)? {
                 return Ok(value);
             }
+            if is_fgref(&inner_pair) {
+                // The value lives only in the output rows, and the control default before the first write is not known.
+                return Err(ParsingError::UnsupportedStatement {
+                    line_no,
+                    preview,
+                    statement: format!("Reading {}", inner_pair.as_str().trim()),
+                    hint: "FGREF can be set but not read back.".to_string(),
+                });
+            }
             interpret_variable_array(inner_pair, state).and_then(|keys| {
                 let key = &keys[keys.len() - 1];
                 if let Some(value) = state.symbol_table.get(key).cloned() {
@@ -788,7 +797,7 @@ fn interpret_fgroup(call: &Pair<Rule>, state: &State) -> Result<Option<String>, 
     let mut axes: Vec<String> = Vec::new();
     for argument in inner.flat_map(|arguments| arguments.into_inner()) {
         let axis = argument.as_str().trim().to_uppercase();
-        if !state.is_axis(&axis) {
+        if !is_channel_axis(&axis, state) {
             let (line_no, preview) = get_error_context(&argument, state);
             return Err(ParsingError::UnexpectedAxis {
                 axis,
@@ -820,7 +829,7 @@ fn fgref_target(pair: &Pair<Rule>, state: &State) -> Result<Option<String>, Pars
         [single] => single.as_str().trim().to_uppercase(),
         _ => String::new(),
     };
-    if !state.is_axis(&axis) {
+    if !is_channel_axis(&axis, state) {
         let (line_no, preview) = get_error_context(pair, state);
         return Err(ParsingError::UnexpectedAxis {
             axis: indices_text(pair),
@@ -830,6 +839,20 @@ fn fgref_target(pair: &Pair<Rule>, state: &State) -> Result<Option<String>, Pars
         });
     }
     Ok(Some(crate::output::fgref_column(&axis)))
+}
+
+/// Whether `axis` (uppercase) names a channel axis. The configured axis list
+/// also holds the addresses N, F, S, D and T, which FGROUP and FGREF reject.
+fn is_channel_axis(axis: &str, state: &State) -> bool {
+    state.is_axis(axis) && !crate::state::NON_AXIS_ADDRESSES.contains(&axis)
+}
+
+/// Whether an array reference names FGREF.
+fn is_fgref(pair: &Pair<Rule>) -> bool {
+    pair.clone()
+        .into_inner()
+        .next()
+        .is_some_and(|name| name.as_rule() == Rule::identifier && name.as_str().eq_ignore_ascii_case("FGREF"))
 }
 
 /// The text between the brackets of an array reference, for error messages.
