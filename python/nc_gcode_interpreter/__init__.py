@@ -346,20 +346,22 @@ G_GROUP_DTYPES: dict[str, pl.Enum] = {
 }
 
 
+# Each group's categories as an Enum series; gathering by code builds the column.
+_G_GROUP_CATEGORIES: dict[str, pl.Series] = {
+    name: pl.Series(name, dtype.categories, dtype=dtype) for name, dtype in G_GROUP_DTYPES.items()
+}
+
+
 def _batch_frame(batch: Any) -> pl.DataFrame:
     """Wrap one Arrow batch from Rust, with every G-group column as its Enum.
 
-    Rust tags the G-group dictionaries so polars imports them as Enum
-    directly. The cast is a safety net should polars stop reading that tag;
-    ``test_g_group_columns_arrive_as_enum_without_a_cast`` turns red if it does.
+    Rust sends each G-group column as UInt8 indices into the group's commands
+    in manual order. Gathering from the Enum's categories turns them into the
+    Enum, since polars 2 no longer casts integers to an Enum.
     """
     frame = pl.DataFrame(batch)
-    casts = [
-        pl.col(name).cast(G_GROUP_DTYPES[name])
-        for name, dtype in frame.schema.items()
-        if name in G_GROUP_DTYPES and dtype != G_GROUP_DTYPES[name]
-    ]
-    return frame.with_columns(casts) if casts else frame
+    columns = [_G_GROUP_CATEGORIES[name].gather(frame[name]) for name in frame.columns if name in _G_GROUP_CATEGORIES]
+    return frame.with_columns(columns) if columns else frame
 
 
 def sanitize_dataframe(
