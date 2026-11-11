@@ -1154,6 +1154,10 @@ pub const SUBPROGRAM_COLUMN: &str = "subprogram";
 /// The line of that row's block inside the innermost subprogram's text.
 pub const SUBPROGRAM_LINE_COLUMN: &str = "subprogram_line";
 
+/// The number of runs programmed with `P` on a subprogram call (manual
+/// 4.2.3.3); null on rows without one.
+pub const CALL_REPETITIONS_COLUMN: &str = "call_repetitions";
+
 /// The kinematic transformation in effect: the last TRAORI, TRANSMIT, TRACYL,
 /// TRAANG, TRACON or TRAFOOF call as written. Modal, so forward-filled.
 pub const TRANSFORMATION_COLUMN: &str = "transformation";
@@ -1186,6 +1190,7 @@ pub fn is_forward_filled_column(name: &str) -> bool {
         && name != FLATTENED_COLUMN
         && name != DWELL_COLUMN
         && name != SUBPROGRAM_LINE_COLUMN
+        && name != CALL_REPETITIONS_COLUMN
         && !is_string_column(name)
         && !BLOCK_ADDRESSES.contains(&name);
     is_value || MODAL_G_GROUPS.contains(&name) || name == TRANSFORMATION_COLUMN
@@ -1265,6 +1270,7 @@ fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
                     *name,
                     "T" | "M"
                         | "non_returning_function_call"
+                        | CALL_REPETITIONS_COLUMN
                         | "comment"
                         | SUBPROGRAM_COLUMN
                         | SUBPROGRAM_LINE_COLUMN
@@ -1285,6 +1291,7 @@ fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
         "T",
         "M",
         "non_returning_function_call",
+        CALL_REPETITIONS_COLUMN,
         SUBPROGRAM_COLUMN,
         SUBPROGRAM_LINE_COLUMN,
         "comment",
@@ -1468,7 +1475,7 @@ enum ColumnBuilder {
 
 impl ColumnBuilder {
     fn new(name: &str, height: usize) -> Self {
-        if name == "N" || name == SUBPROGRAM_LINE_COLUMN {
+        if name == "N" || name == SUBPROGRAM_LINE_COLUMN || name == CALL_REPETITIONS_COLUMN {
             ColumnBuilder::Int(vec![None; height])
         } else if name == "M" {
             ColumnBuilder::StrList(vec![None; height])

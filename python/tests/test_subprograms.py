@@ -342,6 +342,69 @@ def test_array_assignment_with_set_and_rep_outside_a_definition():
         nc_to_dataframe("UNKNOWN[0,0] = SET(1, 2)\n")
 
 
+@pytest.mark.parametrize("line", ["L6 P2", "L6 P=2", "L6 P = 1 + 1", "l6 p2"])
+def test_repetition_count_without_a_body_keeps_name_and_count(line):
+    df, state = nc_to_dataframe(f"G1 F1000 X0\n{line}\nX1\n")
+    assert df["non_returning_function_call"].to_list() == [None, line[:2], None]
+    assert df["call_repetitions"].to_list() == [None, 2, None]
+    assert "P" not in state["symbol_table"]
+
+
+def test_repetition_count_runs_the_body_that_many_times():
+    sub = "PROC STEP(REAL DX, VAR REAL AT)\nAT = AT + DX\nG1 F1000 X=AT\nM17\n"
+    df, _ = nc_to_dataframe(
+        "DEF REAL POS = 0\nR1 = 5\nSTEP(R1, POS) P3\nG1 Y1\n",
+        subprograms={"STEP": sub},
+    )
+    moves = df.filter(pl.col("subprogram") == "STEP", pl.col("subprogram_line") == 3)
+    assert moves["X"].to_list() == [5.0, 10.0, 15.0]
+    assert df["non_returning_function_call"].drop_nulls().to_list() == ["STEP(R1, POS)"]
+    assert df["call_repetitions"].drop_nulls().to_list() == [3]
+    assert df["Y"].to_list()[-1] == 1.0
+
+
+def test_repetition_arguments_are_passed_once():
+    # Manual 4.2.3.3: the parameters are transferred only on the first run.
+    sub = "PROC SHIFT(REAL DX)\nR1 = R1 + 1\nG1 F1000 X=DX\n"
+    df, state = nc_to_dataframe("R1 = 1\nSHIFT(R1) P=2\n", subprograms={"SHIFT": sub})
+    moves = df.filter(pl.col("subprogram") == "SHIFT", pl.col("subprogram_line") == 3)
+    assert moves["X"].to_list() == [1.0, 1.0]
+    assert state["symbol_table"]["R1"] == 3
+
+
+@pytest.mark.parametrize("count", ["P0", "P=0.5", "P=10000"])
+def test_repetition_count_out_of_range_is_an_error(count):
+    with pytest.raises(NcError, match="number of program repetitions"):
+        nc_to_dataframe(f"L6 {count}\n")
+
+
+def test_pcall_calls_the_named_subprogram(capfd):
+    df, _ = nc_to_dataframe("G1 F1000 X0\nPCALL L6\nPCALL SHAFT(1, 2) P2\n")
+    assert df["non_returning_function_call"].drop_nulls().to_list() == ["L6", "SHAFT(1, 2)"]
+    assert df["call_repetitions"].drop_nulls().to_list() == [2]
+    sub = "PROC SHAFT(REAL LEN)\nG1 F1000 X=LEN\n"
+    df, _ = nc_to_dataframe(
+        "PCALL/_N_WKS_DIR/_N_SHAFT_WPD/SHAFT(7)\n", subprograms={"SHAFT": sub}
+    )
+    assert df.filter(pl.col("subprogram") == "SHAFT")["X"].to_list() == [7.0]
+    assert "PCALL path '/_N_WKS_DIR/_N_SHAFT_WPD/' (line 1) is not interpreted" in capfd.readouterr().err
+    with pytest.raises(NcError):
+        nc_to_dataframe("PCALL\n")
+
+
+@pytest.mark.parametrize("line", ["FOO BAR", "FOO(1) BAR(2)", "G1 X1 FOO TRAFOOF", "FOO P2 BAR"])
+def test_two_calls_in_one_block_are_an_error(line):
+    with pytest.raises(NcError, match="in the same block"):
+        nc_to_dataframe(f"G1 X0\n{line}\n")
+    with pytest.raises(NcError, match="in the same block"):
+        nc_to_dataframe(f"G1 X0\n{line}\n", subprograms={"FOO": "G1 X2\n"})
+
+
+def test_keyword_g_commands_next_to_a_call_stay_g_commands():
+    df, _ = nc_to_dataframe("G1 F1000 X0\nSOFT FOO\n")
+    assert df["non_returning_function_call"].drop_nulls().to_list() == ["FOO"]
+
+
 class Recorder:
     """Serves the given names with one value and records every call."""
 
@@ -392,10 +455,25 @@ def test_a_string_cannot_be_assigned_to_an_external_variable():
         nc_to_dataframe('MYS="abc"\n', external_variables=served)
 
 
-def test_repeat_count_after_a_call_is_an_error():
-    for call in ("FOO P3", "FOO P=3", "FOO(1) P2", "FOO P=R1"):
-        with pytest.raises(NcError, match=r"a repeat count \(P=?\w+\) after the call of FOO is not supported"):
-            nc_to_dataframe(f"R1=2\n{call}\nG1 F1000 X1\n", subprograms={"FOO": "PROC FOO(REAL Q=0)\nG1 F1000 Y1\nM17\n"})
+@pytest.mark.parametrize(
+    "call, runs",
+    [("FOO P3", 3), ("FOO P=3", 3), ("FOO(1) P2", 2), ("FOO P=R1", 2), ("FOO P=(2)", 2)],
+)
+def test_repeat_count_after_a_supplied_call_runs_it(call, runs):
+    df, state = nc_to_dataframe(
+        f"R1=2\n{call}\nG1 F1000 X1\n", subprograms={"FOO": "PROC FOO(REAL Q=0)\nG1 F1000 Y1\nM17\n"}
+    )
+    assert df.filter(pl.col("subprogram_line") == 2).height == runs
+    assert df["call_repetitions"].drop_nulls().to_list() == [runs]
+    assert "P" not in state["symbol_table"]
+
+
+@pytest.mark.parametrize("line", ["P3 FOO", "P=3 FOO", "G1 X1 P2 FOO(1)"])
+def test_repeat_count_before_the_name_is_an_error(line):
+    # Manual 4.2.3.3: the syntax is <program name> P<value>.
+    for subprograms in (None, {"FOO": "G1 Y1\n"}):
+        with pytest.raises(NcError, match="a repeat count follows the subprogram name"):
+            nc_to_dataframe(f"{line}\n", subprograms=subprograms)
 
 
 def test_save_restores_the_modal_g_functions_of_the_caller():
