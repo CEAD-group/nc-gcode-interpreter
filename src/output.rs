@@ -393,6 +393,10 @@ pub struct OutputRows {
 #[derive(Debug, Default, Clone)]
 struct ModalTracker {
     g_groups: Vec<(&'static str, String)>,
+    /// G group columns seen that are not modal, so they are classified once.
+    non_modal: Vec<&'static str>,
+    /// Whether the active motion takes its speed from F.
+    motion_uses_feed: bool,
     /// The active path feed; `None` when none was programmed for the active
     /// feed type.
     feed: Option<f64>,
@@ -425,16 +429,26 @@ fn is_non_motion_value(key: &str) -> bool {
 }
 
 impl ModalTracker {
-    fn set_group(&mut self, group: &'static str, code: &str) {
-        match self.g_groups.iter_mut().find(|(name, _)| key_eq(name, group)) {
-            Some((_, current)) => {
-                // Compare first so an unchanged group costs no allocation.
-                if current != code {
-                    *current = code.to_string();
-                }
+    /// Set a modal group; returns true when the code changed. Runs per row,
+    /// so an unchanged group costs one lookup and one compare.
+    fn set_group(&mut self, group: &'static str, code: &str) -> bool {
+        if let Some((_, current)) = self.g_groups.iter_mut().find(|(name, _)| key_eq(name, group)) {
+            if current == code {
+                return false;
             }
-            None => self.g_groups.push((group, code.to_string())),
+            *current = code.to_string();
+        } else if self.non_modal.iter().any(|name| key_eq(name, group)) {
+            return false;
+        } else if MODAL_G_GROUPS.contains(&group) {
+            self.g_groups.push((group, code.to_string()));
+        } else {
+            self.non_modal.push(group);
+            return false;
         }
+        if key_eq(group, "gg01_motion") {
+            self.motion_uses_feed = uses_path_feed(code);
+        }
+        true
     }
 
     fn group(&self, group: &str) -> Option<&str> {
@@ -456,59 +470,57 @@ impl ModalTracker {
         if cells.is_empty() {
             return Ok(());
         }
-        let mut motion: Option<&str> = None;
-        let mut feed_type: Option<&str> = None;
         let mut feed: Option<f64> = None;
-        let mut moves = false;
         let mut no_feed_motion = false;
+        let mut feed_type_changed: Option<&str> = None;
         for (key, value) in cells.iter() {
             match value {
                 Value::Str(code) if key.starts_with("gg") => {
-                    if key_eq(key, "gg01_motion") {
-                        motion = Some(code);
-                    } else if key_eq(key, "gg15_feed_type") {
-                        feed_type = Some(code);
-                    } else if key_eq(key, "gg02_wait") {
+                    if key_eq(key, "gg02_wait") {
                         // Dwell and reference/fixed-point approach do not use F.
                         no_feed_motion |= matches!(code.as_str(), "G4" | "G74" | "G75");
+                    } else if key_eq(key, "gg15_feed_type") {
+                        // A first feed type replaces an unknown one: nothing to delete.
+                        let known = self.group(key).is_some();
+                        if self.set_group(key, code) && known {
+                            feed_type_changed = Some(code);
+                        }
+                    } else {
+                        self.set_group(key, code);
                     }
                 }
-                Value::Str(text) if *key == "T" => Self::set_text(&mut self.tool, text),
-                Value::Str(text) if *key == TRANSFORMATION_COLUMN => Self::set_text(&mut self.transformation, text),
-                Value::Float(value) if *key == "F" => feed = Some(*value),
-                Value::Float(_) => moves |= !is_non_motion_value(key),
+                Value::Str(text) if key_eq(key, "T") => Self::set_text(&mut self.tool, text),
+                Value::Str(text) if key_eq(key, TRANSFORMATION_COLUMN) => {
+                    Self::set_text(&mut self.transformation, text)
+                }
+                Value::Float(value) if key_eq(key, "F") => feed = Some(*value),
                 _ => {}
             }
         }
         // The control deletes F when the feed type changes (Axes and spindles 7.2.1).
-        if let Some(new) = feed_type {
-            if feed.is_none() && self.group("gg15_feed_type").is_some_and(|old| old != new) {
-                self.feed = None;
-                self.feed_deleted_by = Some(new.to_string());
-            }
+        if let (Some(code), None) = (feed_type_changed, feed) {
+            self.feed = None;
+            self.feed_deleted_by = Some(code.to_string());
         }
         if let Some(value) = feed {
             self.feed = Some(value);
             self.feed_deleted_by = None;
         }
-        let active_motion = motion.or_else(|| self.group("gg01_motion"));
+        // Whether the block moves is only looked at when the feed is missing.
         let missing = self.check_feed
-            && moves
-            && !no_feed_motion
             && self.feed.is_none()
-            && active_motion.is_some_and(uses_path_feed);
-        let error = missing.then(|| MissingFeed {
-            motion: active_motion.unwrap_or_default().to_string(),
-            deleted_by: self.feed_deleted_by.clone(),
-        });
-        for (key, value) in cells.iter() {
-            if let Value::Str(code) = value {
-                if key.starts_with("gg") && MODAL_G_GROUPS.contains(key) {
-                    self.set_group(key, code);
-                }
-            }
+            && self.motion_uses_feed
+            && !no_feed_motion
+            && cells
+                .iter()
+                .any(|(key, value)| matches!(value, Value::Float(_)) && !is_non_motion_value(key));
+        if missing {
+            return Err(MissingFeed {
+                motion: self.group("gg01_motion").unwrap_or_default().to_string(),
+                deleted_by: self.feed_deleted_by.clone(),
+            });
         }
-        error.map_or(Ok(()), Err)
+        Ok(())
     }
 }
 
@@ -853,7 +865,9 @@ impl OutputRows {
             match value {
                 Value::Str(text) if *key == "T" => self.modal.tool = Some(text.clone()),
                 Value::Str(text) if *key == TRANSFORMATION_COLUMN => self.modal.transformation = Some(text.clone()),
-                Value::Str(code) => self.modal.set_group(key, code),
+                Value::Str(code) => {
+                    self.modal.set_group(key, code);
+                }
                 Value::Float(feed) if *key == "F" => self.modal.feed = Some(*feed),
                 _ => {}
             }

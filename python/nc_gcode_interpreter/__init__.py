@@ -145,7 +145,10 @@ def nc_to_dataframe(
         a str is the file's text, a path or file-like object is read. Only DEF
         and REDEF statements, assignments to variables and comments are allowed;
         the ``%_N_..._DEF`` header and ``$PATH=`` line are skipped, and M17, M30
-        or M2 ends the file. Anything else raises an ``NcError`` whose
+        or M2 ends the file. ``CHANDATA(1)`` is ignored; another channel is an
+        error. Assigning to a name no definition declared is an error unless it
+        is an R parameter or ``allow_undefined_variables`` is set. Anything
+        else raises an ``NcError`` whose
         ``definition_file`` attribute is the index of the file in this list and
         whose ``line`` is the line within that file.
     variables: Mapping[str, float | int | bool | str] | None, optional
@@ -158,9 +161,12 @@ def nc_to_dataframe(
         dict, so a returned state can be passed back. Keys: ``axes`` and
         ``translation`` (dict[str, float]), ``rotation`` (3x3), ``symbol_table``
         (dict[str, float]), ``string_table`` (dict[str, str]), ``g_groups``
-        (modal G group column to code, e.g. ``{"gg01_motion": "G1"}``) and
-        ``feed`` (float). The G groups and feed fill the first output row where
-        the program does not set them; positions and frame only seed the
+        (modal G group column to code, e.g. ``{"gg01_motion": "G1"}``),
+        ``feed`` (float; pass the control's default feed SD42110
+        ``$SC_DEFAULT_FEED`` here), ``tool`` (str or number, the ``T`` column)
+        and ``transformation`` (e.g. ``"TRAORI"``). The G groups, feed, tool and
+        transformation fill the first output row where the program does not
+        set them; positions and frame only seed the
         internal state. Its variables restore a snapshot: names no definition
         declared are created. A name in both ``variables`` and ``start`` is an
         error. Applied after ``variables``; a DEF in the main program
@@ -205,16 +211,16 @@ def nc_to_dataframe(
 
     Example:
     --------
-    >>> df, state = nc_to_dataframe('G1 X10 Y20 Z30')
+    >>> df, state = nc_to_dataframe('G1 X10 Y20 Z30 F500')
     >>> print(df)
-    shape: (1, 4)
-    ┌─────────────┬──────┬──────┬──────┐
-    │ gg01_motion ┆ X    ┆ Y    ┆ Z    │
-    │ ---         ┆ ---  ┆ ---  ┆ ---  │
-    │ str         ┆ f64  ┆ f64  ┆ f64  │
-    ╞═════════════╪══════╪══════╪══════╡
-    │ G1          ┆ 10.0 ┆ 20.0 ┆ 30.0 │
-    └─────────────┴──────┴──────┴──────┘
+    shape: (1, 5)
+    ┌─────────────┬──────┬──────┬──────┬───────┐
+    │ gg01_motion ┆ X    ┆ Y    ┆ Z    ┆ F     │
+    │ ---         ┆ ---  ┆ ---  ┆ ---  ┆ ---   │
+    │ str         ┆ f64  ┆ f64  ┆ f64  ┆ f64   │
+    ╞═════════════╪══════╪══════╪══════╪═══════╡
+    │ G1          ┆ 10.0 ┆ 20.0 ┆ 30.0 ┆ 500.0 │
+    └─────────────┴──────┴──────┴──────┴───────┘
     """
     program, input_is_path = _normalize_input(input)
 
@@ -546,11 +552,11 @@ def nc_to_rows(
     Errors raise ``ValueError`` from ``next()`` when reached. After the
     iterator is exhausted, its ``state`` attribute holds the final
     interpreter state (axes, symbol_table, translation, rotation, string_table,
-    g_groups, feed).
+    g_groups, feed, tool, transformation).
 
     Example:
     --------
-    >>> for line_no, row in nc_to_rows("G1 X10\nX20 Y5"):
+    >>> for line_no, row in nc_to_rows("G1 F500 X10\nX20 Y5"):
     ...     print(line_no, row["X"])
     1 10.0
     2 20.0
@@ -587,7 +593,8 @@ class _BatchIterator:
     no Python list of primitives materialized. ``pl.DataFrame`` wraps that
     capsule directly (polars >= 1.3), so no ``pyarrow`` is involved. After
     exhaustion its ``state`` attribute holds the final interpreter state (axes,
-    symbol_table, translation, rotation, string_table, g_groups, feed), like
+    symbol_table, translation, rotation, string_table, g_groups, feed, tool,
+    transformation), like
     the iterator returned by :func:`nc_to_rows`.
     """
 
@@ -688,7 +695,7 @@ def nc_to_batches(
 
     Example:
     --------
-    >>> batches = nc_to_batches("G1 X10\\nX20 Y5", batch_size=1)
+    >>> batches = nc_to_batches("G1 F500 X10\\nX20 Y5", batch_size=1)
     >>> frames = list(batches)
     >>> pl.concat(frames, how="diagonal").height
     2

@@ -85,8 +85,11 @@ released to PyPI.
     read on its own. A file may hold DEF and REDEF statements, assignments to
     variables and comments; the `%_N_..._DEF` header and `$PATH=` line are
     skipped. M17, M30 or M2 ends that file and reading goes on with the next,
-    so several files no longer need their end codes stripped. Motion, G codes
-    or anything else is an error naming the file (`NcError.definition_file`,
+    so several files no longer need their end codes stripped. `CHANDATA(1)`
+    is accepted and ignored; another channel number is an error. Assigning
+    to a name the files have not declared is an error, unless it is an R
+    parameter or `allow_undefined_variables` is set. Motion, G codes or
+    anything else is an error naming the file (`NcError.definition_file`,
     its index in the list) and the line within it. Migration: pass the DEF
     files as a list instead of concatenating them into `initial_state`.
   - `variables`: a dict of values (`float`, `int`, `bool`, `str`) written
@@ -97,18 +100,37 @@ released to PyPI.
     `NAME=VALUE` lines with `variables={"NAME": value}`; strings now work.
   - `start`: the machine state at program start, in the shape of the
     returned state dict (`axes`, `translation`, `rotation`, `symbol_table`,
-    `string_table`, plus the new `g_groups` and `feed`), so a returned state
-    can be passed back. Modal G groups are checked against the G group table,
-    and they and `feed` fill the first output row, so those columns no longer
-    start as null. Axis positions and the frame only seed the internal state.
+    `string_table`, plus the new `g_groups`, `feed`, `tool` and
+    `transformation`), so a returned state can be passed back. Modal G groups
+    are checked against the G group table, and they, `feed`, `tool` (the `T`
+    column) and `transformation` fill the first output row, so those columns
+    no longer start as null. Axis positions and the frame only seed the internal state.
     A name in both `variables` and `start` is an error. Migration: replace
     axis words and frame instructions in `initial_state` with
     `start={"axes": {...}, "translation": {...}}`, and modal G codes and F
     with `start={"g_groups": {...}, "feed": ...}`.
   The returned state gains `g_groups` (modal G group column to code, as of
-  the last row) and `feed`. The CLIs take `--definitions FILE` (repeatable),
+  the last row), `feed`, `tool` and `transformation`. The CLIs take `--definitions FILE` (repeatable),
   `--variables FILE.json` and `--start FILE.json`. The Rust functions take
   `Option<&start::StartInputs>` where they took `Option<&str>`.
+
+- **Breaking:** a block that traverses a path (G1, G2, G3, CIP, splines and
+  the other path motions) while no feed is programmed is an error
+  (`NcError.kind == "feed_not_programmed"`), as alarm 10860 is on the
+  control. G0, the G4 dwell, G74/G75 and the thread commands need no F. A
+  feed type change (G93/G94/G95, G96/G961/G962) deletes F (Axes and
+  spindles manual 7.2.1), so the next path block needs a new F; when the
+  previous feed type is unknown (never programmed, not in
+  `start["g_groups"]`) nothing is deleted. G93 recommends but does not
+  require F in every block, so that is not checked. The control's default
+  feed SD42110 `$SC_DEFAULT_FEED` (0 unless set) is evaluated at program
+  start: pass it as `start["feed"]`. The check is off when F is not a
+  configured axis. Tree walker, VM and line fast path raise the same error.
+  Migration: program F before the first path motion or pass
+  `start={"feed": ...}`. The examples `simple`, `trans_ic`, `r_param`,
+  `axis_index_assignment`, `multiple_m_codes` and `function_calls` gained
+  `F1000` on their first path motion, and their expected CSVs gained the
+  `F` column (no other column changed).
 
 - A program that calls `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`, `TRACON` or
   `TRAFOOF` gets the new `transformation` column, also when it uses none of

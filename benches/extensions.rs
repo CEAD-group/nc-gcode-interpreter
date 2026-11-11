@@ -51,12 +51,12 @@ fn inlined() -> String {
 }
 
 fn read_loop(source: &str) -> String {
-    format!("R1=0\nR2=0\nWHILE R1<{READS}\nR2=R2+{source}\nR1=R1+1\nENDWHILE\nG1 X=R2\nM30\n")
+    format!("R1=0\nR2=0\nWHILE R1<{READS}\nR2=R2+{source}\nR1=R1+1\nENDWHILE\nG1 F1200 X=R2\nM30\n")
 }
 
 fn read_rows(source: &str) -> String {
     (0..READS)
-        .map(|i| format!("G1 X={source}+{}\n", i % 100))
+        .map(|i| format!("G1 F1200 X={source}+{}\n", i % 100))
         .collect::<String>()
         + "M30\n"
 }

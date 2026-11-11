@@ -66,7 +66,8 @@ def nc_to_batches(
 
     The returned iterator exposes ``state`` (dict with ``axes``,
     ``symbol_table``, ``translation``, ``rotation``, ``string_table``,
-    ``g_groups`` and ``feed``) once exhausted, and
+    ``g_groups``, ``feed``, ``tool`` and ``transformation``) once
+    exhausted, and
     - when ``include_variables`` is set - ``variable_events`` (an Arrow batch of
     ``row_idx`` / ``name_id`` / ``value``) and ``variable_names`` (list[str]).
     """
