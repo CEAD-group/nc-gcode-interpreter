@@ -62,7 +62,7 @@ def test_frame_instruction_mid_block_errors():
     """Frame instructions must be alone in the block; `G1 MIRROR X0` must
     not be interpreted as a G-command plus an axis move to X=0."""
     with pytest.raises(ValueError, match="not supported"):
-        nc_to_dataframe("G1 MIRROR X0")
+        nc_to_dataframe("G1 F1000 MIRROR X0")
 
 
 @pytest.mark.parametrize(
@@ -83,7 +83,7 @@ def test_def_of_block_address_errors(program):
 def test_lowercase_block_address_is_normalized():
     """Lowercase pw=2 must land in the PW column (and stay excluded from
     forward-fill), not create a separate lowercase column."""
-    df, _state = nc_to_dataframe("BSPLINE\nX=5 pw=2\nX=6")
+    df, _state = nc_to_dataframe("BSPLINE F1000\nX=5 pw=2\nX=6")
     assert df["PW"].to_list()[-2:] == [2.0, None]
     assert "pw" not in df.columns
 

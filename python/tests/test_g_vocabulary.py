@@ -6,7 +6,7 @@ from nc_gcode_interpreter import nc_to_dataframe
 
 
 def test_keyword_g_commands_classify_to_their_group():
-    df, _state = nc_to_dataframe("BSPLINE\nX1 Y1\nSOFT\nCP\nX2 Y2")
+    df, _state = nc_to_dataframe("BSPLINE F1000\nX1 Y1\nSOFT\nCP\nX2 Y2")
     assert df["gg01_motion"][0] == "BSPLINE"
     assert df["gg21_accel_profile"].drop_nulls()[0] == "SOFT"
     assert df["gg49_ptp_motion"].drop_nulls()[0] == "CP"
@@ -15,7 +15,7 @@ def test_keyword_g_commands_classify_to_their_group():
 def test_lowercase_keyword_g_commands_work():
     # Case-insensitive language (manual: "No distinction is made between
     # uppercase and lowercase characters"); values normalize to uppercase.
-    df, _state = nc_to_dataframe("bspline\nX1")
+    df, _state = nc_to_dataframe("bspline F1000\nX1")
     assert df["gg01_motion"][0] == "BSPLINE"
 
 
@@ -40,7 +40,7 @@ def test_frame_keyword_outside_vocabulary_still_rejected_mid_block():
     after another statement instead of falling through to a subprogram
     call that would silently move X to 0."""
     with pytest.raises(ValueError, match="frame instruction"):
-        nc_to_dataframe("G1 CROTS X0")
+        nc_to_dataframe("G1 F1000 CROTS X0")
 
 
 def test_g_number_with_underscore_is_an_identifier():

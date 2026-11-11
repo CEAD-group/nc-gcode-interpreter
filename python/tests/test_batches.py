@@ -54,20 +54,20 @@ def test_arc_batches_reconstruct_dataframe(batch_size):
 def test_forward_fill_carries_across_batch_boundaries():
     # Y is set in batch 1 and must forward-fill into batch 2's rows even though
     # those rows carry no Y; Z first appears in a later batch (null before).
-    program = "G1 X10 F100\nY1\nY2\nY3\nZ5\nY4\n"
+    program = "G1 F1000 X10 F100\nY1\nY2\nY3\nZ5\nY4\n"
     for batch_size in (1, 2, 3):
         assert_batches_match_dataframe(program, batch_size)
 
 
 def test_block_addresses_appearing_in_a_later_batch():
     # I/J (never forward-filled) first appear on the arc block in a later batch.
-    program = "G1 X0 Y0 F1000\nX1 Y1\nG2 X2 Y2 I1 J1\nX3 Y3\n"
+    program = "G1 F1000 X0 Y0 F1000\nX1 Y1\nG2 X2 Y2 I1 J1\nX3 Y3\n"
     for batch_size in (1, 2):
         assert_batches_match_dataframe(program, batch_size)
 
 
 def test_extra_axes_and_ic_match_dataframe():
-    program = "G1 X0 Y0 A0 B0 C0 ELX=100 F1000\nX1 ELX=101\nX2 E=IC(1)\nX3\n"
+    program = "G1 F1000 X0 Y0 A0 B0 C0 ELX=100 F1000\nX1 ELX=101\nX2 E=IC(1)\nX3\n"
     kwargs = {
         "extra_axes": ["ELX"],
         "axis_index_map": {"E": 4, "ELX": 5},
@@ -80,7 +80,7 @@ def test_extra_axes_and_ic_match_dataframe():
 def test_single_batch_equals_dataframe_without_reordering():
     # When every column is present in the (only) batch, the batch schema already
     # matches nc_to_dataframe: a plain vertical concat is exact.
-    program = "G1 X10 Y20 Z30 F1000\nX11 Y21 Z31\nX12 Y22 Z32\n"
+    program = "G1 F1000 X10 Y20 Z30 F1000\nX11 Y21 Z31\nX12 Y22 Z32\n"
     df, _ = nc_to_dataframe(program)
     frames = list(nc_to_batches(program, batch_size=500_000))
     assert len(frames) == 1
@@ -120,7 +120,7 @@ def test_variable_only_rows_do_not_count_toward_batches():
 
 
 def test_disable_forward_fill_matches_dataframe():
-    program = "G1 X10 F100\nY1\nY2\nZ5\nY4\n"
+    program = "G1 F1000 X10 F100\nY1\nY2\nZ5\nY4\n"
     df, _ = nc_to_dataframe(program, disable_forward_fill=True)
     frames = list(
         nc_to_batches(program, batch_size=2, disable_forward_fill=True)
@@ -149,7 +149,7 @@ def test_invalid_batch_size_raises():
 
 
 def test_path_input_batches(tmp_path):
-    program = "G1 X10 Y20\nX20 Y5\nX30 Y6\n"
+    program = "G1 F1000 X10 Y20\nX20 Y5\nX30 Y6\n"
     mpf = tmp_path / "prog.mpf"
     mpf.write_text(program)
     df, _ = nc_to_dataframe(program)
@@ -199,7 +199,7 @@ def test_include_line_numbers_survives_flattening():
     still matches the streaming path row-for-row."""
     from nc_gcode_interpreter import nc_to_rows
 
-    program = "G1 X0 Y0 F1000\nG2 X100 Y0 I50 J0\nG1 X100 Y50\n"
+    program = "G1 F1000 X0 Y0 F1000\nG2 X100 Y0 I50 J0\nG1 X100 Y50\n"
     df, _ = nc_to_dataframe(program, flatten_tolerance=0.1, include_line_numbers=True)
     assert df.columns[0] == "line_no"
     assert df["line_no"].null_count() == 0
@@ -213,7 +213,7 @@ def test_include_line_numbers_survives_flattening():
 def test_g_group_columns_stay_plain_strings():
     # The interpreter holds G-group columns as dictionary codes internally;
     # Python must keep seeing String columns with the same values.
-    program = "G1 G64 X1\nX2\nG4 F0.5\nG0 X3\nG17 X4\nM30\n"
+    program = "G1 F1000 G64 X1\nX2\nG4 F0.5\nG0 X3\nG17 X4\nM30\n"
     frames = list(nc_to_batches(program, batch_size=2))
     assert [f.height for f in frames] == [2, 2, 2]
     for frame in frames:

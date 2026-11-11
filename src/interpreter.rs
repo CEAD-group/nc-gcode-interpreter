@@ -125,7 +125,9 @@ pub fn nc_to_table_with(
     let mut output = OutputRows::collect();
     output.seed_first_row(seed);
     install_flattener(&mut output, &state, flatten_tolerance)?;
-    interpret_source(input.into(), &mut state, &mut output)?;
+    let source: SourceText = input.into();
+    output.set_source(source.clone(), state.is_axis("F"));
+    interpret_source(source, &mut state, &mut output)?;
     let rows = output.finish_into(&mut state)?;
 
     let table = Table::from_rows(&rows, disable_forward_fill);
@@ -217,7 +219,9 @@ pub fn nc_to_row_stream(
     let mut output = OutputRows::stream(sender);
     output.seed_first_row(seed);
     install_flattener(&mut output, &state, flatten_tolerance)?;
-    interpret_source(input.into(), &mut state, &mut output)?;
+    let source: SourceText = input.into();
+    output.set_source(source.clone(), state.is_axis("F"));
+    interpret_source(source, &mut state, &mut output)?;
     output.finish_into(&mut state)?;
     Ok(state)
 }
@@ -361,7 +365,9 @@ pub fn nc_to_batch_stream_with(
     }
     output.seed_first_row(seed);
     install_flattener(&mut output, &state, flatten_tolerance)?;
-    interpret_source(input.into(), &mut state, &mut output)?;
+    let source: SourceText = input.into();
+    output.set_source(source.clone(), state.is_axis("F"));
+    interpret_source(source, &mut state, &mut output)?;
     output.finish_into(&mut state)?;
     Ok(state)
 }

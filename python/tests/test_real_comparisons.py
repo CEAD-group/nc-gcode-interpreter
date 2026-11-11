@@ -53,5 +53,5 @@ def test_real_comparison(condition, expected):
 
 def test_large_block_number_preserved():
     """N is kept as its integer lexeme, not round-tripped through a float."""
-    df, _state = nc_to_dataframe("N12345678901234 G1 X1")
+    df, _state = nc_to_dataframe("N12345678901234 G1 F1000 X1")
     assert df["N"].to_list() == [12345678901234]

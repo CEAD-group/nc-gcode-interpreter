@@ -166,6 +166,9 @@ pub struct State {
     pub g_groups: Vec<(String, String)>,
     /// The F column value at the end of the run. Filled when the run finishes.
     pub feed: Option<f64>,
+    /// The T and transformation column values at the end of the run.
+    pub tool: Option<String>,
+    pub transformation: Option<String>,
 }
 
 impl State {
@@ -254,6 +257,8 @@ impl State {
             var_types: HashMap::new(),
             g_groups: Vec::new(),
             feed: None,
+            tool: None,
+            transformation: None,
         }
     }
 
@@ -752,6 +757,8 @@ impl State {
             string_table: self.string_table.clone(),
             g_groups: self.g_groups.clone(),
             feed: self.feed,
+            tool: self.tool.clone(),
+            transformation: self.transformation.clone(),
         }
     }
 }
@@ -775,4 +782,6 @@ pub struct FinalState {
     pub g_groups: Vec<(String, String)>,
     /// The F column value at the end of the run.
     pub feed: Option<f64>,
+    pub tool: Option<String>,
+    pub transformation: Option<String>,
 }

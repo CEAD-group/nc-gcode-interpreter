@@ -234,6 +234,21 @@ Details: Function {name} expects {expected} argument(s), but received {actual}.
         expected: usize,
         actual: usize,
     },
+    /// A block traverses a path with no feed rate programmed (alarm 10860).
+    #[error(
+        r#"
+Feed rate not programmed on line {line_no}
+----------------------------------------
+Line: {preview}
+
+Details: {message}
+"#
+    )]
+    FeedNotProgrammed {
+        line_no: usize,
+        preview: String,
+        message: String,
+    },
     /// An error while reading one of the `definitions` files. The inner error's
     /// line is the line within that file.
     #[error("In definitions[{index}]:{error}")]
@@ -307,6 +322,7 @@ impl ParsingError {
             | Self::UnmatchedStructure { line_no, preview, .. }
             | Self::UnknownGCommand { line_no, preview, .. }
             | Self::InvalidFunctionArity { line_no, preview, .. }
+            | Self::FeedNotProgrammed { line_no, preview, .. }
             // Semantic/validation errors: the offending block is known at raise
             // time, so they anchor to a line (no column) like the others above.
             | Self::UnexpectedAxis { line_no, preview, .. }
@@ -361,6 +377,7 @@ impl ParsingError {
             Self::InvalidFunctionArity { .. } => "invalid_function_arity",
             Self::InDefinitionFile { error, .. } => error.kind(),
             Self::InvalidInput { .. } => "invalid_input",
+            Self::FeedNotProgrammed { .. } => "feed_not_programmed",
         }
     }
 }

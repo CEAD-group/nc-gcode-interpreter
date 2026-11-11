@@ -1654,7 +1654,7 @@ M30
     fn scattered_numeric_calls_stay_on_the_fast_path() {
         // Numeric subprogram calls spread through a long program decode as
         // trivial lines, so none of them needs the grammar (#69).
-        let mut program = String::new();
+        let mut program = String::from("F1000\n");
         for index in 0..100_000 {
             if index % 1000 == 999 {
                 program.push_str("SUPPORT_PIN_TRIGGER(2.5)\n");
@@ -1662,11 +1662,16 @@ M30
                 program.push_str("G1 X1 Y2\n");
             }
         }
-        let mut state = crate::state::State::new(vec!["X".to_string(), "Y".to_string()], 200_000, None, false);
+        let mut state = crate::state::State::new(
+            vec!["X".to_string(), "Y".to_string(), "F".to_string()],
+            200_000,
+            None,
+            false,
+        );
         state.set_input(&program);
         let mut output = crate::output::OutputRows::collect();
         super::interpret_lines(&program, &mut output, &mut state).expect("no error");
-        assert_eq!(output.finish().expect("rows").len(), 100_000);
+        assert_eq!(output.finish().expect("rows").len(), 100_001);
         assert_paths_agree(&program, false);
     }
 
@@ -1675,7 +1680,7 @@ M30
         // A few hundred grammar-bound lines spread through a long program used
         // to exhaust the newline-padding budget and decline the whole program
         // (#69); the sparse parse costs O(input) however they are spread.
-        let mut program = String::new();
+        let mut program = String::from("F1000\n");
         for index in 0..100_000 {
             if index % 1000 == 999 {
                 program.push_str("X=SIN(30) Y=COS(60)\n");
@@ -1683,11 +1688,16 @@ M30
                 program.push_str("G1 X1 Y2\n");
             }
         }
-        let mut state = crate::state::State::new(vec!["X".to_string(), "Y".to_string()], 200_000, None, false);
+        let mut state = crate::state::State::new(
+            vec!["X".to_string(), "Y".to_string(), "F".to_string()],
+            200_000,
+            None,
+            false,
+        );
         state.set_input(&program);
         let mut output = crate::output::OutputRows::collect();
         super::interpret_lines(&program, &mut output, &mut state).expect("no error");
-        assert_eq!(output.finish().expect("rows").len(), 100_000);
+        assert_eq!(output.finish().expect("rows").len(), 100_001);
         assert_paths_agree(&program, false);
     }
 
@@ -1782,7 +1792,7 @@ M30
     #[test]
     fn pipelined_streaming_matches_full_parse() {
         use std::fmt::Write;
-        let mut body = String::from("MULTIPLIER=2\nR1=0\n");
+        let mut body = String::from("MULTIPLIER=2\nR1=0\nF1000\n");
         for i in 0..3 * super::STREAM_CHUNK_LINES {
             if i % 997 == 0 {
                 body.push_str("X=SIN(30) R1=R1+1\n");

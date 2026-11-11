@@ -5,7 +5,9 @@ import pytest
 from nc_gcode_interpreter import NcError, nc_to_batches, nc_to_dataframe, nc_to_rows
 
 MGUD = "%_N_MGUD_DEF\n$PATH=/_N_DEF_DIR\nDEF NCK REAL FIRST = 1.5\nM30\n"
-UGUD = "; user data\nDEF CHAN INT COUNT\nDEF CHAN STRING[8] TAG\nCOUNT = 2\nM17\nG1 X99\n"
+UGUD = (
+    "; user data\nDEF CHAN INT COUNT\nDEF CHAN STRING[8] TAG\nCOUNT = 2\nM17\nG1 X99\n"
+)
 
 
 def test_two_definition_files_ending_in_m30_both_take_effect():
@@ -91,7 +93,9 @@ def test_a_value_of_the_wrong_python_type_raises_at_the_call():
 
 def test_a_def_in_the_program_reinitialises_a_passed_value():
     df, _ = nc_to_dataframe(
-        "X = COUNT\nDEF INT COUNT\nX = COUNT", definitions=[UGUD], variables={"COUNT": 5}
+        "X = COUNT\nDEF INT COUNT\nX = COUNT",
+        definitions=[UGUD],
+        variables={"COUNT": 5},
     )
     assert df["X"].to_list() == [5.0, 0.0]
 
@@ -157,15 +161,65 @@ def test_a_name_in_variables_and_start_is_an_error():
 
 
 def test_returned_state_passed_back_as_start_gives_the_same_first_row():
-    program = "DEF STRING[4] NAME = \"ab\"\nG1 G17 G90 X1 Y2 F300\nG2 X3 Y4 I1 J0\nTRANS X5\n"
+    program = 'DEF STRING[4] NAME = "ab"\nT3\nTRAORI\nG1 G17 G90 X1 Y2 F300\nG2 X3 Y4 I1 J0\nTRANS X5\n'
     _, state = nc_to_dataframe(program, definitions=[MGUD])
     df, again = nc_to_dataframe("X7", definitions=[MGUD], start=state)
     first = df.row(0, named=True)
     for group, code in state["g_groups"].items():
         assert first[group] == code
     assert first["F"] == state["feed"]
+    assert (state["tool"], state["transformation"]) == ("3", "TRAORI")
+    assert (first["T"], first["transformation"]) == ("3", "TRAORI")
     # The start frame (TRANS X5) applies to the first move.
     assert first["X"] == 12.0
     assert again["g_groups"] == state["g_groups"]
     assert again["string_table"] == state["string_table"]
     assert again["translation"] == state["translation"]
+    assert (again["tool"], again["transformation"]) == ("3", "TRAORI")
+
+
+def test_tool_and_transformation_seed_the_first_row():
+    df, state = nc_to_dataframe(
+        "G0 X1\nT2 X2", start={"tool": 7, "transformation": "TRAFOOF"}
+    )
+    assert df["T"].to_list() == ["7", "2"]
+    assert df["transformation"].to_list() == ["TRAFOOF", "TRAFOOF"]
+    assert state["tool"] == "2"
+
+
+@pytest.mark.parametrize("start", [{"tool": ""}, {"transformation": "G1"}])
+def test_invalid_tool_or_transformation_is_an_error(start):
+    with pytest.raises(NcError) as info:
+        nc_to_dataframe("G0 X1", start=start)
+    assert info.value.kind == "invalid_input"
+
+
+def test_chandata_1_in_a_definition_file_is_ignored():
+    df, _ = nc_to_dataframe(
+        "X = COUNT", definitions=["CHANDATA(1)\nDEF CHAN INT COUNT = 4\nM17\n"]
+    )
+    assert df["X"].to_list() == [4.0]
+
+
+def test_another_channel_in_a_definition_file_is_an_error():
+    with pytest.raises(NcError, match="CHANDATA\\(2\\)") as info:
+        nc_to_dataframe("X1", definitions=["CHANDATA(2)\nDEF CHAN INT COUNT\n"])
+    assert info.value.definition_file == 0
+    assert info.value.line == 1
+
+
+def test_assigning_an_undeclared_name_in_a_definition_file_is_an_error():
+    with pytest.raises(NcError) as info:
+        nc_to_dataframe("X1", definitions=["DEF CHAN INT COUNT\nCOUNTT = 2\n"])
+    assert info.value.definition_file == 0
+    assert info.value.line == 2
+    assert "COUNTT" in str(info.value)
+
+
+def test_r_parameters_and_allow_undefined_variables_permit_assignment():
+    _, state = nc_to_dataframe("X1", definitions=["R7 = 2\n"])
+    assert state["symbol_table"]["R7"] == 2.0
+    _, state = nc_to_dataframe(
+        "X1", definitions=["LOOSE = 3\n"], allow_undefined_variables=True
+    )
+    assert state["symbol_table"]["LOOSE"] == 3.0

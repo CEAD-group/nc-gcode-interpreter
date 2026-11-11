@@ -31,9 +31,9 @@ def assert_stream_matches_batch(program, **kwargs):
 @pytest.mark.parametrize(
     "program",
     [
-        "G1 X10\nX20 Y5 ; move\nM30",
+        "G1 F1000 X10\nX20 Y5 ; move\nM30",
         "N10 X1.5 Y-2. Z0.001\nN20 X2 F2400 S8000 M3\n; comment only\nX3",
-        "BSPLINE\nX1 Y1 PW=1.5\nX2 Y2\nG1",
+        "BSPLINE F1000\nX1 Y1 PW=1.5\nX2 Y2\nG1",
         "GOTOF SKIP\nX999\nSKIP: X2",  # streamed through the line driver
         "R1=0\nWHILE R1<3\nX=R1\nR1=R1+1\nENDWHILE\nM30",  # whole-file path
         "DEF REAL D_VAL=2.5\nTRANS X10\nX1\nTRANS\nX2",
@@ -67,7 +67,7 @@ def test_jump_line_numbers_are_source_positions():
 
 
 def test_forward_fill_can_be_disabled():
-    rows = list(nc_to_rows("G1 X10\nY5", forward_fill=False))
+    rows = list(nc_to_rows("G1 F1000 X10\nY5", forward_fill=False))
     assert "X" not in rows[1][1]
     assert "gg01_motion" not in rows[1][1]
 
@@ -204,7 +204,7 @@ def test_path_input_matches_string_input(tmp_path):
     """A pathlib.Path/os.PathLike input reads the file in Rust and must be
     byte-for-byte equivalent to passing the same program as a string. A plain
     str stays a program (backwards compatible), never a path."""
-    program = "G1 X10 Y20\nX20 Y5\nR1=5\nX=R1\n"
+    program = "G1 F1000 X10 Y20\nX20 Y5\nR1=5\nX=R1\n"
     mpf = tmp_path / "prog.mpf"
     mpf.write_text(program)
 

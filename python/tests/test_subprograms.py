@@ -32,7 +32,7 @@ DONE:
 M17
 """
 
-GUD = "DEF REAL HOME[2]=SET(0, 0)\nDEF REAL PARK[2]=SET(100, 50)\nPARK_FEED=3000\n"
+GUD = "DEF REAL HOME[2]=SET(0, 0)\nDEF REAL PARK[2]=SET(100, 50)\nDEF REAL PARK_FEED=3000\n"
 
 
 class Machine:
@@ -62,7 +62,7 @@ class Machine:
 def test_pose_cycle_with_position_guard():
     machine = Machine({"X": 0.0, "Y": 0.2})
     df, _ = nc_to_dataframe(
-        "G1 X0 Y0\nGOTO_POSE(1)\nG1 X5\n",
+        "G1 F1000 X0 Y0\nGOTO_POSE(1)\nG1 X5\n",
         definitions=[GUD],
         subprograms={"GOTO_POSE": GOTO_POSE, "AT_POSE": GUARD},
         external_variables=machine,
@@ -84,7 +84,7 @@ def test_pose_cycle_with_position_guard():
 def test_guard_failure_takes_the_abort_branch():
     machine = Machine({"X": 30.0, "Y": 0.0})
     df, _ = nc_to_dataframe(
-        "G1 X0 Y0\nGOTO_POSE(1)\n",
+        "G1 F1000 X0 Y0\nGOTO_POSE(1)\n",
         definitions=[GUD],
         subprograms={"GOTO_POSE": GOTO_POSE, "AT_POSE": GUARD},
         external_variables=machine,
@@ -100,7 +100,7 @@ def test_provider_is_asked_after_the_preceding_rows_were_yielded():
     machine = Machine({}, ready_after=2)
     heights = []
     for batch in nc_to_batches(
-        "G1 X0 Z0\nCLAMP\nG1 X1\n",
+        "G1 F1000 X0 Z0\nCLAMP\nG1 X1\n",
         subprograms={"clamp": wait},
         external_variables=machine,
     ):
@@ -121,7 +121,7 @@ def test_m_function_runs_the_tool_change_cycle_also_from_inside_a_cycle():
     tool_change = "PROC TC\nG1 Z200\nM6\nG1 Z=T\n"
     attach = 'PROC ATTACH(STRING[16] KIND)\nT0 M6\nMSG("loading " << KIND)\n'
     df, _ = nc_to_dataframe(
-        'G1 X0 Z0\nT2 M6\nATTACH("SPINDLE")\n',
+        'G1 F1000 X0 Z0\nT2 M6\nATTACH("SPINDLE")\n',
         subprograms={"TC": tool_change, "ATTACH": attach},
         m_function_subprograms={6: "TC"},
     )
@@ -139,9 +139,9 @@ def test_m_function_runs_the_tool_change_cycle_also_from_inside_a_cycle():
 
 
 def test_unresolved_calls_and_plain_m_codes_are_unchanged():
-    program = "G1 X0\nOTHER(1)\nM6\nG1 X1\n"
+    program = "G1 F1000 X0\nOTHER(1)\nM6\nG1 X1\n"
     plain, _ = nc_to_dataframe(program)
-    with_subs, _ = nc_to_dataframe(program, subprograms={"UNUSED": "G1 X9\n"})
+    with_subs, _ = nc_to_dataframe(program, subprograms={"UNUSED": "G1 F1000 X9\n"})
     assert with_subs.equals(plain)
     assert "subprogram" not in plain.columns
 
@@ -149,21 +149,21 @@ def test_unresolved_calls_and_plain_m_codes_are_unchanged():
 def test_locals_do_not_leak_between_levels():
     sub = "PROC BUMP(VAR REAL TOTAL)\nDEF REAL STEP=5\nTOTAL=TOTAL+STEP\n"
     df, state = nc_to_dataframe(
-        "DEF REAL STEP=1, SUM=10\nBUMP(SUM)\nG1 X=SUM Y=STEP\n",
+        "DEF REAL STEP=1, SUM=10\nBUMP(SUM)\nG1 F1000 X=SUM Y=STEP\n",
         subprograms={"BUMP": sub},
     )
     assert df.select("X", "Y").row(-1) == (15.0, 1.0)
     assert state["symbol_table"]["STEP"] == 1.0
     with pytest.raises(NcError, match="SECRET"):
         nc_to_dataframe(
-            "DEF REAL SECRET=1\nPEEK\n", subprograms={"PEEK": "G1 X=SECRET\n"}
+            "DEF REAL SECRET=1\nPEEK\n", subprograms={"PEEK": "G1 F1000 X=SECRET\n"}
         )
 
 
 def test_errors_name_the_call_and_the_subprogram_line():
     with pytest.raises(NcError) as raised:
         nc_to_dataframe(
-            "G1 X0\nBROKEN\n", subprograms={"BROKEN": "G1 X1\nG1 X=UNDEFINED_NAME\n"}
+            "G1 F1000 X0\nBROKEN\n", subprograms={"BROKEN": "G1 F1000 X1\nG1 X=UNDEFINED_NAME\n"}
         )
     message = str(raised.value)
     assert raised.value.line == 2
@@ -193,7 +193,7 @@ def test_provider_exception_propagates_unchanged():
     with pytest.raises(Stopped, match=r"\$A_DBB\[4\] has no model"):
         list(
             nc_to_batches(
-                "G1 X0\nIF $A_DBB[4] == 1\nG1 X1\nENDIF\n", external_variables=NoPlc()
+                "G1 F1000 X0\nIF $A_DBB[4] == 1\nG1 X1\nENDIF\n", external_variables=NoPlc()
             )
         )
     # A write to a provider without `write` is an error, not a dropped value.
@@ -202,7 +202,7 @@ def test_provider_exception_propagates_unchanged():
 
 
 def test_header_declaration_and_return_are_not_calls():
-    df, _ = nc_to_dataframe("PROC MAIN SAVE\nEXTERN HELPER(INT)\nG1 X1\nRET\nG1 X2\n")
+    df, _ = nc_to_dataframe("PROC MAIN SAVE\nEXTERN HELPER(INT)\nG1 F1000 X1\nRET\nG1 X2\n")
     assert df["X"].to_list() == [1.0]
     assert "non_returning_function_call" not in df.columns
 
@@ -370,7 +370,7 @@ class Recorder:
     ],
 )
 def test_a_variable_may_be_spelled_like_a_definition_attribute(definition, name):
-    df, state = nc_to_dataframe(f"{definition}\nG1 X={name}\n")
+    df, state = nc_to_dataframe(f"{definition}\nG1 F1000 X={name}\n")
     assert "non_returning_function_call" not in df.columns
     assert df["X"].to_list() == [state["symbol_table"][name]]
 
@@ -395,7 +395,7 @@ def test_a_string_cannot_be_assigned_to_an_external_variable():
 def test_repeat_count_after_a_call_is_an_error():
     for call in ("FOO P3", "FOO P=3", "FOO(1) P2", "FOO P=R1"):
         with pytest.raises(NcError, match=r"a repeat count \(P=?\w+\) after the call of FOO is not supported"):
-            nc_to_dataframe(f"R1=2\n{call}\nG1 X1\n", subprograms={"FOO": "PROC FOO(REAL Q=0)\nG1 Y1\nM17\n"})
+            nc_to_dataframe(f"R1=2\n{call}\nG1 F1000 X1\n", subprograms={"FOO": "PROC FOO(REAL Q=0)\nG1 F1000 Y1\nM17\n"})
 
 
 def test_save_restores_the_modal_g_functions_of_the_caller():
@@ -413,12 +413,12 @@ def test_save_restores_the_modal_g_functions_of_the_caller():
 
 
 def test_save_warns_when_the_value_before_the_call_is_unknown(capfd):
-    nc_to_dataframe("G1 X0 F100\nFOO\nX1\n", subprograms={"FOO": "PROC FOO SAVE\nG18\nG1 X5\n"})
+    nc_to_dataframe("G1 F1000 X0 F100\nFOO\nX1\n", subprograms={"FOO": "PROC FOO SAVE\nG18\nG1 X5\n"})
     assert "the value of gg06_plane_select before the call is not known" in capfd.readouterr().err
 
 
 def test_var_parameter_keeps_a_direct_write_to_the_callers_variable():
-    program = "R1=1\nR2=1\nF(R1, R2)\nG1 X=R1 Y=R2\n"
+    program = "R1=1\nR2=1\nF(R1, R2)\nG1 F1000 X=R1 Y=R2\n"
     df, _ = nc_to_dataframe(program, subprograms={"F": "PROC F(VAR REAL PA, VAR REAL PB)\nR1=5\nPB=7\nM17\n"})
     assert (df["X"].to_list()[-1], df["Y"].to_list()[-1]) == (5.0, 7.0)
     both = "PROC F(VAR REAL PA)\nR1=5\nPA=PA+1\nM17\n"
@@ -433,13 +433,13 @@ def test_var_parameter_named_like_the_callers_variable():
         df, _ = nc_to_dataframe(program, subprograms={"SUB": body})
         assert df["X"].to_list()[-1] == 1.0
     # The same with a global the caller passes under its own name.
-    df, _ = nc_to_dataframe("R1=1\nSUB(R1)\nG1 X=R1\n", subprograms={"SUB": "PROC SUB(VAR REAL R1)\nR1=4\nM17\n"})
+    df, _ = nc_to_dataframe("R1=1\nSUB(R1)\nG1 F1000 X=R1\n", subprograms={"SUB": "PROC SUB(VAR REAL R1)\nR1=4\nM17\n"})
     assert df["X"].to_list()[-1] == 4.0
 
 
 def test_ret_with_a_return_target_is_an_error():
     with pytest.raises(NcError, match="RET with arguments"):
-        nc_to_dataframe("FOO\nG1 X1\n", subprograms={"FOO": "G1 Y1\nRET(\"LBL\")\n"})
+        nc_to_dataframe("FOO\nG1 X1\n", subprograms={"FOO": "G1 F1000 Y1\nRET(\"LBL\")\n"})
 
 
 def test_parameter_with_an_axis_name_is_an_error():
@@ -449,7 +449,7 @@ def test_parameter_with_an_axis_name_is_an_error():
 
 def test_flattened_rows_keep_the_subprogram_columns():
     body = "G2 X10 Y0 I5 J0\nBSPLINE X20 Y5\nX30 Y0\nX40 Y5\nG1 X50\n"
-    df, _ = nc_to_dataframe("G1 X0 Y0 F100\nFOO\nG1 X0\n", subprograms={"FOO": body}, flatten_tolerance=0.5)
+    df, _ = nc_to_dataframe("G1 F1000 X0 Y0 F100\nFOO\nG1 X0\n", subprograms={"FOO": body}, flatten_tolerance=0.5)
     inside = df.filter(pl.col("subprogram_line").is_not_null())
     assert inside.height > 6
     assert inside["subprogram"].unique().to_list() == ["FOO"]
@@ -473,7 +473,7 @@ def test_array_assignment_stays_inside_the_declared_array(line, message):
 
 def test_subprogram_names_that_differ_only_in_case_are_refused():
     with pytest.raises(ValueError, match="more than one entry for FOO"):
-        nc_to_dataframe("FOO\n", subprograms={"foo": "G1 X1\n", "FOO": "G1 X2\n"})
+        nc_to_dataframe("FOO\n", subprograms={"foo": "G1 F1000 X1\n", "FOO": "G1 F1000 X2\n"})
 
 
 class InputAndSpeed:
@@ -494,7 +494,7 @@ class InputAndSpeed:
 
 SAVING = "PROC KEEPS_PLANE SAVE\nG18\nG1 Z5\nM17\n"
 STRAIGHT = (
-    "G1 X0 Y0 Z0 F100\nG17\nGOTO_X(5, 2)\nX1\nKEEPS_PLANE\nG2 X2 Y1 I1 J0\n"
+    "G1 F1000 X0 Y0 Z0 F100\nG17\nGOTO_X(5, 2)\nX1\nKEEPS_PLANE\nG2 X2 Y1 I1 J0\n"
     "T2 M6\nSPEED=4\nG1 X=$A_IN[1]\nF=(SPEED*2)\nE=IC(SPEED*0.5)\nOPAQUE(1)\nG1 X3\nM30\n"
 )
 
@@ -538,11 +538,11 @@ def test_structure_free_program_matches_the_block_walker(monkeypatch, path):
 def test_alarm_stops_a_structure_free_program(monkeypatch, stage1):
     monkeypatch.setenv("NC_STAGE1", stage1)
     with pytest.raises(NcError, match="65000"):
-        nc_to_dataframe("G1 X1\nSETAL(65000)\nG1 X2\n", stop_on_setal=True)
+        nc_to_dataframe("G1 F1000 X1\nSETAL(65000)\nG1 X2\n", stop_on_setal=True)
 
 
 def test_dataframe_with_a_provider_equals_the_batch_stream():
-    program = "".join(f"G1 X=$A_IN[1]+{i} Y{i}\n" for i in range(50)) + "SPEED=3\nG1 F=(SPEED*2)\n"
+    program = "".join(f"G1 F1000 X=$A_IN[1]+{i} Y{i}\n" for i in range(50)) + "SPEED=3\nG1 F=(SPEED*2)\n"
     whole, _ = nc_to_dataframe(program, external_variables=InputAndSpeed())
     batches = list(nc_to_batches(program, external_variables=InputAndSpeed()))
     # The stream hands rows over before each access; the whole table need not.

@@ -44,7 +44,13 @@ pub struct StartState {
     pub string_table: Vec<(String, String)>,
     /// Modal G group column and code, e.g. `("gg01_motion", "G1")`.
     pub g_groups: Vec<(String, String)>,
+    /// The path feed. A control without F programmed uses SD42110
+    /// $SC_DEFAULT_FEED; pass that value here.
     pub feed: Option<f64>,
+    /// The T column value (tool name or number as text).
+    pub tool: Option<String>,
+    /// The transformation column value, e.g. `TRAORI` or `TRAFOOF`.
+    pub transformation: Option<String>,
 }
 
 /// Everything applied before the main program, in order: `definitions`,
@@ -117,9 +123,10 @@ enum DefinitionLine {
 /// are interpreted; line numbers in errors are those of the file.
 fn read_definition_file(text: &str, state: &mut State) -> Result<(), ParsingError> {
     let mut kept = String::with_capacity(text.len());
+    let mut declared = HashSet::new();
     for (index, raw) in text.split('\n').enumerate() {
         let line = raw.strip_suffix('\r').unwrap_or(raw);
-        match classify_definition_line(line, index + 1, state)? {
+        match classify_definition_line(line, index + 1, state, &mut declared)? {
             DefinitionLine::Keep => kept.push_str(line),
             DefinitionLine::Skip => {}
             DefinitionLine::End => break,
@@ -143,7 +150,14 @@ fn not_allowed(line_no: usize, line: &str, found: &str) -> ParsingError {
     )
 }
 
-fn classify_definition_line(line: &str, line_no: usize, state: &State) -> Result<DefinitionLine, ParsingError> {
+/// Classify one line of a definition file. `declared` collects the names the
+/// earlier lines of this file declare, so an assignment can be checked.
+fn classify_definition_line(
+    line: &str,
+    line_no: usize,
+    state: &State,
+    declared: &mut HashSet<String>,
+) -> Result<DefinitionLine, ParsingError> {
     let trimmed = line.trim();
     if trimmed.is_empty() || trimmed.starts_with(';') {
         return Ok(DefinitionLine::Keep);
@@ -170,10 +184,19 @@ fn classify_definition_line(line: &str, line_no: usize, state: &State) -> Result
         .ok_or_else(|| not_allowed(line_no, line, line))?;
     let mut end = false;
     let mut content = false;
+    let mut channel_select = false;
     for pair in block.into_inner() {
         match pair.as_rule() {
             Rule::block_number | Rule::comment => {}
-            Rule::definition | Rule::redef_decl => content = true,
+            Rule::redef_decl => content = true,
+            Rule::definition => {
+                for item in pair.clone().into_inner() {
+                    if let Some(base) = crate::interpret_rules::declared_base(&item.into(), state) {
+                        declared.insert(crate::subprogram::base_name(&base).to_uppercase());
+                    }
+                }
+                content = true;
+            }
             Rule::statement => {
                 let text = pair.as_str();
                 let inner = pair
@@ -183,14 +206,56 @@ fn classify_definition_line(line: &str, line_no: usize, state: &State) -> Result
                 match inner.as_rule() {
                     Rule::m_command if crate::interpret_rules::is_end_of_program_m_code(inner.as_str()) => end = true,
                     Rule::assignment | Rule::assignment_multi => {
-                        check_assignment_target(&inner, state).map_err(|_| not_allowed(line_no, line, text))?;
+                        let name =
+                            check_assignment_target(&inner, state).map_err(|_| not_allowed(line_no, line, text))?;
+                        if !is_declared(&name, state, declared) {
+                            return Err(ParsingError::with_context(
+                                line_no,
+                                line,
+                                "definition file",
+                                &format!(
+                                    "'{name}' is assigned but not declared; declare it with DEF first, \
+                                     or pass allow_undefined_variables"
+                                ),
+                            ));
+                        }
                         content = true;
+                    }
+                    Rule::non_returning_function_call => {
+                        let call: String = text.split_whitespace().collect::<String>().to_uppercase();
+                        let Some(channel) = call.strip_prefix("CHANDATA(").and_then(|rest| rest.strip_suffix(')'))
+                        else {
+                            return Err(not_allowed(line_no, line, text));
+                        };
+                        // The interpreter models one channel, so only its selection is harmless.
+                        if channel != "1" {
+                            return Err(ParsingError::with_context(
+                                line_no,
+                                line,
+                                "definition file",
+                                &format!(
+                                    "CHANDATA({channel}) selects channel {channel}; the interpreter models only channel 1"
+                                ),
+                            ));
+                        }
+                        channel_select = true;
                     }
                     _ => return Err(not_allowed(line_no, line, text)),
                 }
             }
             _ => return Err(not_allowed(line_no, line, pair.as_str())),
         }
+    }
+    if channel_select {
+        if end || content {
+            return Err(ParsingError::with_context(
+                line_no,
+                line,
+                "definition file",
+                "CHANDATA(1) must stand in a block of its own",
+            ));
+        }
+        return Ok(DefinitionLine::Skip);
     }
     if end && content {
         return Err(ParsingError::with_context(
@@ -204,17 +269,30 @@ fn classify_definition_line(line: &str, line_no: usize, state: &State) -> Result
 }
 
 /// An assignment in a definition file must set a variable: not an axis, a
-/// block address or a system variable.
-fn check_assignment_target(assignment: &Pair<Rule>, state: &State) -> Result<(), ()> {
+/// block address or a system variable. Returns the target as written.
+fn check_assignment_target(assignment: &Pair<Rule>, state: &State) -> Result<String, ()> {
     let target = assignment.clone().into_inner().next().ok_or(())?;
     if target.as_rule() == Rule::variable_single_char {
         return Err(());
     }
-    let name = target.as_str().split('[').next().unwrap_or("").trim().to_uppercase();
-    if name.is_empty() || name.starts_with('$') || state.is_axis(&name) || state.is_block_address(&name) {
+    let written: String = target.as_str().split_whitespace().collect::<String>().to_uppercase();
+    let name = written.split('[').next().unwrap_or("");
+    if name.is_empty() || name.starts_with('$') || state.is_axis(name) || state.is_block_address(name) {
         return Err(());
     }
-    Ok(())
+    Ok(written)
+}
+
+/// Whether a definition-file assignment target exists: declared in this file
+/// or an earlier one, an R parameter, or allowed by allow_undefined_variables.
+fn is_declared(target: &str, state: &State, declared: &HashSet<String>) -> bool {
+    let base = crate::subprogram::base_name(target);
+    declared.contains(base)
+        || state.var_types.contains_key(base)
+        || state.symbol_table.contains_key(target)
+        || state.string_table.contains_key(target)
+        || is_r_parameter(target)
+        || state.allow_undefined_variables
 }
 
 /// `R1`, `R[1]`: arithmetic parameters exist without a DEF.
@@ -444,8 +522,8 @@ fn apply_start(start: &StartState, state: &mut State) -> Result<Seed, ParsingErr
     }
     if let Some(feed) = start.feed {
         let key = axis_key(state, "start['feed']", "F")?;
-        if !feed.is_finite() {
-            return Err(invalid("start['feed']", "the feed is not a finite number"));
+        if !feed.is_finite() || feed <= 0.0 {
+            return Err(invalid("start['feed']", "the feed must be a number greater than 0"));
         }
         // The F column carries the programmed value; the axis holds it in local terms.
         let local = feed - state.get_translation(&key);
@@ -455,6 +533,24 @@ fn apply_start(start: &StartState, state: &mut State) -> Result<Seed, ParsingErr
             .map(|(_, column)| column)
             .unwrap_or_else(|| crate::output::intern_column("F"));
         seed.push((column, Value::Float(feed)));
+    }
+    if let Some(tool) = &start.tool {
+        if tool.trim().is_empty() {
+            return Err(invalid("start['tool']", "the tool is empty"));
+        }
+        seed.push((crate::output::intern_column("T"), Value::Str(tool.trim().to_string())));
+    }
+    if let Some(call) = &start.transformation {
+        let value = crate::output::transformation_value(call).ok_or_else(|| {
+            invalid(
+                "start['transformation']",
+                &format!("{call} is not a transformation call (TRAORI, TRANSMIT, TRACYL, TRAANG, TRACON, TRAFOOF)"),
+            )
+        })?;
+        seed.push((
+            crate::output::intern_column(crate::output::TRANSFORMATION_COLUMN),
+            Value::Str(value),
+        ));
     }
     Ok(seed)
 }
@@ -710,5 +806,62 @@ mod tests {
         assert_eq!(texts(&table, "gg06_plane_select"), vec![Some("G17".into())]);
         assert_eq!(floats(&table, "F"), vec![Some(300.0)]);
         assert_eq!(second.g_groups, first.g_groups);
+    }
+    #[test]
+    fn chandata_one_is_ignored_and_other_channels_fail() {
+        let ok = definitions(&["CHANDATA(1)\nDEF CHAN REAL FIRST=2\nM30\n"]);
+        let (table, _) = run("X=FIRST", ok).unwrap();
+        assert_eq!(floats(&table, "X"), vec![Some(2.0)]);
+        let error = run("X1", definitions(&["DEF REAL FIRST\nCHANDATA(2)\n"])).unwrap_err();
+        assert_eq!(error.location().unwrap().line, 2);
+        assert!(error.to_string().contains("CHANDATA(2)"), "{error}");
+    }
+
+    #[test]
+    fn assigning_an_undeclared_name_in_a_definition_file_fails() {
+        let error = run("X1", definitions(&["DEF REAL KNOWN\nKNOWN=1\nUNKNOWN=2\n"])).unwrap_err();
+        assert_eq!(error.location().unwrap().line, 3);
+        assert!(
+            error.to_string().contains("'UNKNOWN' is assigned but not declared"),
+            "{error}"
+        );
+        // Declared in an earlier file, an R parameter, or allowed by the flag.
+        assert!(run("X1", definitions(&["DEF REAL KNOWN", "KNOWN=1\nR5=2\nR[6]=3"])).is_ok());
+        let inputs = definitions(&["LOOSE=1"]);
+        let allowed = nc_to_table_with(
+            "X1",
+            Some(&inputs),
+            None,
+            None,
+            1000,
+            false,
+            None,
+            true,
+            None,
+            Extensions::default(),
+        );
+        assert!(allowed.is_ok());
+    }
+
+    #[test]
+    fn tool_and_transformation_seed_the_first_row_and_round_trip() {
+        let state = StartState {
+            tool: Some("CUTTER".into()),
+            transformation: Some("traori".into()),
+            ..StartState::default()
+        };
+        let (table, end) = run("G0 X1\nX2", start(state)).unwrap();
+        assert_eq!(texts(&table, "T"), vec![Some("CUTTER".into()), None]);
+        assert_eq!(
+            texts(&table, "transformation"),
+            vec![Some("TRAORI".into()), Some("TRAORI".into())]
+        );
+        assert_eq!(end.tool.as_deref(), Some("CUTTER"));
+        assert_eq!(end.transformation.as_deref(), Some("TRAORI"));
+        let bad = StartState {
+            transformation: Some("NOT_A_TRAFO".into()),
+            ..StartState::default()
+        };
+        assert_eq!(run("X1", start(bad)).unwrap_err().kind(), "invalid_input");
     }
 }

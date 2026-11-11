@@ -146,6 +146,8 @@ mod python_bindings {
         }
         dict.set_item("g_groups", g_groups)?;
         dict.set_item("feed", state.feed)?;
+        dict.set_item("tool", state.tool.clone())?;
+        dict.set_item("transformation", state.transformation.clone())?;
         Ok(dict)
     }
 
@@ -220,6 +222,23 @@ mod python_bindings {
                         .extract::<Option<f64>>()
                         .map_err(|_| input_error("start['feed'] must be a number or None".to_string()))?
                 }
+                "tool" => {
+                    state.tool = if value.is_none() {
+                        None
+                    } else if let Ok(text) = value.extract::<String>() {
+                        Some(text)
+                    } else {
+                        let number = value
+                            .extract::<f64>()
+                            .map_err(|_| input_error("start['tool'] must be a str, a number or None".to_string()))?;
+                        Some(crate::output::tool_number_text(number))
+                    }
+                }
+                "transformation" => {
+                    state.transformation = value
+                        .extract::<Option<String>>()
+                        .map_err(|_| input_error("start['transformation'] must be a str or None".to_string()))?
+                }
                 "rotation" => {
                     let rows = value
                         .extract::<Vec<Vec<f64>>>()
@@ -235,7 +254,7 @@ mod python_bindings {
                 }
                 other => {
                     return Err(input_error(format!(
-                        "start has an unknown key '{other}' (expected axes, translation, rotation, symbol_table, string_table, g_groups, feed)"
+                        "start has an unknown key '{other}' (expected axes, translation, rotation, symbol_table, string_table, g_groups, feed, tool, transformation)"
                     )))
                 }
             }
@@ -802,7 +821,7 @@ mod python_bindings {
         }
 
         /// The final interpreter state
-        /// (`{axes, symbol_table, translation, rotation, string_table, g_groups, feed}`), available once
+        /// (`{axes, symbol_table, translation, rotation, string_table, g_groups, feed, tool, transformation}`), available once
         /// the iterator is exhausted.
         #[getter]
         fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
@@ -1039,7 +1058,7 @@ mod python_bindings {
         }
 
         /// The final interpreter state
-        /// (`{axes, symbol_table, translation, rotation, string_table, g_groups, feed}`), available once
+        /// (`{axes, symbol_table, translation, rotation, string_table, g_groups, feed, tool, transformation}`), available once
         /// the iterator is exhausted.
         #[getter]
         fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {

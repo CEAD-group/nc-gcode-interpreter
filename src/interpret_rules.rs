@@ -894,7 +894,7 @@ fn interpret_tool_selection(
     Ok(())
 }
 /// The base name a DEF item declares (`DEF REAL A=1, B[3]`), for local scoping.
-fn declared_base(item: &Pair<Rule>, state: &State) -> Option<String> {
+pub(crate) fn declared_base(item: &Pair<Rule>, state: &State) -> Option<String> {
     match item.as_rule() {
         Rule::assignment => definition_target_name(item, state),
         Rule::variable => interpret_variable(item.clone(), state).ok(),

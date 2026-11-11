@@ -1,4 +1,4 @@
-G1 
+G1 F1000
 X1 M101;one m code
 X2 M102;one m code
 X3 M103 M2 M3 M4 M5; five m codes

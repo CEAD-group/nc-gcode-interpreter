@@ -449,8 +449,8 @@ mod tests {
 
     #[test]
     fn call_runs_the_body_with_bound_parameters() {
-        let sub = "PROC GOTO_X(REAL TARGET, REAL SCALE)\nG1 X=TARGET*SCALE\nM17\nX999\n";
-        let (table, _) = run("G1 X0\nGOTO_X(5, 2)\nX1\n", &[("goto_x", sub)]).unwrap();
+        let sub = "PROC GOTO_X(REAL TARGET, REAL SCALE)\nG1 F100 X=TARGET*SCALE\nM17\nX999\n";
+        let (table, _) = run("G1 F100 X0\nGOTO_X(5, 2)\nX1\n", &[("goto_x", sub)]).unwrap();
         // Rows: X0, the call marker, the body's move, its M17, X1.
         assert_eq!(floats(&table, "X"), [Some(0.0), None, Some(10.0), None, Some(1.0)]);
         let inside = Some("GOTO_X".to_string());
@@ -463,19 +463,19 @@ mod tests {
 
     #[test]
     fn a_body_is_parsed_once_per_run() {
-        let sub = "PROC TWICE(REAL TARGET)\nG1 X=TARGET\n";
+        let sub = "PROC TWICE(REAL TARGET)\nG1 F100 X=TARGET\n";
         let (table, mut state) = run("TWICE(1)\nTWICE(2)\n", &[("TWICE", sub)]).unwrap();
         assert_eq!(floats(&table, "X"), [None, Some(1.0), None, Some(2.0)]);
         let first = state.ext.parsed_body("TWICE").unwrap();
         assert!(Rc::ptr_eq(&first, &state.ext.parsed_body("TWICE").unwrap()));
         assert_eq!(state.ext.parsed.len(), 1);
-        let error = run("BROKEN\n", &[("BROKEN", "G1 X=(\n")]).unwrap_err();
+        let error = run("BROKEN\n", &[("BROKEN", "G1 F100 X=(\n")]).unwrap_err();
         assert!(error.contains("line 1 of the subprogram does not parse"), "{error}");
     }
 
     #[test]
     fn unresolved_call_stays_an_opaque_cell() {
-        let (table, _) = run("G1 X0\nOTHER(1)\n", &[("KNOWN", "G1 X5\n")]).unwrap();
+        let (table, _) = run("G1 F100 X0\nOTHER(1)\n", &[("KNOWN", "G1 F100 X5\n")]).unwrap();
         assert_eq!(
             texts(&table, "non_returning_function_call")[1].as_deref(),
             Some("OTHER(1)")
@@ -488,7 +488,7 @@ mod tests {
         let sub =
             "PROC ADD(REAL INC, VAR REAL SUM, VAR REAL LIST[3])\nDEF REAL TMP=100\nSUM=SUM+INC\nLIST[1]=INC\nRET\n";
         let program =
-            "DEF REAL TMP=1, TOTAL=10\nDEF REAL VALUES[3]\nADD(5, TOTAL, VALUES)\nG1 X=TMP Y=TOTAL Z=VALUES[1]\n";
+            "DEF REAL TMP=1, TOTAL=10\nDEF REAL VALUES[3]\nADD(5, TOTAL, VALUES)\nG1 F100 X=TMP Y=TOTAL Z=VALUES[1]\n";
         let (table, state) = run(program, &[("ADD", sub)]).unwrap();
         assert_eq!(floats(&table, "X").last(), Some(&Some(1.0)));
         assert_eq!(floats(&table, "Y").last(), Some(&Some(15.0)));
@@ -501,15 +501,15 @@ mod tests {
 
     #[test]
     fn caller_locals_are_invisible_in_the_callee() {
-        let error = run("DEF REAL SECRET=1\nPEEK\n", &[("PEEK", "G1 X=SECRET\n")]).unwrap_err();
+        let error = run("DEF REAL SECRET=1\nPEEK\n", &[("PEEK", "G1 F100 X=SECRET\n")]).unwrap_err();
         assert!(error.contains("SECRET"), "{error}");
         assert!(error.contains("PEEK"), "{error}");
     }
 
     #[test]
     fn nested_calls_and_recursion_limit() {
-        let outer = "PROC OUTER(REAL VAL)\nINNER(VAL+1)\nG1 Y=VAL\n";
-        let inner = "PROC INNER(REAL VAL)\nG1 X=VAL\n";
+        let outer = "PROC OUTER(REAL VAL)\nINNER(VAL+1)\nG1 F100 Y=VAL\n";
+        let inner = "PROC INNER(REAL VAL)\nG1 F100 X=VAL\n";
         let (table, _) = run("OUTER(1)\n", &[("OUTER", outer), ("INNER", inner)]).unwrap();
         assert_eq!(
             texts(&table, "subprogram"),
@@ -531,20 +531,20 @@ mod tests {
 
     #[test]
     fn header_and_return_are_not_calls() {
-        let (table, _) = run("PROC MAIN SAVE\nEXTERN FOO(INT)\nG1 X1\nRET\nX2\n", &[]).unwrap();
+        let (table, _) = run("PROC MAIN SAVE\nEXTERN FOO(INT)\nG1 F100 X1\nRET\nX2\n", &[]).unwrap();
         assert_eq!(floats(&table, "X"), [Some(1.0)]);
         assert!(table.columns.iter().all(|(n, _)| n != "non_returning_function_call"));
-        let error = run("PROC MAIN(INT A)\nG1 X1\n", &[]).unwrap_err();
+        let error = run("PROC MAIN(INT A)\nG1 F100 X1\n", &[]).unwrap_err();
         assert!(error.contains("only run as a subprogram"), "{error}");
     }
 
     #[test]
     fn m_function_runs_its_subprogram_after_the_block() {
         // The cycle reads the selected tool, and its own M6 does not recurse.
-        let cycle = "PROC TOOLCHANGE\nG1 Z100\nM6\nG1 Z=T\n";
+        let cycle = "PROC TOOLCHANGE\nG1 F100 Z100\nM6\nG1 F100 Z=T\n";
         let nested = "PROC ATTACH(STRING[10] KIND)\nT0 M6\nMSG(KIND)\n";
         let subprograms = [("TOOLCHANGE", cycle), ("ATTACH", nested)];
-        let (table, _) = run("G1 X0 Z0\nT2 M6\nATTACH(\"SPINDLE\")\n", &subprograms).unwrap();
+        let (table, _) = run("G1 F100 X0 Z0\nT2 M6\nATTACH(\"SPINDLE\")\n", &subprograms).unwrap();
         assert_eq!(
             floats(&table, "Z"),
             [
@@ -568,7 +568,7 @@ mod tests {
             texts(&table, "non_returning_function_call").last().unwrap().as_deref(),
             Some("MSG(KIND)")
         );
-        let error = run("G1 X0\nM6\n", &[("OTHER", "G1 X1\n")]);
+        let error = run("G1 F100 X0\nM6\n", &[("OTHER", "G1 F100 X1\n")]);
         assert!(error.is_ok(), "an unmapped M6 stays a plain M code");
     }
 
@@ -609,7 +609,7 @@ mod tests {
             "$AA_IW".to_string(),
             "$FAIL".to_string(),
         ];
-        let program = "$A_OUT[3]=1\nWHILE $A_IN[5]<3\nG4 F0.1\nENDWHILE\nG1 X=$AA_IW[X]\n";
+        let program = "$A_OUT[3]=1\nWHILE $A_IN[5]<3\nG4 F0.1\nENDWHILE\nG1 F100 X=$AA_IW[X]\n";
         let (table, state) = run_with(program, &[], Some((names.clone(), Box::new(provider)))).unwrap();
         assert_eq!(
             *log.lock().unwrap(),
@@ -628,7 +628,7 @@ mod tests {
         );
 
         let provider = Recorder { log, input: 0.0 };
-        let error = run_with("G1 X=$FAIL\n", &[], Some((names, Box::new(provider)))).unwrap_err();
+        let error = run_with("G1 F100 X=$FAIL\n", &[], Some((names, Box::new(provider)))).unwrap_err();
         assert!(error.contains("no such signal"), "{error}");
     }
 }

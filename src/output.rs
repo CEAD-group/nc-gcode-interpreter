@@ -384,13 +384,44 @@ pub struct OutputRows {
     seed: Vec<(&'static str, Value)>,
     /// Modal G groups and F as the rows carried them, for the final state.
     modal: ModalTracker,
+    /// The main program text, for errors raised at flush time.
+    source: Option<crate::interpreter::SourceText>,
 }
 
-/// The modal G group values and the F value of the rows flushed so far.
+/// The modal state the rows carry (G groups, F, T, transformation), kept as
+/// rows are flushed for the final state and the feed check (alarm 10860).
 #[derive(Debug, Default, Clone)]
 struct ModalTracker {
     g_groups: Vec<(&'static str, String)>,
+    /// The active path feed; `None` when none was programmed for the active
+    /// feed type.
     feed: Option<f64>,
+    /// The feed type code that deleted F, for the error message.
+    feed_deleted_by: Option<String>,
+    tool: Option<String>,
+    transformation: Option<String>,
+    /// Off when F is not a configured axis: the feed is then not modelled.
+    check_feed: bool,
+}
+
+/// A path motion block with no feed: why, for the error message.
+pub(crate) struct MissingFeed {
+    motion: String,
+    deleted_by: Option<String>,
+}
+
+/// Motion commands whose path speed comes from F. G0 is rapid traverse and
+/// the thread commands take the pitch, not F.
+fn uses_path_feed(motion: &str) -> bool {
+    !matches!(motion, "G0" | "G33" | "G331" | "G332" | "G34" | "G35" | "G335" | "G336")
+}
+
+/// Value cells that are not a traversing axis.
+fn is_non_motion_value(key: &str) -> bool {
+    matches!(
+        key,
+        "N" | "F" | "S" | "D" | FLATTENED_COLUMN | DWELL_COLUMN | SUBPROGRAM_LINE_COLUMN
+    ) || BLOCK_ADDRESSES.contains(&key)
 }
 
 impl ModalTracker {
@@ -406,20 +437,78 @@ impl ModalTracker {
         }
     }
 
-    fn track(&mut self, cells: &CellMap) {
+    fn group(&self, group: &str) -> Option<&str> {
+        self.g_groups
+            .iter()
+            .find(|(name, _)| key_eq(name, group))
+            .map(|(_, code)| code.as_str())
+    }
+
+    fn set_text(slot: &mut Option<String>, text: &str) {
+        if slot.as_deref() != Some(text) {
+            *slot = Some(text.to_string());
+        }
+    }
+
+    /// Track one flushed row and check its feed: a block that traverses a
+    /// path needs a feed programmed for the active feed type (alarm 10860).
+    fn track(&mut self, cells: &CellMap) -> Result<(), MissingFeed> {
+        if cells.is_empty() {
+            return Ok(());
+        }
+        let mut motion: Option<&str> = None;
+        let mut feed_type: Option<&str> = None;
+        let mut feed: Option<f64> = None;
+        let mut moves = false;
+        let mut no_feed_motion = false;
         for (key, value) in cells.iter() {
-            if key.starts_with("gg") {
-                if let Value::Str(code) = value {
-                    if MODAL_G_GROUPS.contains(key) {
-                        self.set_group(key, code);
+            match value {
+                Value::Str(code) if key.starts_with("gg") => {
+                    if key_eq(key, "gg01_motion") {
+                        motion = Some(code);
+                    } else if key_eq(key, "gg15_feed_type") {
+                        feed_type = Some(code);
+                    } else if key_eq(key, "gg02_wait") {
+                        // Dwell and reference/fixed-point approach do not use F.
+                        no_feed_motion |= matches!(code.as_str(), "G4" | "G74" | "G75");
                     }
                 }
-            } else if *key == "F" {
-                if let Value::Float(feed) = value {
-                    self.feed = Some(*feed);
+                Value::Str(text) if *key == "T" => Self::set_text(&mut self.tool, text),
+                Value::Str(text) if *key == TRANSFORMATION_COLUMN => Self::set_text(&mut self.transformation, text),
+                Value::Float(value) if *key == "F" => feed = Some(*value),
+                Value::Float(_) => moves |= !is_non_motion_value(key),
+                _ => {}
+            }
+        }
+        // The control deletes F when the feed type changes (Axes and spindles 7.2.1).
+        if let Some(new) = feed_type {
+            if feed.is_none() && self.group("gg15_feed_type").is_some_and(|old| old != new) {
+                self.feed = None;
+                self.feed_deleted_by = Some(new.to_string());
+            }
+        }
+        if let Some(value) = feed {
+            self.feed = Some(value);
+            self.feed_deleted_by = None;
+        }
+        let active_motion = motion.or_else(|| self.group("gg01_motion"));
+        let missing = self.check_feed
+            && moves
+            && !no_feed_motion
+            && self.feed.is_none()
+            && active_motion.is_some_and(uses_path_feed);
+        let error = missing.then(|| MissingFeed {
+            motion: active_motion.unwrap_or_default().to_string(),
+            deleted_by: self.feed_deleted_by.clone(),
+        });
+        for (key, value) in cells.iter() {
+            if let Value::Str(code) = value {
+                if key.starts_with("gg") && MODAL_G_GROUPS.contains(key) {
+                    self.set_group(key, code);
                 }
             }
         }
+        error.map_or(Ok(()), Err)
     }
 }
 
@@ -436,6 +525,7 @@ impl OutputRows {
             current_subprogram: None,
             seed: Vec::new(),
             modal: ModalTracker::default(),
+            source: None,
         }
     }
 
@@ -452,6 +542,7 @@ impl OutputRows {
             current_subprogram: None,
             seed: Vec::new(),
             modal: ModalTracker::default(),
+            source: None,
         }
     }
 
@@ -535,6 +626,7 @@ impl OutputRows {
             current_subprogram: None,
             seed: Vec::new(),
             modal: ModalTracker::default(),
+            source: None,
         }
     }
 
@@ -609,6 +701,7 @@ impl OutputRows {
                 current_subprogram: self.current_subprogram.clone(),
                 seed: self.seed.clone(),
                 modal: self.modal.clone(),
+                source: self.source.clone(),
             }),
             _ => None,
         }
@@ -697,7 +790,9 @@ impl OutputRows {
                 }
             }
         }
-        self.modal.track(&row.cells);
+        if let Err(missing) = self.modal.track(&row.cells) {
+            return Err(self.missing_feed_error(&row, missing));
+        }
         // G91 is parsed but incremental dimensioning is NOT applied: every
         // axis value is emitted as if absolute, so positions are wrong from
         // this block on. Loud once-per-run warning - never butcher silently.
@@ -756,6 +851,8 @@ impl OutputRows {
     pub(crate) fn seed_first_row(&mut self, seed: Vec<(&'static str, Value)>) {
         for (key, value) in &seed {
             match value {
+                Value::Str(text) if *key == "T" => self.modal.tool = Some(text.clone()),
+                Value::Str(text) if *key == TRANSFORMATION_COLUMN => self.modal.transformation = Some(text.clone()),
                 Value::Str(code) => self.modal.set_group(key, code),
                 Value::Float(feed) if *key == "F" => self.modal.feed = Some(*feed),
                 _ => {}
@@ -764,8 +861,43 @@ impl OutputRows {
         self.seed = seed;
     }
 
-    /// As [`OutputRows::finish`], storing the modal G groups and F of the
-    /// last row in `state` for the final state.
+    /// The program text, for the line shown in errors raised at flush time,
+    /// and whether to check the feed (only when F is a configured axis).
+    pub(crate) fn set_source(&mut self, source: crate::interpreter::SourceText, check_feed: bool) {
+        self.source = Some(source);
+        self.modal.check_feed = check_feed;
+    }
+
+    fn missing_feed_error(&self, row: &Row, missing: MissingFeed) -> ParsingError {
+        let preview = self
+            .source
+            .as_ref()
+            .and_then(|source| source.as_str().lines().nth(row.line_no.saturating_sub(1)))
+            .unwrap_or("")
+            .to_string();
+        let place = match (row.cells.get(SUBPROGRAM_COLUMN), row.cells.get(SUBPROGRAM_LINE_COLUMN)) {
+            (Some(Value::Str(path)), Some(Value::Float(line))) => format!(" (in subprogram {path}, line {line})"),
+            _ => String::new(),
+        };
+        let reason = match missing.deleted_by {
+            Some(code) => {
+                format!("the feed type changed to {code} and F was not programmed again (a feed type change deletes F)")
+            }
+            None => "no feed rate F has been programmed".to_string(),
+        };
+        ParsingError::FeedNotProgrammed {
+            line_no: row.line_no,
+            preview,
+            message: format!(
+                "{} block traverses a path{place}, but {reason}. Program F in this block or before it, \
+                 or pass the control's default feed (SD42110 $SC_DEFAULT_FEED) as start['feed'].",
+                missing.motion
+            ),
+        }
+    }
+
+    /// As [`OutputRows::finish`], storing the modal state of the last row in
+    /// `state` for the final state.
     pub(crate) fn finish_into(mut self, state: &mut crate::state::State) -> Result<Vec<Row>, ParsingError> {
         self.flush()?;
         let mut g_groups: Vec<(String, String)> = self
@@ -777,6 +909,8 @@ impl OutputRows {
         g_groups.sort();
         state.g_groups = g_groups;
         state.feed = self.modal.feed;
+        state.tool = self.modal.tool.clone();
+        state.transformation = self.modal.transformation.clone();
         self.finish()
     }
 
@@ -1578,5 +1712,108 @@ mod tests {
         assert_eq!(wait.iter().filter(|cell| cell.is_some()).count(), 1);
         assert_eq!(wait.get(7), Some("G4"));
         assert_eq!(column("gg01_motion").dtype_name(), "str");
+    }
+}
+
+#[cfg(test)]
+mod feed_tests {
+    use crate::interpreter::nc_to_table;
+    use crate::start::{StartInputs, StartState};
+
+    fn run(program: &str, feed: Option<f64>) -> Result<(), crate::errors::ParsingError> {
+        let inputs = StartInputs {
+            start: feed.map(|feed| StartState {
+                feed: Some(feed),
+                ..StartState::default()
+            }),
+            ..StartInputs::default()
+        };
+        nc_to_table(program, Some(&inputs), None, None, 1000, false, None, false, None).map(|_| ())
+    }
+
+    fn missing_on(program: &str) -> usize {
+        let error = run(program, None).expect_err(program);
+        assert_eq!(error.kind(), "feed_not_programmed", "{error}");
+        error.location().unwrap().line
+    }
+
+    #[test]
+    fn a_path_motion_needs_a_feed() {
+        for program in [
+            "G1 X1",
+            "G2 X1 Y1 I1 J0",
+            "G3 X1 Y1 CR=5",
+            "CIP X1 Y1",
+            "BSPLINE X1\nX2",
+            "G1 E5",
+        ] {
+            assert_eq!(missing_on(program), 1, "{program}");
+        }
+        assert_eq!(missing_on("G0 X1\nG1 X2\nF100"), 2);
+        // The motion is modal: X2 is still a G1 block.
+        assert_eq!(missing_on("G1\nX2"), 2);
+    }
+
+    #[test]
+    fn rapid_dwell_and_threads_need_no_feed() {
+        for program in [
+            "G0 X1 Y2",
+            "G0 X1\nG4 F2\nG0 X2",
+            "G33 Z10 K2",
+            "G74 X0",
+            "G1 F100 X1",
+            "F100\nG1 X1",
+            "G1\nM3 S100",
+        ] {
+            run(program, None).unwrap_or_else(|e| panic!("{program}: {e}"));
+        }
+        // A dwell F is a time, not a feed.
+        assert_eq!(missing_on("G4 F2\nG1 X1"), 2);
+    }
+
+    #[test]
+    fn the_start_feed_counts_as_programmed() {
+        run("G1 X1", Some(500.0)).unwrap();
+    }
+
+    #[test]
+    fn a_feed_type_change_deletes_the_feed() {
+        let line = missing_on("G94 G1 X1 F100\nG95 X2");
+        assert_eq!(line, 2);
+        let error = run("G94 G1 X1 F100\nG95\nX2", None).unwrap_err();
+        assert!(error.to_string().contains("changed to G95"), "{error}");
+        for program in [
+            "G94 G1 X1 F100\nG95 X2 F0.1",
+            "G94 G1 X1 F100\nG94 X2",
+            "G94 G1 X1 F100\nG96 S100 F0.2 X2",
+        ] {
+            run(program, None).unwrap_or_else(|e| panic!("{program}: {e}"));
+        }
+        assert_eq!(missing_on("G95 G1 X1 F0.1\nG96 S200\nX2"), 3);
+        // G93 keeps its F from block to block (the manual only recommends a new F).
+        run("G93 G1 X1 F2\nX2", None).unwrap();
+    }
+
+    #[test]
+    fn a_missing_feed_inside_a_subprogram_names_the_call() {
+        let extensions = crate::subprogram::Extensions {
+            subprograms: [("MOVE".to_string(), "PROC MOVE\nG1 X5\nM17\n".to_string())].into(),
+            ..Default::default()
+        };
+        let error = crate::interpreter::nc_to_table_with(
+            "G0 X0\nMOVE\n",
+            None,
+            None,
+            None,
+            1000,
+            false,
+            None,
+            false,
+            None,
+            extensions,
+        )
+        .unwrap_err();
+        assert_eq!(error.location().unwrap().line, 2);
+        assert!(error.to_string().contains("in subprogram MOVE, line 2"), "{error}");
     }
 }
