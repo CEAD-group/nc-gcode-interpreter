@@ -76,6 +76,40 @@ released to PyPI.
 
 ### Changed
 
+- **Breaking:** `initial_state` is removed from `nc_to_dataframe`,
+  `nc_to_batches`, `nc_to_rows`, the Rust interpreter functions and the CLIs
+  (`-i/--initial_state`, `--initial-state`). It ran a string of NC text before
+  the program and discarded its rows, which mixed three jobs. Three inputs
+  replace it, applied in this order before the main program:
+  - `definitions`: a list of definition files (GUD/MGUD/UGUD `.DEF`), each
+    read on its own. A file may hold DEF and REDEF statements, assignments to
+    variables and comments; the `%_N_..._DEF` header and `$PATH=` line are
+    skipped. M17, M30 or M2 ends that file and reading goes on with the next,
+    so several files no longer need their end codes stripped. Motion, G codes
+    or anything else is an error naming the file (`NcError.definition_file`,
+    its index in the list) and the line within it. Migration: pass the DEF
+    files as a list instead of concatenating them into `initial_state`.
+  - `variables`: a dict of values (`float`, `int`, `bool`, `str`) written
+    straight into the variable tables and checked against the declared type
+    (2.5 into an INT or a string into a REAL is an error). Names must be
+    defined unless they are R parameters, system variables or
+    `allow_undefined_variables` is set. Migration: replace generated
+    `NAME=VALUE` lines with `variables={"NAME": value}`; strings now work.
+  - `start`: the machine state at program start, in the shape of the
+    returned state dict (`axes`, `translation`, `rotation`, `symbol_table`,
+    `string_table`, plus the new `g_groups` and `feed`), so a returned state
+    can be passed back. Modal G groups are checked against the G group table,
+    and they and `feed` fill the first output row, so those columns no longer
+    start as null. Axis positions and the frame only seed the internal state.
+    A name in both `variables` and `start` is an error. Migration: replace
+    axis words and frame instructions in `initial_state` with
+    `start={"axes": {...}, "translation": {...}}`, and modal G codes and F
+    with `start={"g_groups": {...}, "feed": ...}`.
+  The returned state gains `g_groups` (modal G group column to code, as of
+  the last row) and `feed`. The CLIs take `--definitions FILE` (repeatable),
+  `--variables FILE.json` and `--start FILE.json`. The Rust functions take
+  `Option<&start::StartInputs>` where they took `Option<&str>`.
+
 - A program that calls `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`, `TRACON` or
   `TRAFOOF` gets the new `transformation` column, also when it uses none of
   the new arguments.

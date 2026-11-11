@@ -131,11 +131,12 @@ EXAMPLES = pathlib.Path(__file__).parent.parent.parent / "examples"
 )
 def test_fast_path_matches_on_examples(mpf):
     """The shipped examples through both paths, with the same kwargs as the
-    golden-CSV test (initial_state, extra axes, index map) so the fast path
+    golden-CSV test (definitions, start, extra axes, index map) so the fast path
     is differentially covered in CI, where the mill-sim corpus is absent."""
     run_both(
         mpf.read_text(),
-        initial_state=(EXAMPLES / "defaults.mpf").read_text(),
+        definitions=[EXAMPLES / "defaults.def"],
+        start={"axes": {"X": 1600.0, "Y": 900.0, "Z": 0.0, "E": 0.0}},
         iteration_limit=10000,
         extra_axes=["ELX"],
         axis_index_map={"E": 4},

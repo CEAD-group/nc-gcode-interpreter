@@ -63,7 +63,7 @@ def test_pose_cycle_with_position_guard():
     machine = Machine({"X": 0.0, "Y": 0.2})
     df, _ = nc_to_dataframe(
         "G1 X0 Y0\nGOTO_POSE(1)\nG1 X5\n",
-        initial_state=GUD,
+        definitions=[GUD],
         subprograms={"GOTO_POSE": GOTO_POSE, "AT_POSE": GUARD},
         external_variables=machine,
         include_line_numbers=True,
@@ -85,7 +85,7 @@ def test_guard_failure_takes_the_abort_branch():
     machine = Machine({"X": 30.0, "Y": 0.0})
     df, _ = nc_to_dataframe(
         "G1 X0 Y0\nGOTO_POSE(1)\n",
-        initial_state=GUD,
+        definitions=[GUD],
         subprograms={"GOTO_POSE": GOTO_POSE, "AT_POSE": GUARD},
         external_variables=machine,
     )
@@ -236,7 +236,7 @@ def test_definition_file_attributes_are_accepted_and_ignored():
         "REDEF COUNT APW 7\n"
         "REDEF LIMITED PRLOC\n"
     )
-    _, state = nc_to_dataframe("COUNT = COUNT + 2\nREACH[3] = LIMITED\n", initial_state=gud)
+    _, state = nc_to_dataframe("COUNT = COUNT + 2\nREACH[3] = LIMITED\n", definitions=[gud])
     assert state["symbol_table"]["COUNT"] == 2
     assert state["symbol_table"]["REACH[3]"] == 5
     # A name that only starts like an attribute stays a variable.

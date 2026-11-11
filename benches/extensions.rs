@@ -1,6 +1,7 @@
 //! Cost of supplied subprograms and an external-variable provider (#48),
 //! without the Python boundary: `cargo bench --bench extensions [samples]`.
 use nc_gcode_interpreter::interpreter::{nc_to_batch_stream_with, nc_to_table_with};
+use nc_gcode_interpreter::start::StartInputs;
 use nc_gcode_interpreter::subprogram::{Extensions, ExternalError, ExternalIndex, ExternalVariables};
 use std::{collections::HashMap, hint::black_box, time::Instant};
 
@@ -64,7 +65,7 @@ fn provider() -> Option<(Vec<String>, Box<dyn ExternalVariables>)> {
     Some((vec!["$A_IN".to_string()], Box::new(Constant(0))))
 }
 
-fn table(program: &str, initial: Option<&str>, extensions: Extensions) -> usize {
+fn table(program: &str, initial: Option<&StartInputs>, extensions: Extensions) -> usize {
     let (table, _) = nc_to_table_with(
         program, initial, None, None, 10_000_000, false, None, false, None, extensions,
     )
@@ -73,7 +74,7 @@ fn table(program: &str, initial: Option<&str>, extensions: Extensions) -> usize 
 }
 
 /// As the Python bindings run it: batches over a channel, flushed before each provider call.
-fn stream(program: &str, initial: Option<&str>, extensions: Extensions) -> usize {
+fn stream(program: &str, initial: Option<&StartInputs>, extensions: Extensions) -> usize {
     let (tx, rx) = std::sync::mpsc::sync_channel(3);
     let (events, _events) = std::sync::mpsc::channel();
     std::thread::scope(|scope| {
@@ -103,7 +104,11 @@ fn stream(program: &str, initial: Option<&str>, extensions: Extensions) -> usize
 fn main() {
     let samples: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(5);
     let sub = body();
-    let preset = Some("DEF REAL AIN1=1\n");
+    let preset_inputs = StartInputs {
+        definitions: vec!["DEF REAL AIN1=1\n".to_string()],
+        ..StartInputs::default()
+    };
+    let preset = Some(&preset_inputs);
     let calls = calls();
     let inlined = inlined();
     let loop_preset = read_loop("AIN1");

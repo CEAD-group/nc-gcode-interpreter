@@ -18,10 +18,15 @@ class NcError(ValueError):
     column: int | None
     context: str | None
     line_text: str | None
+    #: Index in ``definitions`` of the definition file the error is in, or
+    #: None for an error in the main program or a subprogram.
+    definition_file: int | None
 
 def nc_to_rows(
     input: str,
-    initial_state: str | None = None,
+    definitions: list[str] | None = None,
+    variables: dict[str, float | int | bool | str] | None = None,
+    start: dict[str, Any] | None = None,
     axis_identifiers: list[str] | None = None,
     extra_axes: list[str] | None = None,
     iteration_limit: int = 10000,
@@ -37,7 +42,9 @@ def nc_to_rows(
 def nc_to_batches(
     input: str,
     batch_size: int = 500_000,
-    initial_state: str | None = None,
+    definitions: list[str] | None = None,
+    variables: dict[str, float | int | bool | str] | None = None,
+    start: dict[str, Any] | None = None,
     axis_identifiers: list[str] | None = None,
     extra_axes: list[str] | None = None,
     iteration_limit: int = 10000,
@@ -58,7 +65,8 @@ def nc_to_batches(
     """Interpret an NC program into an iterator of columnar polars DataFrames.
 
     The returned iterator exposes ``state`` (dict with ``axes``,
-    ``symbol_table``, ``translation``, ``rotation`` and ``string_table``) once exhausted, and
+    ``symbol_table``, ``translation``, ``rotation``, ``string_table``,
+    ``g_groups`` and ``feed``) once exhausted, and
     - when ``include_variables`` is set - ``variable_events`` (an Arrow batch of
     ``row_idx`` / ``name_id`` / ``value``) and ``variable_names`` (list[str]).
     """

@@ -174,7 +174,7 @@ pub(crate) struct ExtState {
     /// The batch sink to flush before a provider call, when rows are streamed.
     pub flush: Option<Arc<Mutex<BatchStreamSink>>>,
     /// Program levels, main program first. Empty until the main program starts,
-    /// so initial-state definitions stay global.
+    /// so `definitions`, `variables` and `start` stay global.
     pub frames: Vec<Frame>,
     /// Active modal G function per G group, as far as the program set them;
     /// a PROC with the SAVE attribute restores these on return.

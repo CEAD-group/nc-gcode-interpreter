@@ -85,13 +85,36 @@ class ExternalVariables(Protocol):
     ) -> None: ...
 
 
+def _definition_texts(
+    definitions: "Sequence[str | os.PathLike | TextFileLike] | None",
+) -> list[str] | None:
+    """Read each definition file: a str is the file's text, a path is read."""
+    if definitions is None:
+        return None
+    if isinstance(definitions, (str, os.PathLike)):
+        raise TypeError(
+            "definitions must be a list of definition files, one entry per file"
+        )
+    texts = []
+    for item in definitions:
+        if isinstance(item, str):
+            texts.append(item)
+        elif isinstance(item, os.PathLike):
+            texts.append(Path(item).read_text())
+        else:
+            texts.append(item.read())
+    return texts
+
+
 def _subprogram_texts(subprograms: "Mapping[str, str] | None") -> dict[str, str] | None:
     return None if subprograms is None else dict(subprograms)
 
 
 def nc_to_dataframe(
     input: "TextFileLike | str | os.PathLike",
-    initial_state: TextFileLike | str | None = None,
+    definitions: "Sequence[str | os.PathLike | TextFileLike] | None" = None,
+    variables: "Mapping[str, float | int | bool | str] | None" = None,
+    start: "Mapping[str, Any] | None" = None,
     axis_identifiers: list[str] | None = None,
     extra_axes: list[str] | None = None,
     iteration_limit: int = 10000,
@@ -117,8 +140,31 @@ def nc_to_dataframe(
     -----------
     input: TextFileLike | str
         The G-code input as a string or a file-like object.
-    initial_state: TextFileLike | str | None, optional
-        An optional initial state string or a file-like object to initialize the interpreter's state.
+    definitions: list of str | PathLike | TextFileLike, optional
+        Definition files (GUD/MGUD/UGUD .DEF), read in order before the program:
+        a str is the file's text, a path or file-like object is read. Only DEF
+        and REDEF statements, assignments to variables and comments are allowed;
+        the ``%_N_..._DEF`` header and ``$PATH=`` line are skipped, and M17, M30
+        or M2 ends the file. Anything else raises an ``NcError`` whose
+        ``definition_file`` attribute is the index of the file in this list and
+        whose ``line`` is the line within that file.
+    variables: Mapping[str, float | int | bool | str] | None, optional
+        Variable values applied after the definitions, checked against the
+        declared type (2.5 into an INT, or a str into a REAL, is an error). A
+        name must be defined by the definitions, unless it is an R parameter,
+        a system variable (``$...``) or ``allow_undefined_variables`` is set.
+    start: Mapping | None, optional
+        The machine state at program start, in the shape of the returned state
+        dict, so a returned state can be passed back. Keys: ``axes`` and
+        ``translation`` (dict[str, float]), ``rotation`` (3x3), ``symbol_table``
+        (dict[str, float]), ``string_table`` (dict[str, str]), ``g_groups``
+        (modal G group column to code, e.g. ``{"gg01_motion": "G1"}``) and
+        ``feed`` (float). The G groups and feed fill the first output row where
+        the program does not set them; positions and frame only seed the
+        internal state. Its variables restore a snapshot: names no definition
+        declared are created. A name in both ``variables`` and ``start`` is an
+        error. Applied after ``variables``; a DEF in the main program
+        re-initialises a variable, as before.
     axis_identifiers: list[str] | None, optional
         A list of axis identifiers to override the default axes (e.g., ['X', 'Y', 'Z']).
     extra_axes: list[str] | None, optional
@@ -171,8 +217,6 @@ def nc_to_dataframe(
     └─────────────┴──────┴──────┴──────┘
     """
     program, input_is_path = _normalize_input(input)
-    if initial_state is not None and not isinstance(initial_state, str):
-        initial_state = initial_state.read()
 
     # The whole table is the concatenation of the batch stream: the interpreter
     # runs on a worker thread, building columnar Arrow batches (each handed over
@@ -184,7 +228,9 @@ def nc_to_dataframe(
     it = _nc_to_batches(
         program,
         _COLLECT_BATCH_SIZE,
-        initial_state,
+        _definition_texts(definitions),
+        None if variables is None else dict(variables),
+        None if start is None else dict(start),
         axis_identifiers,
         extra_axes,
         iteration_limit,
@@ -451,7 +497,9 @@ def dataframe_to_nc(df: pl.DataFrame, file_path: str | Path):
 
 def nc_to_rows(
     input: "TextFileLike | str | os.PathLike",
-    initial_state: TextFileLike | str | None = None,
+    definitions: "Sequence[str | os.PathLike | TextFileLike] | None" = None,
+    variables: "Mapping[str, float | int | bool | str] | None" = None,
+    start: "Mapping[str, Any] | None" = None,
     axis_identifiers: list[str] | None = None,
     extra_axes: list[str] | None = None,
     iteration_limit: int = 10000,
@@ -492,9 +540,13 @@ def nc_to_rows(
     promptly instead of finishing the rest of the program. There is no
     separate ``.cancel()``/``.close()`` - drop is the whole mechanism.
 
+    ``definitions``, ``variables`` and ``start`` work as in
+    :func:`nc_to_dataframe`.
+
     Errors raise ``ValueError`` from ``next()`` when reached. After the
     iterator is exhausted, its ``state`` attribute holds the final
-    interpreter state (axes, symbol_table, translation, rotation, string_table).
+    interpreter state (axes, symbol_table, translation, rotation, string_table,
+    g_groups, feed).
 
     Example:
     --------
@@ -508,11 +560,11 @@ def nc_to_rows(
     2 5.0 {}
     """
     program, input_is_path = _normalize_input(input)
-    if initial_state is not None and not isinstance(initial_state, str):
-        initial_state = initial_state.read()
     return _nc_to_rows(
         program,
-        initial_state,
+        _definition_texts(definitions),
+        None if variables is None else dict(variables),
+        None if start is None else dict(start),
         axis_identifiers,
         extra_axes,
         iteration_limit,
@@ -535,8 +587,8 @@ class _BatchIterator:
     no Python list of primitives materialized. ``pl.DataFrame`` wraps that
     capsule directly (polars >= 1.3), so no ``pyarrow`` is involved. After
     exhaustion its ``state`` attribute holds the final interpreter state (axes,
-    symbol_table, translation, rotation, string_table), like the iterator
-    returned by :func:`nc_to_rows`.
+    symbol_table, translation, rotation, string_table, g_groups, feed), like
+    the iterator returned by :func:`nc_to_rows`.
     """
 
     def __init__(self, inner: Any) -> None:
@@ -579,7 +631,9 @@ class _BatchIterator:
 def nc_to_batches(
     input: "TextFileLike | str | os.PathLike",
     batch_size: int = 500_000,
-    initial_state: TextFileLike | str | None = None,
+    definitions: "Sequence[str | os.PathLike | TextFileLike] | None" = None,
+    variables: "Mapping[str, float | int | bool | str] | None" = None,
+    start: "Mapping[str, Any] | None" = None,
     axis_identifiers: list[str] | None = None,
     extra_axes: list[str] | None = None,
     iteration_limit: int = 10000,
@@ -612,6 +666,8 @@ def nc_to_batches(
 
     The returned iterator exposes a ``state`` attribute holding the final
     interpreter state once it is exhausted, like :func:`nc_to_rows`.
+    ``definitions``, ``variables`` and ``start`` work as in
+    :func:`nc_to_dataframe`.
 
     Like :func:`nc_to_rows`, this runs on a background thread behind a
     bounded channel, and dropping the iterator is the supported way to
@@ -638,12 +694,12 @@ def nc_to_batches(
     2
     """
     program, input_is_path = _normalize_input(input)
-    if initial_state is not None and not isinstance(initial_state, str):
-        initial_state = initial_state.read()
     inner = _nc_to_batches(
         program,
         batch_size,
-        initial_state,
+        _definition_texts(definitions),
+        None if variables is None else dict(variables),
+        None if start is None else dict(start),
         axis_identifiers,
         extra_axes,
         iteration_limit,

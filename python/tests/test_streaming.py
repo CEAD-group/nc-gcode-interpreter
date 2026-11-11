@@ -100,11 +100,14 @@ def test_state_is_none_until_exhausted():
     assert iterator.state["axes"] == {"X": 2.0}
 
 
-def test_initial_state_rows_are_not_streamed():
-    rows = list(nc_to_rows("X1", initial_state="Y99\nDEF REAL Q=1"))
+def test_start_positions_are_not_streamed():
+    iterator = nc_to_rows("X1", definitions=["DEF REAL Q=1"], start={"axes": {"Y": 99.0}})
+    rows = list(iterator)
     assert len(rows) == 1
     assert rows[0][1]["X"] == 1.0
-    assert "Y" not in rows[0][1]  # initial-state moves set state, not rows
+    assert "Y" not in rows[0][1]  # start positions set state, not rows
+    assert iterator.state["axes"]["Y"] == 99.0
+    assert iterator.state["symbol_table"]["Q"] == 1.0
 
 
 def test_include_variables_exposes_assignments():

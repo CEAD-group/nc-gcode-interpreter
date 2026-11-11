@@ -149,7 +149,7 @@ def test_unknown_system_variable_in_string_argument_is_loud():
 def test_date_zero_padding_with_system_variable_timestamp():
     """The calibration-date idiom from #58: SPRINT a timestamp from the $A_*
     clock variables, then zero-pad with a WHILE/INDEX/char-write loop. The
-    clock values come from the initial state."""
+    clock values come from ``variables``."""
     program = nc_lines(
         "DEF STRING[13] CAL_DATE",
         'CAL_DATE = SPRINT("20%2d%2d%2dT%2d%2d", $A_YEAR,$A_MONTH,$A_DAY,$A_HOUR,$A_MINUTE)',
@@ -157,8 +157,8 @@ def test_date_zero_padding_with_system_variable_timestamp():
         '  CAL_DATE[INDEX(CAL_DATE, " ")] = "0"',
         "ENDWHILE",
     )
-    clock = nc_lines("$A_YEAR=24", "$A_MONTH=5", "$A_DAY=9", "$A_HOUR=7", "$A_MINUTE=3")
-    _df, state = nc_to_dataframe(program, initial_state=clock)
+    clock = {"$A_YEAR": 24, "$A_MONTH": 5, "$A_DAY": 9, "$A_HOUR": 7, "$A_MINUTE": 3}
+    _df, state = nc_to_dataframe(program, variables=clock)
     assert state["string_table"]["CAL_DATE"] == "20240509T0703"
 
 

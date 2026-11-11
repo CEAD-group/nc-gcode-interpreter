@@ -164,7 +164,7 @@ pub struct Flattener {
 
 impl Flattener {
     /// Seed the current machine position of `axis` (uppercase identifier),
-    /// e.g. from the state an initial-state file established - without this,
+    /// e.g. from the `start` state - without this,
     /// the first arc/spline of the main program would not know its start
     /// point even though the interpreter does.
     pub fn seed_position(&mut self, axis: &str, machine_value: f64) {

@@ -380,6 +380,47 @@ pub struct OutputRows {
     call_context: Option<(usize, String)>,
     /// The call path and subprogram line to stamp on the row being filled.
     current_subprogram: Option<(String, usize)>,
+    /// Cells from `start` (modal G groups, F) for the first row with output.
+    seed: Vec<(&'static str, Value)>,
+    /// Modal G groups and F as the rows carried them, for the final state.
+    modal: ModalTracker,
+}
+
+/// The modal G group values and the F value of the rows flushed so far.
+#[derive(Debug, Default, Clone)]
+struct ModalTracker {
+    g_groups: Vec<(&'static str, String)>,
+    feed: Option<f64>,
+}
+
+impl ModalTracker {
+    fn set_group(&mut self, group: &'static str, code: &str) {
+        match self.g_groups.iter_mut().find(|(name, _)| key_eq(name, group)) {
+            Some((_, current)) => {
+                // Compare first so an unchanged group costs no allocation.
+                if current != code {
+                    *current = code.to_string();
+                }
+            }
+            None => self.g_groups.push((group, code.to_string())),
+        }
+    }
+
+    fn track(&mut self, cells: &CellMap) {
+        for (key, value) in cells.iter() {
+            if key.starts_with("gg") {
+                if let Value::Str(code) = value {
+                    if MODAL_G_GROUPS.contains(key) {
+                        self.set_group(key, code);
+                    }
+                }
+            } else if *key == "F" {
+                if let Value::Float(feed) = value {
+                    self.feed = Some(*feed);
+                }
+            }
+        }
+    }
 }
 
 impl OutputRows {
@@ -393,6 +434,8 @@ impl OutputRows {
             warned_g91: false,
             call_context: None,
             current_subprogram: None,
+            seed: Vec::new(),
+            modal: ModalTracker::default(),
         }
     }
 
@@ -407,6 +450,8 @@ impl OutputRows {
             warned_g91: false,
             call_context: None,
             current_subprogram: None,
+            seed: Vec::new(),
+            modal: ModalTracker::default(),
         }
     }
 
@@ -488,6 +533,8 @@ impl OutputRows {
             warned_g91: false,
             call_context: None,
             current_subprogram: None,
+            seed: Vec::new(),
+            modal: ModalTracker::default(),
         }
     }
 
@@ -560,6 +607,8 @@ impl OutputRows {
                 warned_g91: self.warned_g91,
                 call_context: self.call_context.clone(),
                 current_subprogram: self.current_subprogram.clone(),
+                seed: self.seed.clone(),
+                modal: self.modal.clone(),
             }),
             _ => None,
         }
@@ -641,6 +690,14 @@ impl OutputRows {
             }
         }
         rekey_g4_dwell(&mut row);
+        if !self.seed.is_empty() && !row.cells.is_empty() {
+            for (key, value) in self.seed.drain(..) {
+                if row.cells.get(key).is_none() {
+                    row.cells.insert(key, value);
+                }
+            }
+        }
+        self.modal.track(&row.cells);
         // G91 is parsed but incremental dimensioning is NOT applied: every
         // axis value is emitted as if absolute, so positions are wrong from
         // this block on. Loud once-per-run warning - never butcher silently.
@@ -692,6 +749,35 @@ impl OutputRows {
         if self.record_variables {
             self.current.variable_changes.push((key.to_string(), value));
         }
+    }
+
+    /// Cells the first row with output gets where it sets no value itself:
+    /// the start state's modal G groups and F.
+    pub(crate) fn seed_first_row(&mut self, seed: Vec<(&'static str, Value)>) {
+        for (key, value) in &seed {
+            match value {
+                Value::Str(code) => self.modal.set_group(key, code),
+                Value::Float(feed) if *key == "F" => self.modal.feed = Some(*feed),
+                _ => {}
+            }
+        }
+        self.seed = seed;
+    }
+
+    /// As [`OutputRows::finish`], storing the modal G groups and F of the
+    /// last row in `state` for the final state.
+    pub(crate) fn finish_into(mut self, state: &mut crate::state::State) -> Result<Vec<Row>, ParsingError> {
+        self.flush()?;
+        let mut g_groups: Vec<(String, String)> = self
+            .modal
+            .g_groups
+            .iter()
+            .map(|(group, code)| (group.to_string(), code.clone()))
+            .collect();
+        g_groups.sort();
+        state.g_groups = g_groups;
+        state.feed = self.modal.feed;
+        self.finish()
     }
 
     /// Flush the trailing row and return the collected rows (empty when

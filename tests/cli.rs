@@ -123,3 +123,51 @@ fn string_ops_program_runs() {
     let csv = std::fs::read_to_string(dir.join("program.csv")).expect("CSV output should exist");
     assert!(csv.lines().count() >= 2, "no rows produced");
 }
+
+/// `--definitions` (repeated), `--variables` and `--start` reach the
+/// interpreter: both definition files take effect although each ends in M30,
+/// and the start state seeds the first row's motion and F columns.
+#[test]
+fn definitions_variables_and_start_flags() {
+    let dir = std::env::temp_dir().join("nc-cli-test-start-inputs");
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let write = |name: &str, text: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).expect("write input");
+        path
+    };
+    let input = write("program.mpf", "X=FIRST+SECOND\nY=COUNT\n");
+    let first = write("first.def", "DEF REAL FIRST=1.5\nM30\n");
+    let second = write("second.def", "DEF INT SECOND=2\nDEF INT COUNT\nM30\n");
+    let variables = write("variables.json", r#"{"COUNT": 7}"#);
+    let start = write("start.json", r#"{"g_groups": {"gg01_motion": "G1"}, "feed": 250}"#);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_nc-gcode-interpreter"))
+        .arg(&input)
+        .arg("--definitions")
+        .arg(&first)
+        .arg("--definitions")
+        .arg(&second)
+        .arg("--variables")
+        .arg(&variables)
+        .arg("--start")
+        .arg(&start)
+        .status()
+        .expect("binary should run");
+    assert!(status.success(), "CLI exited with {status}");
+
+    let csv = std::fs::read_to_string(dir.join("program.csv")).expect("CSV output should exist");
+    let lines: Vec<&str> = csv.lines().collect();
+    let header: Vec<&str> = lines[0].split(',').collect();
+    let cell = |row: usize, name: &str| {
+        let column = header
+            .iter()
+            .position(|&h| h == name)
+            .unwrap_or_else(|| panic!("no {name} column"));
+        lines[row].split(',').nth(column).unwrap().to_string()
+    };
+    assert_eq!(cell(1, "gg01_motion"), "G1");
+    assert_eq!(cell(1, "X").parse::<f64>().unwrap(), 3.5);
+    assert_eq!(cell(1, "F").parse::<f64>().unwrap(), 250.0);
+    assert_eq!(cell(2, "Y").parse::<f64>().unwrap(), 7.0);
+}

@@ -1,0 +1,6 @@
+; definitions shared by the example programs
+DEF INT bb,aa=12
+DEF REAL START_CC=10, START_CC_SPEED=0.5, EXTRUSION_MULTIPLIER=1, RETRACT_CC=1
+aa = aa+3
+bb = 9
+M30

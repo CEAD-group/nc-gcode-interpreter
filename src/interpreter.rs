@@ -2,6 +2,7 @@
 use crate::errors::ParsingError;
 use crate::interpret_rules::{interpret_blocks, BlockFlow};
 use crate::output::{OutputRows, Row, Table};
+use crate::start::StartInputs;
 use crate::state::{self, State};
 use crate::subprogram::Extensions;
 use crate::types::{NCParser, Rule};
@@ -63,7 +64,7 @@ const DEFAULT_AXIS_IDENTIFIERS: &[&str] = &[
 /// Main function: interpret the input program into a sanitized output table.
 pub fn nc_to_table(
     input: impl Into<SourceText>,
-    initial_state: Option<&str>,
+    inputs: Option<&StartInputs>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,
@@ -74,7 +75,7 @@ pub fn nc_to_table(
 ) -> Result<(Table, state::State), ParsingError> {
     nc_to_table_with(
         input,
-        initial_state,
+        inputs,
         axis_identifiers,
         extra_axes,
         iteration_limit,
@@ -91,7 +92,7 @@ pub fn nc_to_table(
 #[allow(clippy::too_many_arguments)]
 pub fn nc_to_table_with(
     input: impl Into<SourceText>,
-    initial_state: Option<&str>,
+    inputs: Option<&StartInputs>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,
@@ -117,23 +118,26 @@ pub fn nc_to_table_with(
         ));
     }
     state.ext = crate::subprogram::ExtState::new(extensions);
-    if let Some(initial_state) = initial_state {
-        // Propagate the error instead of exiting: this is library code, and
-        // process::exit would kill e.g. a host Python interpreter. The rows
-        // of the initial-state file are discarded; only the state matters.
-        let mut discard = OutputRows::collect();
-        interpret_file(initial_state, &mut state, &mut discard)?;
-    }
-
-    // Now interpret the main input using the axis_index_map from state
+    // Definitions, variables and start are global: applied before the main
+    // program opens its own level.
+    let seed = apply_inputs(inputs, &mut state)?;
     state.ext.begin_main();
     let mut output = OutputRows::collect();
+    output.seed_first_row(seed);
     install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_source(input.into(), &mut state, &mut output)?;
-    let rows = output.finish()?;
+    let rows = output.finish_into(&mut state)?;
 
     let table = Table::from_rows(&rows, disable_forward_fill);
     Ok((table, state))
+}
+
+/// Apply `definitions`, `variables` and `start`, returning the first-row seed.
+fn apply_inputs(inputs: Option<&StartInputs>, state: &mut State) -> Result<crate::start::Seed, ParsingError> {
+    match inputs {
+        Some(inputs) => inputs.apply(state),
+        None => Ok(Vec::new()),
+    }
 }
 
 pub(crate) fn build_state(
@@ -167,9 +171,9 @@ fn install_flattener(
 ) -> Result<(), ParsingError> {
     if let Some(tolerance) = flatten_tolerance {
         let mut flattener = crate::flatten::Flattener::new(tolerance, &state.axis_identifiers)?;
-        // Seed with the machine positions the state already knows (an
-        // initial-state file may have established the start point of the
-        // first arc/spline of the main program).
+        // Seed with the machine positions the state already knows (`start`
+        // may have established the start point of the first arc/spline of
+        // the main program).
         for axis in state.axes.keys() {
             if let Some(machine_value) = state.get_axis_machine(axis) {
                 flattener.seed_position(axis, machine_value);
@@ -193,7 +197,7 @@ fn install_flattener(
 #[allow(dead_code)] // used by the python-feature bindings, not the bin
 pub fn nc_to_row_stream(
     input: impl Into<SourceText>,
-    initial_state: Option<&str>,
+    inputs: Option<&StartInputs>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,
@@ -209,14 +213,12 @@ pub fn nc_to_row_stream(
         axis_index_map,
         allow_undefined_variables,
     );
-    if let Some(initial_state) = initial_state {
-        let mut discard = OutputRows::collect();
-        interpret_file(initial_state, &mut state, &mut discard)?;
-    }
+    let seed = apply_inputs(inputs, &mut state)?;
     let mut output = OutputRows::stream(sender);
+    output.seed_first_row(seed);
     install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_source(input.into(), &mut state, &mut output)?;
-    output.finish()?;
+    output.finish_into(&mut state)?;
     Ok(state)
 }
 
@@ -234,7 +236,7 @@ pub fn nc_to_row_stream(
 #[allow(clippy::too_many_arguments)]
 pub fn nc_to_batch_stream(
     input: impl Into<SourceText>,
-    initial_state: Option<&str>,
+    inputs: Option<&StartInputs>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,
@@ -250,7 +252,7 @@ pub fn nc_to_batch_stream(
     // Back-compatible entry point: never emits the opt-in line_no column.
     nc_to_batch_stream_with_line_numbers(
         input,
-        initial_state,
+        inputs,
         axis_identifiers,
         extra_axes,
         iteration_limit,
@@ -272,7 +274,7 @@ pub fn nc_to_batch_stream(
 #[allow(clippy::too_many_arguments)]
 pub fn nc_to_batch_stream_with_line_numbers(
     input: impl Into<SourceText>,
-    initial_state: Option<&str>,
+    inputs: Option<&StartInputs>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,
@@ -288,7 +290,7 @@ pub fn nc_to_batch_stream_with_line_numbers(
 ) -> Result<state::State, ParsingError> {
     nc_to_batch_stream_with(
         input,
-        initial_state,
+        inputs,
         axis_identifiers,
         extra_axes,
         iteration_limit,
@@ -312,7 +314,7 @@ pub fn nc_to_batch_stream_with_line_numbers(
 #[allow(clippy::too_many_arguments)]
 pub fn nc_to_batch_stream_with(
     input: impl Into<SourceText>,
-    initial_state: Option<&str>,
+    inputs: Option<&StartInputs>,
     axis_identifiers: Option<Vec<String>>,
     extra_axes: Option<Vec<String>>,
     iteration_limit: usize,
@@ -344,10 +346,7 @@ pub fn nc_to_batch_stream_with(
     }
     let defer_rows = extensions.defer_rows;
     state.ext = crate::subprogram::ExtState::new(extensions);
-    if let Some(initial_state) = initial_state {
-        let mut discard = OutputRows::collect();
-        interpret_file(initial_state, &mut state, &mut discard)?;
-    }
+    let seed = apply_inputs(inputs, &mut state)?;
     state.ext.begin_main();
     let mut output = OutputRows::batch_stream_to(
         send,
@@ -360,19 +359,25 @@ pub fn nc_to_batch_stream_with(
     if state.ext.has_external() && !defer_rows {
         state.ext.flush = output.share_batch_sink();
     }
+    output.seed_first_row(seed);
     install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_source(input.into(), &mut state, &mut output)?;
-    output.finish()?;
+    output.finish_into(&mut state)?;
     Ok(state)
 }
 
 /// Interpret a file, pushing rows into `output`.
+#[cfg(test)]
 fn interpret_file(input: &str, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
     interpret_source(SourceText::from(input), state, output)
 }
 
 /// As [`interpret_file`], sharing `source` with the state's diagnostics.
-fn interpret_source(source: SourceText, state: &mut State, output: &mut OutputRows) -> Result<(), ParsingError> {
+pub(crate) fn interpret_source(
+    source: SourceText,
+    state: &mut State,
+    output: &mut OutputRows,
+) -> Result<(), ParsingError> {
     state.set_source(source.clone());
     let input = source.as_str();
 
@@ -1611,14 +1616,22 @@ mod tests {
         assert_eq!(floats(&table, "dwell"), &[None, Some(0.5), None]);
     }
 
-    /// A start position established by the initial-state file must seed the
-    /// flattener: the first arc of the main program flattens from the correct
-    /// start point instead of warning that the position is unknown.
+    /// A start position from `start` must seed the flattener: the first arc
+    /// of the main program flattens from the correct start point instead of
+    /// warning that the position is unknown.
     #[test]
     fn initial_state_position_seeds_flattener() {
+        let inputs = crate::start::StartInputs {
+            start: Some(crate::start::StartState {
+                axes: vec![("X".into(), 0.0), ("Y".into(), 0.0), ("Z".into(), 0.0)],
+                feed: Some(100.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
         let (table, _state) = nc_to_table(
             "G2 X100 Y0 I50 J0 F1000\n",
-            Some("G1 X0 Y0 Z0 F100\n"),
+            Some(&inputs),
             None,
             None,
             10000,
