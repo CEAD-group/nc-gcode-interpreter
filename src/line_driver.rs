@@ -654,7 +654,7 @@ fn execute_decoded(
                         let last = output.last_mut().expect("row was just pushed");
                         state.insert_machine_axis(skey, *value, last);
                     }
-                    Some((ColKind::Block, skey)) => {
+                    Some((ColKind::Block | ColKind::Modal, skey)) => {
                         let last = output.last_mut().expect("row was just pushed");
                         last.insert(skey, Value::Float(*value));
                     }
@@ -744,7 +744,7 @@ fn execute_decoded(
                         let last = output.last_mut().expect("row was just pushed");
                         state.insert_machine_axis(skey, local_value, last);
                     }
-                    Some((ColKind::Block, skey)) => {
+                    Some((ColKind::Block | ColKind::Modal, skey)) => {
                         let local_value = increment_local(state, skey, value);
                         let last = output.last_mut().expect("row was just pushed");
                         last.insert(skey, Value::Float(local_value));
@@ -1302,12 +1302,14 @@ fn decode_line_inner<'a>(
                         // call in the full grammar - unless it is reserved
                         // (control flow), a frame keyword (frame_op at block
                         // start, a loud error mid-block), DEF (opens a
-                        // definition), or a word operator (which would
+                        // definition), FGROUP (modal feed-group state, not a
+                        // call), or a word operator (which would
                         // continue a preceding expression, e.g.
                         // `X=5 DIV R1`); those take the full grammar.
                         if is_reserved_word(word)
                             || is_frame_keyword(word)
                             || word.eq_ignore_ascii_case("DEF")
+                            || word.eq_ignore_ascii_case("FGROUP")
                             || WORD_OPERATORS.iter().any(|op| op.eq_ignore_ascii_case(word))
                         {
                             return DecodeResult::NeedsGrammar;

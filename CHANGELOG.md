@@ -82,6 +82,20 @@ released to PyPI.
   (`PCALL/_N_WKS_DIR/_N_X_WPD/NAME`) is not interpreted and gives a
   warning; the call goes to `NAME`. Before, `PCALL` was dropped silently.
 
+- `FGROUP(<axes>)` and `FGREF[<axis>]=<radius>` are modal state (manual
+  3.7.1). A forward-filled, dictionary-encoded `FGROUP` column holds the axes
+  the path feed refers to, comma-separated as programmed; `FGROUP()` writes
+  `""` for the machine-data default, which the interpreter does not know.
+  Each programmed axis gets a forward-filled `FGREF[<axis>]` float column;
+  null means the control default. Both columns appear only when the program
+  uses them, after the axis columns. Before, `FGROUP` was stored as a
+  subprogram call in `non_returning_function_call` and `FGREF[<axis>]` needed
+  an `axis_index_map` entry and became the variable `FGREF[<index>]`; it now
+  resolves by axis name and is no longer a variable. An argument that is not
+  a configured channel axis (including N, F, S, D and T) is an
+  `unexpected_axis` error. Reading `FGREF[<axis>]` is an
+  `unsupported_statement` error, and so is a user array named `FGREF` (#107).
+
 ### Changed
 
 - A program that calls `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`, `TRACON` or

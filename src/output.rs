@@ -939,12 +939,40 @@ pub fn transformation_value(call: &str) -> Option<String> {
 }
 
 pub fn is_string_column(name: &str) -> bool {
-    MODAL_G_GROUPS.contains(&name)
-        || NON_MODAL_G_GROUPS.contains(&name)
+    is_dict_column(name)
         || matches!(
             name,
             "T" | "non_returning_function_call" | "comment" | SUBPROGRAM_COLUMN | TRANSFORMATION_COLUMN
         )
+}
+
+/// String columns held as per-batch dictionary codes: the G groups and the
+/// feed group, which take a few distinct values repeated over long runs.
+fn is_dict_column(name: &str) -> bool {
+    MODAL_G_GROUPS.contains(&name) || NON_MODAL_G_GROUPS.contains(&name) || name == FGROUP_COLUMN
+}
+
+/// Modal feed-group column (`FGROUP(<axes>)`, manual 3.7.1): the channel axes
+/// the path feed `F` refers to, comma-separated as programmed, on the block
+/// that programs it. `FGROUP()` gives the empty string, which means the
+/// machine-data default set; rows before any `FGROUP` are null, which means
+/// the same. The interpreter does not know that default, so it never names
+/// the axes in it.
+pub const FGROUP_COLUMN: &str = "FGROUP";
+
+/// Prefix of the per-axis reference-radius columns `FGREF[<axis>]` (manual
+/// 3.7.1). A column exists only for an axis the program sets; null before the
+/// first assignment means the control default (360 mm / 2 pi for a rotary
+/// axis, 1 mm for a linear one).
+pub const FGREF_PREFIX: &str = "FGREF[";
+
+/// Output column name of the reference radius of `axis` (uppercase).
+pub fn fgref_column(axis: &str) -> String {
+    format!("{FGREF_PREFIX}{axis}]")
+}
+
+fn is_feed_group_column(name: &str) -> bool {
+    name == FGROUP_COLUMN || name.starts_with(FGREF_PREFIX)
 }
 
 /// Whether a column is forward-filled in the sanitized table: value columns
@@ -959,7 +987,7 @@ pub fn is_forward_filled_column(name: &str) -> bool {
         && name != CALL_REPETITIONS_COLUMN
         && !is_string_column(name)
         && !BLOCK_ADDRESSES.contains(&name);
-    is_value || MODAL_G_GROUPS.contains(&name) || name == TRANSFORMATION_COLUMN
+    is_value || MODAL_G_GROUPS.contains(&name) || name == FGROUP_COLUMN || name == TRANSFORMATION_COLUMN
 }
 
 /// Per-block dwell-time column: on a `G4` block the `F` word is the dwell
@@ -1004,7 +1032,8 @@ pub const LINE_NO_COLUMN: &str = "line_no";
 /// Canonical output-column order over the set of columns present so far:
 /// N, modal then non-modal G-group columns, the fixed axis columns, any
 /// remaining value columns (e.g. user extra axes) in alphabetical order, the
-/// spline/arc block addresses, then T, M, function calls and comment. Column
+/// feed group and its reference radii, the spline/arc block addresses, then
+/// T, M, function calls and comment. Column
 /// names are `&'static str` (constant vocabulary or interned row keys), so the
 /// order is comparison-by-content and independent of which `&'static str`
 /// instance carries a given name.
@@ -1032,6 +1061,7 @@ fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
                 && !BLOCK_ADDRESSES.contains(name)
                 && *name != FLATTENED_COLUMN
                 && *name != DWELL_COLUMN
+                && !is_feed_group_column(name)
                 && !matches!(
                     *name,
                     "T" | "M"
@@ -1046,6 +1076,15 @@ fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
         .collect();
     extra.sort_unstable();
     ordered.extend(extra);
+    // The feed group and its reference radii qualify the axis columns.
+    push_if_present(intern_column(FGROUP_COLUMN), &mut ordered);
+    let mut radii: Vec<&'static str> = present
+        .iter()
+        .copied()
+        .filter(|name| name.starts_with(FGREF_PREFIX))
+        .collect();
+    radii.sort_unstable();
+    ordered.extend(radii);
     // Block addresses (spline PW/SD/PL) come after the axes.
     for &name in BLOCK_ADDRESSES {
         push_if_present(name, &mut ordered);
@@ -1245,7 +1284,7 @@ impl ColumnBuilder {
             ColumnBuilder::Int(vec![None; height])
         } else if name == "M" {
             ColumnBuilder::StrList(vec![None; height])
-        } else if MODAL_G_GROUPS.contains(&name) || NON_MODAL_G_GROUPS.contains(&name) {
+        } else if is_dict_column(name) {
             ColumnBuilder::Dict(DictColumn {
                 values: Vec::new(),
                 codes: vec![DictColumn::NULL; height],
