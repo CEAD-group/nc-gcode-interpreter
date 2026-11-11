@@ -2,7 +2,7 @@ import pathlib
 
 import polars as pl
 import pytest
-from nc_gcode_interpreter import dataframe_to_nc, nc_to_dataframe
+from nc_gcode_interpreter import G_GROUP_DTYPES, dataframe_to_nc, nc_to_dataframe
 from polars.testing import assert_frame_equal
 
 
@@ -44,7 +44,7 @@ def test_mpf_file_to_csv(mpf_file, initial_state):
         extra_axes=["ELX"],
         axis_index_map = {"E": 4},
     )
-    df_expected = pl.read_csv(mpf_file.with_suffix(".csv"))
+    df_expected = pl.read_csv(mpf_file.with_suffix(".csv"), schema_overrides=G_GROUP_DTYPES)
 
     # Drop the "M" column if it exists because the m column is parsed to a list of strings, while the csv file has a single string per row
     if "M" in df_expected.columns:
@@ -55,7 +55,7 @@ def test_mpf_file_to_csv(mpf_file, initial_state):
         df_expected.drop_in_place("M")
         df.drop_in_place("M")
 
-    assert_frame_equal(df_expected, df, atol=1e-3)
+    assert_frame_equal(df_expected, df, abs_tol=1e-3)
 
 
 def test_mpf_file_roundtrip(mpf_file, tmp_path, initial_state):
@@ -69,4 +69,4 @@ def test_mpf_file_roundtrip(mpf_file, tmp_path, initial_state):
 
     df, _state = nc_to_dataframe(tmp_file.read_text(), axis_index_map=axis_index_map)
 
-    assert_frame_equal(df_expected, df, atol=1e-3)
+    assert_frame_equal(df_expected, df, abs_tol=1e-3)

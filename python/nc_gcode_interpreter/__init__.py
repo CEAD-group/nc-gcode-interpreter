@@ -20,6 +20,7 @@ class TextFileLike(Protocol):
 
 
 __all__ = [
+    "G_GROUP_DTYPES",
     "NcError",
     "dataframe_to_nc",
     "nc_to_batches",
@@ -158,7 +159,7 @@ def nc_to_dataframe(
     )
     # pl.DataFrame wraps each Arrow record batch via __arrow_c_array__ (polars
     # >= 1.3), no pyarrow needed. Exhaust the iterator before reading .state.
-    frames: list[pl.DataFrame] = [pl.DataFrame(batch) for batch in it]
+    frames: list[pl.DataFrame] = [_batch_frame(batch) for batch in it]
     state = it.state
     if not frames:
         # A program with no output rows (e.g. only variable assignments) yields
@@ -234,6 +235,30 @@ class GGroups:
         return cls._g_groups_by_short_name[name]["effectiveness"] == "modal"
 
 
+#: The dtype of every G-group column: a ``pl.Enum`` of the group's commands in
+#: manual order, so frames from any batch or run share one schema. Use it to
+#: build matching schemas or empty frames.
+G_GROUP_DTYPES: dict[str, pl.Enum] = {
+    group["short_name"]: pl.Enum([entry["id"] for entry in group["entries"]])
+    for group in GGroups.g_groups
+}
+
+
+def _batch_frame(batch: Any) -> pl.DataFrame:
+    """Wrap one Arrow batch from Rust, with every G-group column as its Enum.
+
+    Rust tags the G-group dictionaries so polars >= 1.20 imports them as Enum
+    directly; older polars reads a Categorical, cast here.
+    """
+    frame = pl.DataFrame(batch)
+    casts = [
+        pl.col(name).cast(G_GROUP_DTYPES[name])
+        for name, dtype in frame.schema.items()
+        if name in G_GROUP_DTYPES and dtype != G_GROUP_DTYPES[name]
+    ]
+    return frame.with_columns(casts) if casts else frame
+
+
 def sanitize_dataframe(
     df: pl.DataFrame, disable_forward_fill: bool = False
 ) -> pl.DataFrame:
@@ -286,7 +311,9 @@ def sanitize_dataframe(
     casts = []
     if "N" in df.columns:
         casts.append(pl.col("N").cast(pl.Int64))
-    casts += [pl.col(c).cast(pl.String) for c in df.columns if c in string_columns]
+    casts += [
+        pl.col(c).cast(G_GROUP_DTYPES.get(c, pl.String)) for c in df.columns if c in string_columns
+    ]
     casts += [pl.col(c).cast(pl.Float64) for c in value_columns]
     if "M" in df.columns:
         casts.append(pl.col("M").cast(pl.List(pl.String)))
@@ -478,17 +505,6 @@ def nc_to_rows(
     )
 
 
-_G_GROUP_ENUMS: dict[str, pl.Enum] = {}
-
-
-def _g_group_enum(name: str) -> pl.Enum:
-    """The Enum dtype of one G-group column: its commands in manual order."""
-    if name not in _G_GROUP_ENUMS:
-        group = next(g for g in GGroups.g_groups if g["short_name"] == name)
-        _G_GROUP_ENUMS[name] = pl.Enum([entry["id"] for entry in group["entries"]])
-    return _G_GROUP_ENUMS[name]
-
-
 class _BatchIterator:
     """Iterator of polars DataFrames returned by :func:`nc_to_batches`.
 
@@ -510,13 +526,7 @@ class _BatchIterator:
         return self
 
     def __next__(self) -> pl.DataFrame:
-        frame = pl.DataFrame(next(self._inner))
-        # Experiment: NC_GGROUP_ARROW=enum casts G-group columns to a fixed-vocabulary Enum.
-        if os.environ.get("NC_GGROUP_ARROW") == "enum":
-            frame = frame.cast(
-                {name: _g_group_enum(name) for name in frame.columns if GGroups.is_g_group(name)}
-            )
-        return frame
+        return _batch_frame(next(self._inner))
 
     @property
     def state(self) -> dict | None:
