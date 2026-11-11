@@ -157,6 +157,12 @@ fn read_definition_file(text: &str, state: &mut State) -> Result<bool, ParsingEr
     Ok(transformation_off)
 }
 
+/// M0 (program stop) or M1 (optional stop).
+fn is_program_stop(code: &str) -> bool {
+    let digits = code.trim()[1..].trim_start_matches('=').trim();
+    matches!(digits.parse::<u32>(), Ok(0 | 1))
+}
+
 fn not_allowed(line_no: usize, line: &str, found: &str) -> ParsingError {
     ParsingError::with_context(
         line_no,
@@ -226,6 +232,8 @@ fn classify_definition_line(
                     .ok_or_else(|| not_allowed(line_no, line, text))?;
                 match inner.as_rule() {
                     Rule::m_command if crate::interpret_rules::is_end_of_program_m_code(inner.as_str()) => end = true,
+                    // A program stop means nothing while values are loaded.
+                    Rule::m_command if is_program_stop(inner.as_str()) => {}
                     Rule::assignment | Rule::assignment_multi => {
                         let name =
                             check_assignment_target(&inner, state).map_err(|_| not_allowed(line_no, line, text))?;
@@ -952,7 +960,13 @@ mod tests {
         let (table, end) = run("G0 X1", inputs).unwrap();
         assert_eq!(texts(&table, "transformation"), vec![Some("TRAORI".into())]);
         assert_eq!(end.transformation.as_deref(), Some("TRAORI"));
-        for bad in ["TRAFOOF R1=1\n", "TRAORI\n", "TRAFOOF M30\n"] {
+        let stops = "DEF REAL FIRST\nFIRST = 1\nM0\nN10 M1 ; optional stop\nFIRST = 2\nM17\n";
+        let (table, _) = run("X=FIRST", definitions(&[stops])).unwrap();
+        assert_eq!(floats(&table, "X"), vec![Some(2.0)]);
+        let error = run("X1", definitions(&["DEF REAL FIRST\nRESTORE_INIT\nM17\n"])).unwrap_err();
+        assert_eq!(error.location().unwrap().line, 2);
+        assert!(error.to_string().contains("'RESTORE_INIT' is not allowed"), "{error}");
+        for bad in ["TRAFOOF R1=1\n", "TRAORI\n", "TRAFOOF M30\n", "M3\n"] {
             let error = run("X1", definitions(&[bad])).unwrap_err();
             assert_eq!(error.definition_index(), Some(0), "{bad}: {error}");
         }

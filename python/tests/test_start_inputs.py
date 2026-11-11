@@ -269,3 +269,15 @@ def test_trafoof_must_stand_alone_and_other_transformations_are_errors(line):
     with pytest.raises(NcError) as info:
         nc_to_dataframe("X1", definitions=[f"{line}\n"])
     assert info.value.definition_file == 0
+
+
+def test_program_stops_in_a_definition_file_are_ignored():
+    restore = "DEF REAL FIRST\nFIRST = 1\nM0\nN10 M1\nFIRST = 2\nM17\n"
+    df, _ = nc_to_dataframe("X = FIRST", definitions=[restore])
+    assert df["X"].to_list() == [2.0]
+
+
+def test_a_subprogram_call_in_a_definition_file_is_an_error_naming_it():
+    with pytest.raises(NcError, match="'RESTORE_INIT' is not allowed") as info:
+        nc_to_dataframe("X1", definitions=["DEF REAL FIRST\nRESTORE_INIT\nM17\n"])
+    assert (info.value.definition_file, info.value.line) == (0, 2)

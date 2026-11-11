@@ -112,7 +112,8 @@ released to PyPI.
     on a block of its own sets the start transformation to off, in the first
     row and the returned state, unless `start["transformation"]` gives
     another, so a restore program (CHANDATA(1), TRAFOOF, SET array
-    assignments, M30) reads unchanged. Assigning
+    assignments, M30) reads unchanged. The program stops M0 and M1 are
+    ignored. A subprogram call stays an error naming the call. Assigning
     to a name the files have not declared is an error, unless it is an R
     parameter or `allow_undefined_variables` is set. Motion, G codes or
     anything else is an error naming the file (`NcError.definition_file`,
