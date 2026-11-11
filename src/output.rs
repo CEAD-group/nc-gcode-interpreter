@@ -789,6 +789,42 @@ impl DictColumn {
     }
 }
 
+/// A G-group column as per-row indices into `categories` (its commands in
+/// manual order), `None` for a null cell. A value outside `categories` is an
+/// error naming the group and the value, never a null.
+#[allow(dead_code)] // used by the python-feature bindings, not the bin
+pub fn g_group_codes(name: &str, categories: &[&str], column: &Column) -> Result<Vec<Option<u8>>, String> {
+    let position = |value: &str| -> Result<u8, String> {
+        categories
+            .iter()
+            .position(|c| *c == value)
+            .and_then(|i| u8::try_from(i).ok())
+            .ok_or_else(|| {
+                format!(
+                    "G-group column '{}' got '{}', which is not one of its commands",
+                    name, value
+                )
+            })
+    };
+    match column {
+        Column::Dict(column) => {
+            // Map each distinct value once, then translate the per-row codes.
+            let remap: Vec<u8> = column.values.iter().map(|v| position(v)).collect::<Result<_, _>>()?;
+            Ok(column
+                .codes
+                .iter()
+                .map(|&code| remap.get(code as usize).copied())
+                .collect())
+        }
+        Column::Str(values) => values.iter().map(|v| v.as_deref().map(position).transpose()).collect(),
+        other => Err(format!(
+            "G-group column '{}' has dtype {}, expected str",
+            name,
+            other.dtype_name()
+        )),
+    }
+}
+
 impl Column {
     pub fn len(&self) -> usize {
         match self {
@@ -1409,6 +1445,29 @@ pub fn write_csv<W: std::io::Write>(table: &Table, writer: W) -> Result<(), std:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-group cells map to their manual-order index; a value outside the group is an error, never a null.
+    #[test]
+    fn g_group_codes_index_the_manual_order() {
+        let categories = crate::modal_groups::g_group_values("gg01_motion").unwrap();
+        let mut column = DictColumn::default();
+        let g1 = column.code_for("G1");
+        let g0 = column.code_for("G0");
+        column.codes = vec![g1, DictColumn::NULL, g0, g1];
+        let codes = g_group_codes("gg01_motion", categories, &Column::Dict(column)).unwrap();
+        assert_eq!(codes, vec![Some(1), None, Some(0), Some(1)]);
+
+        let strings = Column::Str(vec![Some("G2".to_string()), None]);
+        assert_eq!(
+            g_group_codes("gg01_motion", categories, &strings).unwrap(),
+            vec![Some(2), None]
+        );
+
+        let mut bad = DictColumn::default();
+        bad.codes = vec![bad.code_for("G17")];
+        let err = g_group_codes("gg01_motion", categories, &Column::Dict(bad)).unwrap_err();
+        assert!(err.contains("gg01_motion") && err.contains("'G17'"), "{err}");
+    }
 
     /// Moving cell values out of recycled rows builds the same batches as
     /// cloning them, forward-fill carry included.

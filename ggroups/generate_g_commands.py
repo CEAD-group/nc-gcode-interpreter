@@ -38,6 +38,19 @@ lines += [
     "    })",
     "}",
     "",
+    "/// The commands of a G-group column in manual order: the categories of",
+    "/// its Enum dtype. `None` when `group` is not a G-group column.",
+    "pub fn g_group_values(group: &str) -> Option<&'static [&'static str]> {",
+    "    Some(match group {",
+]
+for group in g_groups:
+    ids = ", ".join(f'"{e["id"].upper()}"' for e in group["entries"])
+    lines.append(f'        "{group["short_name"]}" => &[{ids}],')
+lines += [
+    "        _ => return None,",
+    "    })",
+    "}",
+    "",
     f"pub const MODAL_G_GROUPS: [&str; {len(modal)}] = [",
     *(f'    "{g}",' for g in modal),
     "];",

@@ -98,6 +98,35 @@ released to PyPI.
 
 ### Changed
 
+- **Breaking:** every G-group column (`gg01_motion`, `gg02_wait`, ...) in the
+  output of `nc_to_batches`, `nc_to_dataframe` and `sanitize_dataframe` is
+  now a `pl.Enum` instead of `String`. Its categories are that group's
+  commands in manual order, the same in every batch and every run, so batches
+  and runs concatenate without a cast and a value outside the group cannot
+  occur. Rust hands the codes over as an Arrow dictionary that polars imports
+  as `Enum` directly, with no cast. The new `G_GROUP_DTYPES` maps each G-group column name to its
+  `pl.Enum`, for matching schemas and empty frames. `T`, `comment`,
+  `non_returning_function_call` and other free-text columns stay `String`,
+  and `nc_to_rows` still yields `str`. On a 1M-row program the G-group cells
+  take 1 byte each instead of a 16-byte string view, and filtering or
+  grouping on them is about 1.4 to 2 times faster, at unchanged
+  interpretation time. Consequences
+  for code that reads these columns:
+  - `.str` methods raise `InvalidOperationError`, and joining against a
+    `String` column raises `SchemaError`.
+  - `fill_null("")` silently leaves the nulls in place, because `""` is not a
+    category.
+  - `is_in` with a value outside the group raises; `==` with such a literal
+    returns no matches.
+  - Sorting follows manual order (`G0`, `G1`, `G2`, ...), not alphabetical
+    order.
+  - A strict `pl.concat` with frames from an older version, or
+    `assert_frame_equal` against `String` frames, fails on the dtype.
+  - Migration: `df.with_columns(pl.col(c).cast(pl.String) for c in
+    G_GROUP_DTYPES if c in df.columns)` restores the old dtype.
+
+- **Breaking:** the minimum polars version is now 1.32 (was 1.9). The Enum
+  handoff relies on the Arrow field metadata polars reads from 1.32 on.
 - A program that calls `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`, `TRACON` or
   `TRAFOOF` gets the new `transformation` column, also when it uses none of
   the new arguments.

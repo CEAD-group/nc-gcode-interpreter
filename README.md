@@ -114,7 +114,7 @@ shape: (14, 7)
 ┌───────┬───────┬──────┬────────┬───────────┬─────────────┬─────────────────────────────────┐
 │ X     ┆ Y     ┆ Z    ┆ F      ┆ M         ┆ gg01_motion ┆ comment                         │
 │ ---   ┆ ---   ┆ ---  ┆ ---    ┆ ---       ┆ ---         ┆ ---                             │
-│ f64   ┆ f64   ┆ f64  ┆ f64    ┆ list[str] ┆ str         ┆ str                             │
+│ f64   ┆ f64   ┆ f64  ┆ f64    ┆ list[str] ┆ enum        ┆ str                             │
 ╞═══════╪═══════╪══════╪════════╪═══════════╪═════════════╪═════════════════════════════════╡
 │ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ null        ┆ ;size of the square             │
 │ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ null        ┆ ;size of the square             │
@@ -131,6 +131,17 @@ shape: (14, 7)
 ```
 
 The Python bindings also return the state of the program after execution, which can be used for inspection.
+
+#### Column dtypes
+
+Axis and other value columns are `Float64`, `N` is `Int64` and `M` is `List(String)`. Each G-group column (`gg01_motion`, `gg06_plane_select`, ...) is a `pl.Enum` whose categories are that group's commands in manual order; `G_GROUP_DTYPES` maps every G-group column name to its dtype, for building matching schemas or empty frames. Every batch and every run has the same Enum per column, so frames concatenate without a cast. The Python package requires polars 1.32 or newer. `T`, `comment`, `non_returning_function_call` and other free-text columns stay `String`. `nc_to_rows` yields plain `str` values.
+
+Things that differ from a `String` column:
+
+- `pl.col("gg01_motion") == "G1"` and `is_in(["G0", "G1"])` work; `is_in` with a value outside the group raises.
+- `.str` methods and joins against a `String` column raise; cast first with `.cast(pl.String)`.
+- `fill_null("")` leaves the nulls in place, because `""` is not a category. Cast to `String` first.
+- Sorting follows manual order (`G0`, `G1`, `G2`, ...), not alphabetical order.
 
 #### Streaming
 
