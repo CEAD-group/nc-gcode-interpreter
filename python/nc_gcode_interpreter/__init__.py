@@ -147,7 +147,8 @@ def nc_to_dataframe(
         and REDEF statements, assignments to variables and comments are allowed;
         the ``%_N_..._DEF`` header and ``$PATH=`` line are skipped, and M17, M30
         or M2 ends the file. ``CHANDATA(1)`` is ignored; another channel is an
-        error. Assigning to a name no definition declared is an error unless it
+        error. ``TRAFOOF`` sets the start transformation to off, unless
+        ``start`` gives one. Assigning to a name no definition declared is an error unless it
         is an R parameter or ``allow_undefined_variables`` is set. Anything
         else raises an ``NcError`` whose
         ``definition_file`` attribute is the index of the file in this list and

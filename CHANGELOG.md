@@ -108,7 +108,11 @@ released to PyPI.
     variables and comments; the `%_N_..._DEF` header and `$PATH=` line are
     skipped. M17, M30 or M2 ends that file and reading goes on with the next,
     so several files no longer need their end codes stripped. `CHANDATA(1)`
-    is accepted and ignored; another channel number is an error. Assigning
+    is accepted and ignored; another channel number is an error. `TRAFOOF`
+    on a block of its own sets the start transformation to off, in the first
+    row and the returned state, unless `start["transformation"]` gives
+    another, so a restore program (CHANDATA(1), TRAFOOF, SET array
+    assignments, M30) reads unchanged. Assigning
     to a name the files have not declared is an error, unless it is an R
     parameter or `allow_undefined_variables` is set. Motion, G codes or
     anything else is an error naming the file (`NcError.definition_file`,

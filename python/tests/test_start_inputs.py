@@ -243,3 +243,29 @@ def test_invalid_feed_group_is_an_error(start):
     with pytest.raises(NcError) as info:
         nc_to_dataframe("G0 X1", start=start)
     assert info.value.kind == "invalid_input"
+
+
+RESTORE = (
+    "; restore program\nCHANDATA(1)\nTRAFOOF\nDEF NCK REAL POINTS[2,3]\n"
+    "POINTS[0,0] = SET(1, 2, 3)\nPOINTS[1,0] = SET(4, 5, 6)\nM30\n"
+)
+
+
+def test_a_restore_program_reads_as_a_definition_file():
+    df, state = nc_to_dataframe("G0 X=POINTS[1,2]", definitions=[RESTORE])
+    assert df["X"].to_list() == [6.0]
+    assert df["transformation"].to_list() == ["TRAFOOF"]
+    assert state["transformation"] == "TRAFOOF"
+
+
+def test_start_transformation_overrides_trafoof_from_definitions():
+    df, state = nc_to_dataframe("G0 X1", definitions=[RESTORE], start={"transformation": "TRAORI"})
+    assert df["transformation"].to_list() == ["TRAORI"]
+    assert state["transformation"] == "TRAORI"
+
+
+@pytest.mark.parametrize("line", ["TRAFOOF R1=1", "TRAORI", "TRAFOOF M30"])
+def test_trafoof_must_stand_alone_and_other_transformations_are_errors(line):
+    with pytest.raises(NcError) as info:
+        nc_to_dataframe("X1", definitions=[f"{line}\n"])
+    assert info.value.definition_file == 0

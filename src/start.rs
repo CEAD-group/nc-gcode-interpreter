@@ -74,11 +74,13 @@ impl StartInputs {
     /// Apply the inputs to `state`, returning the cells that seed the first
     /// output row (the start state's modal G groups and F).
     pub(crate) fn apply(&self, state: &mut State) -> Result<Seed, ParsingError> {
+        let mut transformation_off = false;
         for (index, text) in self.definitions.iter().enumerate() {
-            read_definition_file(text, state).map_err(|error| ParsingError::InDefinitionFile {
-                index,
-                error: Box::new(error),
-            })?;
+            transformation_off |=
+                read_definition_file(text, state).map_err(|error| ParsingError::InDefinitionFile {
+                    index,
+                    error: Box::new(error),
+                })?;
         }
         let snapshot_names: HashSet<String> = self
             .start
@@ -100,10 +102,17 @@ impl StartInputs {
             }
             set_variable(state, &key, value, false).map_err(|message| invalid(&field, &message))?;
         }
-        match &self.start {
-            Some(start) => apply_start(start, state),
-            None => Ok(Vec::new()),
+        let mut seed = match &self.start {
+            Some(start) => apply_start(start, state)?,
+            None => Vec::new(),
+        };
+        // TRAFOOF in a definition file sets the start transformation; a later
+        // start['transformation'] wins (definitions, variables, start).
+        let column = crate::output::intern_column(crate::output::TRANSFORMATION_COLUMN);
+        if transformation_off && !seed.iter().any(|(key, _)| *key == column) {
+            seed.push((column, Value::Str("TRAFOOF".to_string())));
         }
+        Ok(seed)
     }
 }
 
@@ -122,11 +131,15 @@ enum DefinitionLine {
     Skip,
     /// M17, M30 or M2: the end of the file.
     End,
+    /// TRAFOOF: the start transformation is off.
+    TransformationOff,
 }
 
 /// Read one definition file into `state`. Only the lines before the end code
-/// are interpreted; line numbers in errors are those of the file.
-fn read_definition_file(text: &str, state: &mut State) -> Result<(), ParsingError> {
+/// are interpreted; line numbers in errors are those of the file. Returns
+/// whether the file switches the transformation off (TRAFOOF).
+fn read_definition_file(text: &str, state: &mut State) -> Result<bool, ParsingError> {
+    let mut transformation_off = false;
     let mut kept = String::with_capacity(text.len());
     let mut declared = HashSet::new();
     for (index, raw) in text.split('\n').enumerate() {
@@ -134,12 +147,14 @@ fn read_definition_file(text: &str, state: &mut State) -> Result<(), ParsingErro
         match classify_definition_line(line, index + 1, state, &mut declared)? {
             DefinitionLine::Keep => kept.push_str(line),
             DefinitionLine::Skip => {}
+            DefinitionLine::TransformationOff => transformation_off = true,
             DefinitionLine::End => break,
         }
         kept.push('\n');
     }
     let mut discard = OutputRows::collect();
-    crate::interpreter::interpret_source(kept.into(), state, &mut discard)
+    crate::interpreter::interpret_source(kept.into(), state, &mut discard)?;
+    Ok(transformation_off)
 }
 
 fn not_allowed(line_no: usize, line: &str, found: &str) -> ParsingError {
@@ -149,7 +164,7 @@ fn not_allowed(line_no: usize, line: &str, found: &str) -> ParsingError {
         "definition file",
         &format!(
             "a definition file may contain only DEF and REDEF statements, assignments to variables, \
-             comments and an end code (M17, M30, M2); '{}' is not allowed here",
+             comments, CHANDATA(1), TRAFOOF and an end code (M17, M30, M2); '{}' is not allowed here",
             found.trim()
         ),
     )
@@ -190,6 +205,7 @@ fn classify_definition_line(
     let mut end = false;
     let mut content = false;
     let mut channel_select = false;
+    let mut transformation_off = false;
     for pair in block.into_inner() {
         match pair.as_rule() {
             Rule::block_number | Rule::comment => {}
@@ -228,6 +244,11 @@ fn classify_definition_line(
                     }
                     Rule::non_returning_function_call => {
                         let call: String = text.split_whitespace().collect::<String>().to_uppercase();
+                        // Restore programs switch the transformation off before their values.
+                        if call == "TRAFOOF" || call == "TRAFOOF()" {
+                            transformation_off = true;
+                            continue;
+                        }
                         let Some(channel) = call.strip_prefix("CHANDATA(").and_then(|rest| rest.strip_suffix(')'))
                         else {
                             return Err(not_allowed(line_no, line, text));
@@ -250,6 +271,17 @@ fn classify_definition_line(
             }
             _ => return Err(not_allowed(line_no, line, pair.as_str())),
         }
+    }
+    if transformation_off {
+        if end || content || channel_select {
+            return Err(ParsingError::with_context(
+                line_no,
+                line,
+                "definition file",
+                "TRAFOOF must stand in a block of its own",
+            ));
+        }
+        return Ok(DefinitionLine::TransformationOff);
     }
     if channel_select {
         if end || content {
@@ -902,6 +934,28 @@ mod tests {
             ..StartState::default()
         };
         assert_eq!(run("X1", start(bad)).unwrap_err().kind(), "invalid_input");
+    }
+
+    #[test]
+    fn trafoof_in_a_definition_file_sets_the_start_transformation() {
+        let restore = "; restore program\nCHANDATA(1)\nTRAFOOF\nDEF NCK REAL POINTS[2,3]\n\
+                       POINTS[0,0] = SET(1, 2, 3)\nPOINTS[1,0] = SET(4, 5, 6)\nM30\n";
+        let (table, end) = run("G0 X=POINTS[1,2]", definitions(&[restore])).unwrap();
+        assert_eq!(floats(&table, "X"), vec![Some(6.0)]);
+        assert_eq!(texts(&table, "transformation"), vec![Some("TRAFOOF".into())]);
+        assert_eq!(end.transformation.as_deref(), Some("TRAFOOF"));
+        let mut inputs = definitions(&[restore]);
+        inputs.start = Some(StartState {
+            transformation: Some("TRAORI".into()),
+            ..StartState::default()
+        });
+        let (table, end) = run("G0 X1", inputs).unwrap();
+        assert_eq!(texts(&table, "transformation"), vec![Some("TRAORI".into())]);
+        assert_eq!(end.transformation.as_deref(), Some("TRAORI"));
+        for bad in ["TRAFOOF R1=1\n", "TRAORI\n", "TRAFOOF M30\n"] {
+            let error = run("X1", definitions(&[bad])).unwrap_err();
+            assert_eq!(error.definition_index(), Some(0), "{bad}: {error}");
+        }
     }
 
     #[test]
