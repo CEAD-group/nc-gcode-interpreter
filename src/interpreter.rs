@@ -924,6 +924,100 @@ mod tests {
         table.columns.iter().map(|(n, _)| n.as_str()).collect()
     }
 
+    fn strs(table: &Table, name: &str) -> Vec<Option<String>> {
+        match &table.columns.iter().find(|(n, _)| n == name).expect("column present").1 {
+            Column::Str(v) => v.clone(),
+            Column::Dict(v) => v.iter().map(|cell| cell.map(str::to_string)).collect(),
+            other => panic!("column {name} is not a str column: {other:?}"),
+        }
+    }
+
+    /// FGROUP is modal feed-group state, not a subprogram call (#107).
+    #[test]
+    fn fgroup_is_modal_state() {
+        let table = interpret("G1 X0 Y0 F1000\nFGROUP(RA1,ra2, RA3)\nG1 X10\nFGROUP()\nX20\n");
+        assert!(!column_names(&table).contains(&"non_returning_function_call"));
+        let some = |v: &str| Some(v.to_string());
+        assert_eq!(
+            strs(&table, "FGROUP"),
+            &[None, some("RA1,RA2,RA3"), some("RA1,RA2,RA3"), some(""), some("")]
+        );
+        assert!(matches!(
+            table.columns.iter().find(|(n, _)| n == "FGROUP").unwrap().1,
+            Column::Dict(_)
+        ));
+    }
+
+    /// FGROUP takes channel axis names only.
+    #[test]
+    fn fgroup_rejects_unknown_axis() {
+        let err = nc_to_table("FGROUP(X,Q7)\n", None, None, None, 10000, false, None, false, None)
+            .expect_err("Q7 is not an axis");
+        assert!(
+            matches!(err, ParsingError::UnexpectedAxis { ref axis, .. } if axis == "Q7"),
+            "{err:?}"
+        );
+    }
+
+    /// FGREF[<axis>] is accepted by axis name without an axis_index_map and
+    /// forward-filled per axis; it never becomes a variable (#107).
+    #[test]
+    fn fgref_is_modal_per_axis() {
+        let (table, state) = nc_to_table(
+            "G1 X0 F100\nFGREF[RA1]=300\nX1\nfgref[a]=360/(2*3.5)\nFGREF[RA1]=R1+10\nX2\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            None,
+            true,
+            None,
+        )
+        .expect("program should interpret");
+        assert_eq!(
+            floats(&table, "FGREF[RA1]"),
+            &[None, Some(300.0), Some(300.0), Some(300.0), Some(10.0), Some(10.0)]
+        );
+        let a = floats(&table, "FGREF[A]");
+        assert_eq!(a[..3], [None, None, None]);
+        assert_eq!(a[3], Some(360.0 / 7.0));
+        assert!(!state.symbol_table.keys().any(|k| k.starts_with("FGREF")));
+        let names = column_names(&table);
+        let fgref_at = names.iter().position(|n| *n == "FGREF[A]").unwrap();
+        assert_eq!(names[fgref_at + 1], "FGREF[RA1]");
+    }
+
+    /// An axis_index_map entry no longer turns FGREF into an indexed variable.
+    #[test]
+    fn fgref_ignores_axis_index_map() {
+        let map = HashMap::from([("RA1".to_string(), 1)]);
+        let (table, state) = nc_to_table(
+            "FGREF[RA1]=300\nX1\n",
+            None,
+            None,
+            None,
+            10000,
+            false,
+            Some(map),
+            false,
+            None,
+        )
+        .expect("program should interpret");
+        assert_eq!(floats(&table, "FGREF[RA1]"), &[Some(300.0), Some(300.0)]);
+        assert!(!state.symbol_table.contains_key("FGREF[1]"));
+    }
+
+    #[test]
+    fn fgref_rejects_unknown_axis() {
+        let err = nc_to_table("FGREF[Q7]=1\n", None, None, None, 10000, false, None, false, None)
+            .expect_err("Q7 is not an axis");
+        assert!(
+            matches!(err, ParsingError::UnexpectedAxis { ref axis, .. } if axis == "Q7"),
+            "{err:?}"
+        );
+    }
+
     /// $AA_IW[<axis>] / $AA_IM[<axis>] read the interpreted actual position
     /// (work / machine coordinates): the real-world layer loop
     /// `REPEAT ... UNTIL $AA_IW[Z] > H` must terminate instead of reading an

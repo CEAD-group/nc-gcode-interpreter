@@ -82,6 +82,20 @@ released to PyPI.
   (`PCALL/_N_WKS_DIR/_N_X_WPD/NAME`) is not interpreted and gives a
   warning; the call goes to `NAME`. Before, `PCALL` was dropped silently.
 
+- `FGROUP(<axes>)` and `FGREF[<axis>]=<radius>` are modal state (manual
+  3.7.1). A forward-filled, dictionary-encoded `FGROUP` column holds the axes
+  the path feed refers to, comma-separated as programmed; `FGROUP()` writes
+  `""` for the machine-data default, which the interpreter does not know.
+  Each programmed axis gets a forward-filled `FGREF[<axis>]` float column;
+  null means the control default. Both columns appear only when the program
+  uses them, after the axis columns. Before, `FGROUP` was stored as a
+  subprogram call in `non_returning_function_call` and `FGREF[<axis>]` needed
+  an `axis_index_map` entry and became the variable `FGREF[<index>]`; it now
+  resolves by axis name and is no longer a variable. An argument that is not
+  a configured channel axis (including N, F, S, D and T) is an
+  `unexpected_axis` error. Reading `FGREF[<axis>]` is an
+  `unsupported_statement` error, and so is a user array named `FGREF` (#107).
+
 ### Changed
 
 - **Breaking:** `initial_state` is removed from `nc_to_dataframe`,
@@ -108,17 +122,19 @@ released to PyPI.
     `NAME=VALUE` lines with `variables={"NAME": value}`; strings now work.
   - `start`: the machine state at program start, in the shape of the
     returned state dict (`axes`, `translation`, `rotation`, `symbol_table`,
-    `string_table`, plus the new `g_groups`, `feed`, `tool` and
-    `transformation`), so a returned state can be passed back. Modal G groups
+    `string_table`, plus the new `g_groups`, `feed`, `tool`,
+    `transformation`, `fgroup` and `fgref`), so a returned state can be
+    passed back. `fgroup` is the FGROUP column value and `fgref` maps a
+    channel axis to its FGREF reference radius. Modal G groups
     are checked against the G group table, and they, `feed`, `tool` (the `T`
-    column) and `transformation` fill the first output row, so those columns
+    column), `transformation`, `fgroup` and `fgref` fill the first output row, so those columns
     no longer start as null. Axis positions and the frame only seed the internal state.
     A name in both `variables` and `start` is an error. Migration: replace
     axis words and frame instructions in `initial_state` with
     `start={"axes": {...}, "translation": {...}}`, and modal G codes and F
     with `start={"g_groups": {...}, "feed": ...}`.
   The returned state gains `g_groups` (modal G group column to code, as of
-  the last row), `feed`, `tool` and `transformation`. The CLIs take `--definitions FILE` (repeatable),
+  the last row), `feed`, `tool`, `transformation`, `fgroup` and `fgref`. The CLIs take `--definitions FILE` (repeatable),
   `--variables FILE.json` and `--start FILE.json`. The Rust functions take
   `Option<&start::StartInputs>` where they took `Option<&str>`.
 
@@ -133,12 +149,45 @@ released to PyPI.
   require F in every block, so that is not checked. The control's default
   feed SD42110 `$SC_DEFAULT_FEED` (0 unless set) is evaluated at program
   start: pass it as `start["feed"]`. The check is off when F is not a
-  configured axis. Tree walker, VM and line fast path raise the same error.
+  configured axis. FGROUP only selects the axes F refers to, so a block
+  moving only synchronized or rotary axes needs F the same way, and FGROUP
+  and FGREF neither move nor delete F. Tree walker, VM and line fast path
+  raise the same error.
   Migration: program F before the first path motion or pass
   `start={"feed": ...}`. The examples `simple`, `trans_ic`, `r_param`,
   `axis_index_assignment`, `multiple_m_codes` and `function_calls` gained
   `F1000` on their first path motion, and their expected CSVs gained the
   `F` column (no other column changed).
+
+- **Breaking:** every G-group column (`gg01_motion`, `gg02_wait`, ...) in the
+  output of `nc_to_batches`, `nc_to_dataframe` and `sanitize_dataframe` is
+  now a `pl.Enum` instead of `String`. Its categories are that group's
+  commands in manual order, the same in every batch and every run, so batches
+  and runs concatenate without a cast and a value outside the group cannot
+  occur. Rust hands the codes over as an Arrow dictionary that polars imports
+  as `Enum` directly, with no cast. The new `G_GROUP_DTYPES` maps each G-group column name to its
+  `pl.Enum`, for matching schemas and empty frames. `T`, `comment`,
+  `non_returning_function_call` and other free-text columns stay `String`,
+  and `nc_to_rows` still yields `str`. On a 1M-row program the G-group cells
+  take 1 byte each instead of a 16-byte string view, and filtering or
+  grouping on them is about 1.4 to 2 times faster, at unchanged
+  interpretation time. Consequences
+  for code that reads these columns:
+  - `.str` methods raise `InvalidOperationError`, and joining against a
+    `String` column raises `SchemaError`.
+  - `fill_null("")` silently leaves the nulls in place, because `""` is not a
+    category.
+  - `is_in` with a value outside the group raises; `==` with such a literal
+    returns no matches.
+  - Sorting follows manual order (`G0`, `G1`, `G2`, ...), not alphabetical
+    order.
+  - A strict `pl.concat` with frames from an older version, or
+    `assert_frame_equal` against `String` frames, fails on the dtype.
+  - Migration: `df.with_columns(pl.col(c).cast(pl.String) for c in
+    G_GROUP_DTYPES if c in df.columns)` restores the old dtype.
+
+- **Breaking:** the minimum polars version is now 1.32 (was 1.9). The Enum
+  handoff relies on the Arrow field metadata polars reads from 1.32 on.
 
 - A program that calls `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`, `TRACON` or
   `TRAFOOF` gets the new `transformation` column, also when it uses none of

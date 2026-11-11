@@ -20,6 +20,7 @@ The **NC-GCode-Interpreter** offers a streamlined and efficient solution for int
 - **Array Operations**: Manages arrays and allows operations on them.
 - **Incremental Changes**: Facilitates incremental changes in axes positions like `X=IC(2)`.
 - **Spline Programming**: `ASPLINE`, `BSPLINE` and `CSPLINE` blocks with their start/end conditions (`BAUTO`/`BNAT`/`BTAN`, `EAUTO`/`ENAT`/`ETAN`) and the spline block addresses `PW` (point weight), `SD` (spline degree) and `PL` (parameter interval length). Block addresses appear as output columns; unlike axes they receive no `TRANS` offset and are not forward-filled, since e.g. a point weight only applies to the point it is programmed with.
+- **Feed group**: `FGROUP(<axes>)` and `FGREF[<axis>]=<radius>` are modal state, not calls or variables. The `FGROUP` column holds the axes the path feed `F` refers to, comma-separated as programmed (`"RA1,RA2,RA3"`); `FGROUP()` gives `""`, the machine-data default, as does a null before the first `FGROUP`. Each `FGREF[<axis>]` column holds the reference radius of that axis; null means the control default (360 mm / 2π for a rotary axis). Both are forward-filled, appear only when the program uses them, and need no `axis_index_map` entry. The interpreter computes no timing from them.
 
 ### Additional Functionality
 
@@ -28,8 +29,8 @@ The **NC-GCode-Interpreter** offers a streamlined and efficient solution for int
 - **Curve flattening**: pass `flatten_tolerance` (Python) or `--flatten-tolerance` (CLI) to convert curved motions — `G2`/`G3` arcs (`I`/`J`/`K` centre offsets or `CR=` radius form, `G17`/`G18`/`G19` planes, helical third axis with `TURN=` multi-turn support, full circles) and `ASPLINE`/`BSPLINE`/`CSPLINE` splines (including `PW` weights and `SD` degree) — into runs of plain `G1` rows in the same table format. `CIP`/`CT`/`POLY`/thread/involute blocks pass through unchanged with a warning; spline start/end conditions (`BAUTO`/`BNAT`/... ) are approximated by natural (CSPLINE) / Akima (ASPLINE) boundaries — see the `flatten` module docs for the full list of checked approximations. The single tolerance is the maximum deviation between the emitted polyline and the true curve, in path units: arcs use the exact sagitta bound, splines adaptive subdivision. The interpolation addresses (`I`/`J`/`K`/`CR`/`PW`/`SD`/`PL`) are consumed and do not appear in the output; sampled rows keep the source block's line number, and its other cells (`F`, `M`, comments, ...) ride on the first sample so modal behavior is preserved. Generated samples carry a `flattened = 1` marker column (never forward-filled); programmed positions stay null there, so filtering on null recovers the original toolpath points.
 - **Toolpath visualization** (optional): with the `viz` extra (`pip install 'nc-gcode-interpreter[viz]'`), `nc_gcode_interpreter.viz.view_toolpath(df)` renders an interpreted toolpath in [threejs-viewer](https://pypi.org/project/threejs-viewer/) as an extruded bead tube with a draw-range animation replaying the program at feed-rate-proportional speed. Combined with `flatten_tolerance`, programmed points render orange and flattener-generated samples blue. The extra also installs the `nc-view` command: `nc-view part.mpf` interprets, flattens (default tolerance 0.1, `--no-flatten` to skip) and opens the animated toolpath in the browser; `--speed` sets the time-lapse factor (default 60 = one machine-minute per second).
 - **Custom Axes**: Allows users to define additional axes beyond the standard `X`, `Y`, `Z`.
-- **Definitions, variables and start state**: `definitions` takes the definition files a control loads (GUD/MGUD/UGUD `.DEF`: DEF and REDEF statements, assignments, comments; M17/M30/M2 ends a file), `variables` takes variable values checked against their declared type, and `start` takes the machine state at program start in the shape of the returned `state` dict (axes, frame, variables, modal G groups, feed, tool and transformation). The G groups, feed, tool and transformation fill the first output row. They are applied in that order, before the main program. In a definition file `CHANDATA(1)` is ignored, another channel is an error, and assigning to an undeclared name is an error unless it is an R parameter or `allow_undefined_variables` is set.
-- **Feed check**: a path motion (G1, G2, G3, CIP, splines) with no feed programmed is an error, as alarm 10860 is on the control; a feed type change (G93/G94/G95, G96/G961/G962) deletes F. Pass the control's default feed (SD42110 `$SC_DEFAULT_FEED`) as `start["feed"]`. The check is off when F is not a configured axis. On the CLI: `--definitions FILE` (repeatable), `--variables FILE.json` and `--start FILE.json`.
+- **Definitions, variables and start state**: `definitions` takes the definition files a control loads (GUD/MGUD/UGUD `.DEF`: DEF and REDEF statements, assignments, comments; M17/M30/M2 ends a file), `variables` takes variable values checked against their declared type, and `start` takes the machine state at program start in the shape of the returned `state` dict (axes, frame, variables, modal G groups, feed, tool, transformation, FGROUP and FGREF radii). The G groups, feed, tool, transformation, FGROUP and FGREF fill the first output row; seeded G groups have the same `pl.Enum` dtype as the rest of the column. They are applied in that order, before the main program. In a definition file `CHANDATA(1)` is ignored, another channel is an error, and assigning to an undeclared name is an error unless it is an R parameter or `allow_undefined_variables` is set.
+- **Feed check**: a path motion (G1, G2, G3, CIP, splines) with no feed programmed is an error, as alarm 10860 is on the control; a feed type change (G93/G94/G95, G96/G961/G962) deletes F. FGROUP does not change this: a block moving only axes outside the FGROUP, or only rotary axes, needs F too. Pass the control's default feed (SD42110 `$SC_DEFAULT_FEED`) as `start["feed"]`. The check is off when F is not a configured axis. On the CLI: `--definitions FILE` (repeatable), `--variables FILE.json` and `--start FILE.json`.
 - **CLI Options**: Numerous command-line options to customize the processing, such as axis overriding, loop limits, and more.
 
 ## Example Usage
@@ -116,7 +117,7 @@ shape: (14, 7)
 ┌───────┬───────┬──────┬────────┬───────────┬─────────────┬─────────────────────────────────┐
 │ X     ┆ Y     ┆ Z    ┆ F      ┆ M         ┆ gg01_motion ┆ comment                         │
 │ ---   ┆ ---   ┆ ---  ┆ ---    ┆ ---       ┆ ---         ┆ ---                             │
-│ f64   ┆ f64   ┆ f64  ┆ f64    ┆ list[str] ┆ str         ┆ str                             │
+│ f64   ┆ f64   ┆ f64  ┆ f64    ┆ list[str] ┆ enum        ┆ str                             │
 ╞═══════╪═══════╪══════╪════════╪═══════════╪═════════════╪═════════════════════════════════╡
 │ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ null        ┆ ;size of the square             │
 │ null  ┆ null  ┆ null ┆ null   ┆ null      ┆ null        ┆ ;size of the square             │
@@ -133,6 +134,17 @@ shape: (14, 7)
 ```
 
 The Python bindings also return the state of the program after execution, which can be used for inspection.
+
+#### Column dtypes
+
+Axis and other value columns are `Float64`, `N` is `Int64` and `M` is `List(String)`. Each G-group column (`gg01_motion`, `gg06_plane_select`, ...) is a `pl.Enum` whose categories are that group's commands in manual order; `G_GROUP_DTYPES` maps every G-group column name to its dtype, for building matching schemas or empty frames. Every batch and every run has the same Enum per column, so frames concatenate without a cast. The Python package requires polars 1.32 or newer. `T`, `comment`, `non_returning_function_call` and other free-text columns stay `String`. `nc_to_rows` yields plain `str` values.
+
+Things that differ from a `String` column:
+
+- `pl.col("gg01_motion") == "G1"` and `is_in(["G0", "G1"])` work; `is_in` with a value outside the group raises.
+- `.str` methods and joins against a `String` column raise; cast first with `.cast(pl.String)`.
+- `fill_null("")` leaves the nulls in place, because `""` is not a category. Cast to `String` first.
+- Sorting follows manual order (`G0`, `G1`, `G2`, ...), not alphabetical order.
 
 #### Streaming
 

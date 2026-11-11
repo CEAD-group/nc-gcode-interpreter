@@ -58,6 +58,21 @@ def test_an_unknown_previous_feed_type_does_not_delete_the_feed():
     nc_to_dataframe("G1 F500 X1\nG95 X2\n")
 
 
+@pytest.mark.parametrize(
+    "program", ["FGROUP(X,A)\nG1 A10", "FGROUP(X)\nG1 Y1", "FGREF[A]=10\nG1 A10"]
+)
+def test_feed_group_axes_need_a_feed_like_any_path_axis(program):
+    # FGROUP only selects the axes F refers to (Axes and spindles 7.2.6).
+    with pytest.raises(NcError) as info:
+        nc_to_dataframe(program)
+    assert info.value.kind == "feed_not_programmed"
+
+
+def test_feed_group_settings_move_nothing_and_keep_f():
+    nc_to_dataframe("G1\nFGROUP(X,A)\nFGREF[A]=10\n")
+    nc_to_dataframe("G1 F100 X1\nFGROUP(X,A)\nFGREF[A]=10\nA10\n")
+
+
 def test_reprogramming_f_with_the_feed_type_change_is_fine():
     df, state = nc_to_dataframe("G1 F500 X1\nG95 F0.2 X2\n")
     assert df["F"].to_list() == [500.0, 0.2]

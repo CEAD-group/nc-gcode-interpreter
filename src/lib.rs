@@ -148,6 +148,12 @@ mod python_bindings {
         dict.set_item("feed", state.feed)?;
         dict.set_item("tool", state.tool.clone())?;
         dict.set_item("transformation", state.transformation.clone())?;
+        dict.set_item("fgroup", state.fgroup.clone())?;
+        let fgref = PyDict::new(py);
+        for (axis, radius) in &state.fgref {
+            fgref.set_item(axis, radius)?;
+        }
+        dict.set_item("fgref", fgref)?;
         Ok(dict)
     }
 
@@ -239,6 +245,12 @@ mod python_bindings {
                         .extract::<Option<String>>()
                         .map_err(|_| input_error("start['transformation'] must be a str or None".to_string()))?
                 }
+                "fgroup" => {
+                    state.fgroup = value
+                        .extract::<Option<String>>()
+                        .map_err(|_| input_error("start['fgroup'] must be a str or None".to_string()))?
+                }
+                "fgref" => state.fgref = number_items(&value, &key)?,
                 "rotation" => {
                     let rows = value
                         .extract::<Vec<Vec<f64>>>()
@@ -254,7 +266,7 @@ mod python_bindings {
                 }
                 other => {
                     return Err(input_error(format!(
-                        "start has an unknown key '{other}' (expected axes, translation, rotation, symbol_table, string_table, g_groups, feed, tool, transformation)"
+                        "start has an unknown key '{other}' (expected axes, translation, rotation, symbol_table, string_table, g_groups, feed, tool, transformation, fgroup, fgref)"
                     )))
                 }
             }
@@ -306,6 +318,12 @@ mod python_bindings {
         let mut fields: Vec<Field> = Vec::with_capacity(table.columns.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(table.columns.len());
         for (name, column) in table.columns {
+            if let Some(categories) = crate::modal_groups::g_group_values(&name) {
+                let (field, array) = g_group_enum_array(&name, categories, column)?;
+                fields.push(field);
+                arrays.push(array);
+                continue;
+            }
             let (data_type, array): (DataType, ArrayRef) = match column {
                 Column::Float(v) => (DataType::Float64, Arc::new(Float64Array::from(v))),
                 Column::Int(v) => (DataType::Int64, Arc::new(Int64Array::from(v))),
@@ -356,6 +374,32 @@ mod python_bindings {
         let schema = Arc::new(Schema::new(fields));
         RecordBatch::try_new(schema, arrays)
             .map_err(|e| PyErr::new::<PyValueError, _>(format!("failed to build RecordBatch: {}", e)))
+    }
+
+    /// One G-group column as an Arrow dictionary whose values are the group's
+    /// full command list in manual order and whose keys index that list, so
+    /// every batch carries the same categories. The `_PL_ENUM_VALUES2` field
+    /// metadata is what polars (>= 1.32) reads to import it as `pl.Enum`. A
+    /// value outside the list is an error, never a null.
+    fn g_group_enum_array(
+        name: &str,
+        categories: &'static [&'static str],
+        column: Column,
+    ) -> PyResult<(arrow_schema::Field, arrow_array::ArrayRef)> {
+        use arrow_array::types::UInt8Type;
+        use arrow_array::{Array, DictionaryArray, StringArray, UInt8Array};
+        use arrow_schema::Field;
+
+        let keys: UInt8Array = crate::output::g_group_codes(name, categories, &column)
+            .map_err(PyErr::new::<PyValueError, _>)?
+            .into();
+        let values: StringArray = categories.iter().map(|c| Some(*c)).collect();
+        let array = DictionaryArray::<UInt8Type>::try_new(keys, Arc::new(values))
+            .map_err(|e| PyErr::new::<PyValueError, _>(format!("G-group column '{}': {}", name, e)))?;
+        let encoded: String = categories.iter().map(|c| format!("{};{}", c.len(), c)).collect();
+        let metadata = HashMap::from([("_PL_ENUM_VALUES2".to_string(), encoded)]);
+        let field = Field::new(name, array.data_type().clone(), true).with_metadata(metadata);
+        Ok((field, Arc::new(array)))
     }
 
     /// [`table_to_record_batch`] as an [`ArrowBatch`] the Python side receives
@@ -821,7 +865,7 @@ mod python_bindings {
         }
 
         /// The final interpreter state
-        /// (`{axes, symbol_table, translation, rotation, string_table, g_groups, feed, tool, transformation}`), available once
+        /// (`{axes, symbol_table, translation, rotation, string_table, g_groups, feed, tool, transformation, fgroup, fgref}`), available once
         /// the iterator is exhausted.
         #[getter]
         fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
@@ -1058,7 +1102,7 @@ mod python_bindings {
         }
 
         /// The final interpreter state
-        /// (`{axes, symbol_table, translation, rotation, string_table, g_groups, feed, tool, transformation}`), available once
+        /// (`{axes, symbol_table, translation, rotation, string_table, g_groups, feed, tool, transformation, fgroup, fgref}`), available once
         /// the iterator is exhausted.
         #[getter]
         fn state<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
@@ -1182,3 +1226,29 @@ mod python_bindings {
 
 #[cfg(feature = "python")]
 pub use python_bindings::nc_gcode_interpreter;
+
+#[cfg(test)]
+mod tests {
+    /// The Arrow handoff stores G-group codes as u8, and the encoding must agree with classification.
+    #[test]
+    fn g_group_vocabularies_fit_u8_and_match_classification() {
+        for group in crate::modal_groups::MODAL_G_GROUPS
+            .iter()
+            .chain(crate::modal_groups::NON_MODAL_G_GROUPS.iter())
+        {
+            let values = crate::modal_groups::g_group_values(group).expect("every G group has a vocabulary");
+            assert!(
+                !values.is_empty() && values.len() <= 256,
+                "{group}: {} commands",
+                values.len()
+            );
+            for value in values {
+                assert_eq!(
+                    crate::modal_groups::classify_g_command(value).map(|(g, _)| g),
+                    Some(*group)
+                );
+            }
+        }
+        assert_eq!(crate::modal_groups::g_group_values("T"), None);
+    }
+}

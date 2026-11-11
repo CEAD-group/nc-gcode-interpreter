@@ -51,6 +51,11 @@ pub struct StartState {
     pub tool: Option<String>,
     /// The transformation column value, e.g. `TRAORI` or `TRAFOOF`.
     pub transformation: Option<String>,
+    /// The FGROUP column value: channel axes, comma-separated, or "" for the
+    /// machine-data default.
+    pub fgroup: Option<String>,
+    /// Reference radius per channel axis (the FGREF[<axis>] columns).
+    pub fgref: Vec<(String, f64)>,
 }
 
 /// Everything applied before the main program, in order: `definitions`,
@@ -552,7 +557,41 @@ fn apply_start(start: &StartState, state: &mut State) -> Result<Seed, ParsingErr
             Value::Str(value),
         ));
     }
+    if let Some(axes) = &start.fgroup {
+        let mut names = Vec::new();
+        for axis in axes
+            .split(',')
+            .map(|axis| axis.trim().to_uppercase())
+            .filter(|axis| !axis.is_empty())
+        {
+            if !is_channel_axis(state, &axis) {
+                return Err(invalid("start['fgroup']", &format!("{axis} is not a channel axis")));
+            }
+            names.push(axis);
+        }
+        seed.push((
+            crate::output::intern_column(crate::output::FGROUP_COLUMN),
+            Value::Str(names.join(",")),
+        ));
+    }
+    for (axis, radius) in &start.fgref {
+        let field = format!("start['fgref']['{axis}']");
+        let axis = axis.trim().to_uppercase();
+        if !is_channel_axis(state, &axis) {
+            return Err(invalid(&field, &format!("{axis} is not a channel axis")));
+        }
+        if !radius.is_finite() || *radius <= 0.0 {
+            return Err(invalid(&field, "the reference radius must be a number greater than 0"));
+        }
+        let column = crate::output::intern_column(&crate::output::fgref_column(&axis));
+        seed.push((column, Value::Float(*radius)));
+    }
     Ok(seed)
+}
+
+/// FGROUP and FGREF take channel axes: configured axes other than N, F, S, D, T.
+fn is_channel_axis(state: &State, axis: &str) -> bool {
+    state.is_axis(axis) && !crate::state::NON_AXIS_ADDRESSES.contains(&axis)
 }
 
 #[cfg(test)]
@@ -863,5 +902,35 @@ mod tests {
             ..StartState::default()
         };
         assert_eq!(run("X1", start(bad)).unwrap_err().kind(), "invalid_input");
+    }
+
+    #[test]
+    fn feed_group_seeds_the_first_row_and_round_trips() {
+        let state = StartState {
+            fgroup: Some("x, a".into()),
+            fgref: vec![("A".into(), 57.3)],
+            ..StartState::default()
+        };
+        let (table, end) = run("G0 X1\nFGREF[B]=2 X2", start(state)).unwrap();
+        assert_eq!(texts(&table, "FGROUP"), vec![Some("X,A".into()), Some("X,A".into())]);
+        assert_eq!(floats(&table, "FGREF[A]"), vec![Some(57.3), Some(57.3)]);
+        assert_eq!(end.fgroup.as_deref(), Some("X,A"));
+        assert_eq!(end.fgref, vec![("A".to_string(), 57.3), ("B".to_string(), 2.0)]);
+        for bad in [
+            StartState {
+                fgroup: Some("X,F".into()),
+                ..StartState::default()
+            },
+            StartState {
+                fgref: vec![("Q".into(), 1.0)],
+                ..StartState::default()
+            },
+            StartState {
+                fgref: vec![("A".into(), 0.0)],
+                ..StartState::default()
+            },
+        ] {
+            assert_eq!(run("X1", start(bad)).unwrap_err().kind(), "invalid_input");
+        }
     }
 }

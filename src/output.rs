@@ -404,6 +404,9 @@ struct ModalTracker {
     feed_deleted_by: Option<String>,
     tool: Option<String>,
     transformation: Option<String>,
+    fgroup: Option<String>,
+    /// FGREF column and radius.
+    fgref: Vec<(&'static str, f64)>,
     /// Off when F is not a configured axis: the feed is then not modelled.
     check_feed: bool,
 }
@@ -426,6 +429,7 @@ fn is_non_motion_value(key: &str) -> bool {
         key,
         "N" | "F" | "S" | "D" | FLATTENED_COLUMN | DWELL_COLUMN | SUBPROGRAM_LINE_COLUMN
     ) || BLOCK_ADDRESSES.contains(&key)
+        || key.starts_with(FGREF_PREFIX)
 }
 
 impl ModalTracker {
@@ -456,6 +460,13 @@ impl ModalTracker {
             .iter()
             .find(|(name, _)| key_eq(name, group))
             .map(|(_, code)| code.as_str())
+    }
+
+    fn set_fgref(&mut self, column: &'static str, radius: f64) {
+        match self.fgref.iter_mut().find(|(name, _)| key_eq(name, column)) {
+            Some((_, current)) => *current = radius,
+            None => self.fgref.push((column, radius)),
+        }
     }
 
     fn set_text(slot: &mut Option<String>, text: &str) {
@@ -493,7 +504,9 @@ impl ModalTracker {
                 Value::Str(text) if key_eq(key, TRANSFORMATION_COLUMN) => {
                     Self::set_text(&mut self.transformation, text)
                 }
+                Value::Str(text) if key_eq(key, FGROUP_COLUMN) => Self::set_text(&mut self.fgroup, text),
                 Value::Float(value) if key_eq(key, "F") => feed = Some(*value),
+                Value::Float(radius) if key.starts_with(FGREF_PREFIX) => self.set_fgref(key, *radius),
                 _ => {}
             }
         }
@@ -865,6 +878,8 @@ impl OutputRows {
             match value {
                 Value::Str(text) if *key == "T" => self.modal.tool = Some(text.clone()),
                 Value::Str(text) if *key == TRANSFORMATION_COLUMN => self.modal.transformation = Some(text.clone()),
+                Value::Str(text) if *key == FGROUP_COLUMN => self.modal.fgroup = Some(text.clone()),
+                Value::Float(radius) if key.starts_with(FGREF_PREFIX) => self.modal.set_fgref(key, *radius),
                 Value::Str(code) => {
                     self.modal.set_group(key, code);
                 }
@@ -925,6 +940,20 @@ impl OutputRows {
         state.feed = self.modal.feed;
         state.tool = self.modal.tool.clone();
         state.transformation = self.modal.transformation.clone();
+        state.fgroup = self.modal.fgroup.clone();
+        let mut fgref: Vec<(String, f64)> = self
+            .modal
+            .fgref
+            .iter()
+            .map(|(column, radius)| {
+                let axis = column
+                    .strip_prefix(FGREF_PREFIX)
+                    .and_then(|rest| rest.strip_suffix(']'));
+                (axis.unwrap_or(column).to_string(), *radius)
+            })
+            .collect();
+        fgref.sort_by(|a, b| a.0.cmp(&b.0));
+        state.fgref = fgref;
         self.finish()
     }
 
@@ -1020,6 +1049,42 @@ impl DictColumn {
                 (self.values.len() - 1) as u32
             }
         }
+    }
+}
+
+/// A G-group column as per-row indices into `categories` (its commands in
+/// manual order), `None` for a null cell. A value outside `categories` is an
+/// error naming the group and the value, never a null.
+#[allow(dead_code)] // used by the python-feature bindings, not the bin
+pub fn g_group_codes(name: &str, categories: &[&str], column: &Column) -> Result<Vec<Option<u8>>, String> {
+    let position = |value: &str| -> Result<u8, String> {
+        categories
+            .iter()
+            .position(|c| *c == value)
+            .and_then(|i| u8::try_from(i).ok())
+            .ok_or_else(|| {
+                format!(
+                    "G-group column '{}' got '{}', which is not one of its commands",
+                    name, value
+                )
+            })
+    };
+    match column {
+        Column::Dict(column) => {
+            // Map each distinct value once, then translate the per-row codes.
+            let remap: Vec<u8> = column.values.iter().map(|v| position(v)).collect::<Result<_, _>>()?;
+            Ok(column
+                .codes
+                .iter()
+                .map(|&code| remap.get(code as usize).copied())
+                .collect())
+        }
+        Column::Str(values) => values.iter().map(|v| v.as_deref().map(position).transpose()).collect(),
+        other => Err(format!(
+            "G-group column '{}' has dtype {}, expected str",
+            name,
+            other.dtype_name()
+        )),
     }
 }
 
@@ -1173,12 +1238,40 @@ pub fn transformation_value(call: &str) -> Option<String> {
 }
 
 pub fn is_string_column(name: &str) -> bool {
-    MODAL_G_GROUPS.contains(&name)
-        || NON_MODAL_G_GROUPS.contains(&name)
+    is_dict_column(name)
         || matches!(
             name,
             "T" | "non_returning_function_call" | "comment" | SUBPROGRAM_COLUMN | TRANSFORMATION_COLUMN
         )
+}
+
+/// String columns held as per-batch dictionary codes: the G groups and the
+/// feed group, which take a few distinct values repeated over long runs.
+fn is_dict_column(name: &str) -> bool {
+    MODAL_G_GROUPS.contains(&name) || NON_MODAL_G_GROUPS.contains(&name) || name == FGROUP_COLUMN
+}
+
+/// Modal feed-group column (`FGROUP(<axes>)`, manual 3.7.1): the channel axes
+/// the path feed `F` refers to, comma-separated as programmed, on the block
+/// that programs it. `FGROUP()` gives the empty string, which means the
+/// machine-data default set; rows before any `FGROUP` are null, which means
+/// the same. The interpreter does not know that default, so it never names
+/// the axes in it.
+pub const FGROUP_COLUMN: &str = "FGROUP";
+
+/// Prefix of the per-axis reference-radius columns `FGREF[<axis>]` (manual
+/// 3.7.1). A column exists only for an axis the program sets; null before the
+/// first assignment means the control default (360 mm / 2 pi for a rotary
+/// axis, 1 mm for a linear one).
+pub const FGREF_PREFIX: &str = "FGREF[";
+
+/// Output column name of the reference radius of `axis` (uppercase).
+pub fn fgref_column(axis: &str) -> String {
+    format!("{FGREF_PREFIX}{axis}]")
+}
+
+fn is_feed_group_column(name: &str) -> bool {
+    name == FGROUP_COLUMN || name.starts_with(FGREF_PREFIX)
 }
 
 /// Whether a column is forward-filled in the sanitized table: value columns
@@ -1193,7 +1286,7 @@ pub fn is_forward_filled_column(name: &str) -> bool {
         && name != CALL_REPETITIONS_COLUMN
         && !is_string_column(name)
         && !BLOCK_ADDRESSES.contains(&name);
-    is_value || MODAL_G_GROUPS.contains(&name) || name == TRANSFORMATION_COLUMN
+    is_value || MODAL_G_GROUPS.contains(&name) || name == FGROUP_COLUMN || name == TRANSFORMATION_COLUMN
 }
 
 /// Per-block dwell-time column: on a `G4` block the `F` word is the dwell
@@ -1238,7 +1331,8 @@ pub const LINE_NO_COLUMN: &str = "line_no";
 /// Canonical output-column order over the set of columns present so far:
 /// N, modal then non-modal G-group columns, the fixed axis columns, any
 /// remaining value columns (e.g. user extra axes) in alphabetical order, the
-/// spline/arc block addresses, then T, M, function calls and comment. Column
+/// feed group and its reference radii, the spline/arc block addresses, then
+/// T, M, function calls and comment. Column
 /// names are `&'static str` (constant vocabulary or interned row keys), so the
 /// order is comparison-by-content and independent of which `&'static str`
 /// instance carries a given name.
@@ -1266,6 +1360,7 @@ fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
                 && !BLOCK_ADDRESSES.contains(name)
                 && *name != FLATTENED_COLUMN
                 && *name != DWELL_COLUMN
+                && !is_feed_group_column(name)
                 && !matches!(
                     *name,
                     "T" | "M"
@@ -1280,6 +1375,15 @@ fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
         .collect();
     extra.sort_unstable();
     ordered.extend(extra);
+    // The feed group and its reference radii qualify the axis columns.
+    push_if_present(intern_column(FGROUP_COLUMN), &mut ordered);
+    let mut radii: Vec<&'static str> = present
+        .iter()
+        .copied()
+        .filter(|name| name.starts_with(FGREF_PREFIX))
+        .collect();
+    radii.sort_unstable();
+    ordered.extend(radii);
     // Block addresses (spline PW/SD/PL) come after the axes.
     for &name in BLOCK_ADDRESSES {
         push_if_present(name, &mut ordered);
@@ -1479,7 +1583,7 @@ impl ColumnBuilder {
             ColumnBuilder::Int(vec![None; height])
         } else if name == "M" {
             ColumnBuilder::StrList(vec![None; height])
-        } else if MODAL_G_GROUPS.contains(&name) || NON_MODAL_G_GROUPS.contains(&name) {
+        } else if is_dict_column(name) {
             ColumnBuilder::Dict(DictColumn {
                 values: Vec::new(),
                 codes: vec![DictColumn::NULL; height],
@@ -1604,6 +1708,29 @@ pub fn write_csv<W: std::io::Write>(table: &Table, writer: W) -> Result<(), std:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-group cells map to their manual-order index; a value outside the group is an error, never a null.
+    #[test]
+    fn g_group_codes_index_the_manual_order() {
+        let categories = crate::modal_groups::g_group_values("gg01_motion").unwrap();
+        let mut column = DictColumn::default();
+        let g1 = column.code_for("G1");
+        let g0 = column.code_for("G0");
+        column.codes = vec![g1, DictColumn::NULL, g0, g1];
+        let codes = g_group_codes("gg01_motion", categories, &Column::Dict(column)).unwrap();
+        assert_eq!(codes, vec![Some(1), None, Some(0), Some(1)]);
+
+        let strings = Column::Str(vec![Some("G2".to_string()), None]);
+        assert_eq!(
+            g_group_codes("gg01_motion", categories, &strings).unwrap(),
+            vec![Some(2), None]
+        );
+
+        let mut bad = DictColumn::default();
+        bad.codes = vec![bad.code_for("G17")];
+        let err = g_group_codes("gg01_motion", categories, &Column::Dict(bad)).unwrap_err();
+        assert!(err.contains("gg01_motion") && err.contains("'G17'"), "{err}");
+    }
 
     /// Moving cell values out of recycled rows builds the same batches as
     /// cloning them, forward-fill carry included.
@@ -1773,6 +1900,18 @@ mod feed_tests {
         assert_eq!(missing_on("G0 X1\nG1 X2\nF100"), 2);
         // The motion is modal: X2 is still a G1 block.
         assert_eq!(missing_on("G1\nX2"), 2);
+    }
+
+    #[test]
+    fn feed_group_axes_need_the_same_feed() {
+        // FGROUP only chooses which axes F refers to (manual 7.2.6): a block
+        // moving a synchronized axis or only a rotary axis still needs F.
+        assert_eq!(missing_on("FGROUP(X,A)\nG1 A10"), 2);
+        assert_eq!(missing_on("FGROUP(X)\nG1 Y10"), 2);
+        assert_eq!(missing_on("FGROUP(X,A)\nFGREF[A]=10\nG1 A10"), 3);
+        // FGROUP and FGREF move nothing and do not delete F.
+        run("G1\nFGROUP(X,A)\nFGREF[A]=10", None).unwrap();
+        run("G1 F100 X1\nFGROUP(X,A)\nFGREF[A]=10\nA10", None).unwrap();
     }
 
     #[test]

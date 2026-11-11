@@ -20,6 +20,7 @@ class TextFileLike(Protocol):
 
 
 __all__ = [
+    "G_GROUP_DTYPES",
     "NcError",
     "dataframe_to_nc",
     "nc_to_batches",
@@ -164,9 +165,11 @@ def nc_to_dataframe(
         (modal G group column to code, e.g. ``{"gg01_motion": "G1"}``),
         ``feed`` (float; pass the control's default feed SD42110
         ``$SC_DEFAULT_FEED`` here), ``tool`` (str or number, the ``T`` column)
-        and ``transformation`` (e.g. ``"TRAORI"``). The G groups, feed, tool and
-        transformation fill the first output row where the program does not
-        set them; positions and frame only seed the
+        ``transformation`` (e.g. ``"TRAORI"``), ``fgroup`` (the FGROUP value,
+        e.g. ``"X,A"``, or ``""`` for the machine-data default) and ``fgref``
+        (dict[str, float], reference radius per axis). The G groups, feed,
+        tool, transformation, FGROUP and FGREF fill the first output row where
+        the program does not set them; positions and frame only seed the
         internal state. Its variables restore a snapshot: names no definition
         declared are created. A name in both ``variables`` and ``start`` is an
         error. Applied after ``variables``; a DEF in the main program
@@ -257,7 +260,7 @@ def nc_to_dataframe(
     )
     # pl.DataFrame wraps each Arrow record batch via __arrow_c_array__ (polars
     # >= 1.3), no pyarrow needed. Exhaust the iterator before reading .state.
-    frames: list[pl.DataFrame] = [pl.DataFrame(batch) for batch in it]
+    frames: list[pl.DataFrame] = [_batch_frame(batch) for batch in it]
     state = it.state
     if not frames:
         # A program with no output rows (e.g. only variable assignments) yields
@@ -333,6 +336,31 @@ class GGroups:
         return cls._g_groups_by_short_name[name]["effectiveness"] == "modal"
 
 
+#: The dtype of every G-group column: a ``pl.Enum`` of the group's commands in
+#: manual order, so frames from any batch or run share one schema. Use it to
+#: build matching schemas or empty frames.
+G_GROUP_DTYPES: dict[str, pl.Enum] = {
+    group["short_name"]: pl.Enum([entry["id"] for entry in group["entries"]])
+    for group in GGroups.g_groups
+}
+
+
+def _batch_frame(batch: Any) -> pl.DataFrame:
+    """Wrap one Arrow batch from Rust, with every G-group column as its Enum.
+
+    Rust tags the G-group dictionaries so polars imports them as Enum
+    directly. The cast is a safety net should polars stop reading that tag;
+    ``test_g_group_columns_arrive_as_enum_without_a_cast`` turns red if it does.
+    """
+    frame = pl.DataFrame(batch)
+    casts = [
+        pl.col(name).cast(G_GROUP_DTYPES[name])
+        for name, dtype in frame.schema.items()
+        if name in G_GROUP_DTYPES and dtype != G_GROUP_DTYPES[name]
+    ]
+    return frame.with_columns(casts) if casts else frame
+
+
 def sanitize_dataframe(
     df: pl.DataFrame, disable_forward_fill: bool = False
 ) -> pl.DataFrame:
@@ -385,7 +413,9 @@ def sanitize_dataframe(
     casts = []
     if "N" in df.columns:
         casts.append(pl.col("N").cast(pl.Int64))
-    casts += [pl.col(c).cast(pl.String) for c in df.columns if c in string_columns]
+    casts += [
+        pl.col(c).cast(G_GROUP_DTYPES.get(c, pl.String)) for c in df.columns if c in string_columns
+    ]
     casts += [pl.col(c).cast(pl.Float64) for c in value_columns]
     if "M" in df.columns:
         casts.append(pl.col("M").cast(pl.List(pl.String)))
@@ -552,7 +582,7 @@ def nc_to_rows(
     Errors raise ``ValueError`` from ``next()`` when reached. After the
     iterator is exhausted, its ``state`` attribute holds the final
     interpreter state (axes, symbol_table, translation, rotation, string_table,
-    g_groups, feed, tool, transformation).
+    g_groups, feed, tool, transformation, fgroup, fgref).
 
     Example:
     --------
@@ -594,7 +624,7 @@ class _BatchIterator:
     capsule directly (polars >= 1.3), so no ``pyarrow`` is involved. After
     exhaustion its ``state`` attribute holds the final interpreter state (axes,
     symbol_table, translation, rotation, string_table, g_groups, feed, tool,
-    transformation), like
+    transformation, fgroup, fgref), like
     the iterator returned by :func:`nc_to_rows`.
     """
 
@@ -605,7 +635,7 @@ class _BatchIterator:
         return self
 
     def __next__(self) -> pl.DataFrame:
-        return pl.DataFrame(next(self._inner))
+        return _batch_frame(next(self._inner))
 
     @property
     def state(self) -> dict | None:

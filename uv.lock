@@ -1161,7 +1161,7 @@ requires-dist = [
     { name = "maturin", specifier = ">=1.7.4" },
     { name = "mypy", marker = "extra == 'test'" },
     { name = "numpy", marker = "extra == 'viz'", specifier = ">=1.26" },
-    { name = "polars", specifier = ">=1.9.0" },
+    { name = "polars", specifier = ">=1.32.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.3" },
     { name = "threejs-viewer", marker = "extra == 'viz'", specifier = ">=0.0.41" },
 ]

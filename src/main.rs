@@ -263,6 +263,14 @@ fn start_state(map: &serde_json::Map<String, Json>) -> Result<StartState, String
                     _ => return Err("start['transformation'] must be a string".to_string()),
                 }
             }
+            "fgroup" => {
+                start.fgroup = match value {
+                    Json::Null => None,
+                    Json::String(text) => Some(text.clone()),
+                    _ => return Err("start['fgroup'] must be a string".to_string()),
+                }
+            }
+            "fgref" => start.fgref = number_map(value, key)?,
             "rotation" => {
                 let rows = value.as_array().filter(|rows| rows.len() == 3).ok_or("start['rotation'] must be a 3x3 list")?;
                 let mut rotation = [[0.0; 3]; 3];
@@ -276,7 +284,7 @@ fn start_state(map: &serde_json::Map<String, Json>) -> Result<StartState, String
             }
             other => {
                 return Err(format!(
-                    "start has an unknown key '{other}' (expected axes, translation, rotation, symbol_table, string_table, g_groups, feed, tool, transformation)"
+                    "start has an unknown key '{other}' (expected axes, translation, rotation, symbol_table, string_table, g_groups, feed, tool, transformation, fgroup, fgref)"
                 ))
             }
         }

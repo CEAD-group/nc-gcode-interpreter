@@ -58,6 +58,9 @@ const UNSUPPORTED_ADDRESSES: &[(&str, &str)] = &[
     ("K1", "CIP intermediate point (I1= J1= K1=)"),
 ];
 
+/// Addresses in the configured axis list that are not channel axes (FGROUP, FGREF).
+pub const NON_AXIS_ADDRESSES: &[&str] = &["N", "F", "S", "D", "T"];
+
 /// Which kind of output column an assignment key resolves to. Variables (which
 /// never appear as output cells) are represented by the absence of a resolution
 /// (see [`State::resolve_output_key`]).
@@ -65,6 +68,8 @@ const UNSUPPORTED_ADDRESSES: &[(&str, &str)] = &[
 pub enum ColKind {
     Axis,
     Block,
+    /// Modal per-axis setting such as `FGREF[<axis>]`: forward-filled, never a variable.
+    Modal,
 }
 
 /// Declared type of a user variable (DEF), used to check the values passed in
@@ -169,6 +174,9 @@ pub struct State {
     /// The T and transformation column values at the end of the run.
     pub tool: Option<String>,
     pub transformation: Option<String>,
+    /// The FGROUP value and FGREF radii (axis, radius) at the end of the run.
+    pub fgroup: Option<String>,
+    pub fgref: Vec<(String, f64)>,
 }
 
 impl State {
@@ -220,6 +228,16 @@ impl State {
                 .or_insert((ColKind::Block, crate::output::intern_column(block)));
         }
 
+        for axis in &axis_identifiers {
+            let axis = axis.to_uppercase();
+            if NON_AXIS_ADDRESSES.contains(&axis.as_str()) {
+                continue;
+            }
+            let column = crate::output::fgref_column(&axis);
+            let interned = crate::output::intern_column(&column);
+            output_keys.insert(column, (ColKind::Modal, interned));
+        }
+
         let mut one_letter_keys = [None; 128];
         for (name, entry) in &output_keys {
             if let [byte] = name.as_bytes() {
@@ -259,6 +277,8 @@ impl State {
             feed: None,
             tool: None,
             transformation: None,
+            fgroup: None,
+            fgref: Vec::new(),
         }
     }
 
@@ -759,6 +779,8 @@ impl State {
             feed: self.feed,
             tool: self.tool.clone(),
             transformation: self.transformation.clone(),
+            fgroup: self.fgroup.clone(),
+            fgref: self.fgref.clone(),
         }
     }
 }
@@ -767,7 +789,7 @@ impl State {
 /// numeric sub-tables keep their `f64` values; `string_table` carries the
 /// `DEF STRING` variables (a numeric sub-dict cannot hold them). The Python
 /// binding turns this into `{axes, symbol_table, translation, rotation,
-/// string_table, g_groups, feed}`.
+/// string_table, g_groups, feed, tool, transformation, fgroup, fgref}`.
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)] // fields read only by the python-feature bindings, not the bin
 pub struct FinalState {
@@ -784,4 +806,7 @@ pub struct FinalState {
     pub feed: Option<f64>,
     pub tool: Option<String>,
     pub transformation: Option<String>,
+    pub fgroup: Option<String>,
+    /// FGREF reference radius per axis, sorted by axis.
+    pub fgref: Vec<(String, f64)>,
 }

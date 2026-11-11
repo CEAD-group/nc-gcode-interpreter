@@ -7,7 +7,7 @@ import pathlib
 
 import polars as pl
 import pytest
-from nc_gcode_interpreter import nc_to_batches, nc_to_dataframe
+from nc_gcode_interpreter import G_GROUP_DTYPES, nc_to_batches, nc_to_dataframe
 from polars.testing import assert_frame_equal
 
 
@@ -210,16 +210,16 @@ def test_include_line_numbers_survives_flattening():
     assert per_line == stream_lines
 
 
-def test_g_group_columns_stay_plain_strings():
+def test_g_group_columns_are_enums_across_batches():
     # The interpreter holds G-group columns as dictionary codes internally;
-    # Python must keep seeing String columns with the same values.
+    # Python sees each as its group's Enum, with the same values.
     program = "G1 F1000 G64 X1\nX2\nG4 F0.5\nG0 X3\nG17 X4\nM30\n"
     frames = list(nc_to_batches(program, batch_size=2))
     assert [f.height for f in frames] == [2, 2, 2]
     for frame in frames:
         for name in frame.columns:
             if name.startswith("gg"):
-                assert frame[name].dtype == pl.String, name
+                assert frame[name].dtype == G_GROUP_DTYPES[name], name
     df = pl.concat(frames, how="diagonal")
     assert df["gg01_motion"].to_list() == ["G1", "G1", "G1", "G0", "G0", "G0"]
     assert df["gg10_exact_stop_mode"].to_list() == ["G64"] * 6

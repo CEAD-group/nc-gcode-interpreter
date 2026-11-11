@@ -223,3 +223,23 @@ def test_r_parameters_and_allow_undefined_variables_permit_assignment():
         "X1", definitions=["LOOSE = 3\n"], allow_undefined_variables=True
     )
     assert state["symbol_table"]["LOOSE"] == 3.0
+
+
+def test_feed_group_seeds_the_first_row_and_round_trips():
+    start = {"fgroup": "X,A", "fgref": {"A": 57.3}, "feed": 100.0}
+    df, state = nc_to_dataframe("G1 A10\nFGREF[B]=2 X1\n", start=start)
+    assert df["FGROUP"].to_list() == ["X,A", "X,A"]
+    assert df["FGREF[A]"].to_list() == [57.3, 57.3]
+    assert (state["fgroup"], state["fgref"]) == ("X,A", {"A": 57.3, "B": 2.0})
+    again, _ = nc_to_dataframe("A20\n", start=state)
+    assert again.row(0, named=True)["FGROUP"] == "X,A"
+    assert again.row(0, named=True)["FGREF[B]"] == 2.0
+
+
+@pytest.mark.parametrize(
+    "start", [{"fgroup": "X,F"}, {"fgref": {"Q": 1.0}}, {"fgref": {"A": -1.0}}]
+)
+def test_invalid_feed_group_is_an_error(start):
+    with pytest.raises(NcError) as info:
+        nc_to_dataframe("G0 X1", start=start)
+    assert info.value.kind == "invalid_input"
