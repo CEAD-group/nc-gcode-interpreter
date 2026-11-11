@@ -425,6 +425,12 @@ fn set_variable(state: &mut State, key: &str, value: &VariableValue, snapshot: b
     if state.is_block_address(key) {
         return Err(format!("{key} is a block address, not a variable"));
     }
+    if is_r_parameter(key) && matches!(value, VariableValue::Text(_)) {
+        return Err(format!(
+            "{key} is an R parameter, which is REAL; {} is a string",
+            describe(value)
+        ));
+    }
     if key == "TRUE" || key == "FALSE" {
         let constant = if key == "TRUE" { 1.0 } else { 0.0 };
         return match (snapshot, numeric_value(VarType::Real, value)) {

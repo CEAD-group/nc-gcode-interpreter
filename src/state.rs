@@ -228,6 +228,13 @@ impl State {
                 .or_insert((ColKind::Block, crate::output::intern_column(block)));
         }
 
+        // Feed per tooth (modal) and non-modal feed (Axes and spindles 7.2.1, 7.4.10).
+        for (name, kind) in [("FZ", ColKind::Modal), ("FB", ColKind::Block)] {
+            output_keys
+                .entry(name.to_string())
+                .or_insert((kind, crate::output::intern_column(name)));
+        }
+
         for axis in &axis_identifiers {
             let axis = axis.to_uppercase();
             if NON_AXIS_ADDRESSES.contains(&axis.as_str()) {

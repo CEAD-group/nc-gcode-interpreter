@@ -1720,7 +1720,7 @@ mod tests {
     /// of the main program flattens from the correct start point instead of
     /// warning that the position is unknown.
     #[test]
-    fn initial_state_position_seeds_flattener() {
+    fn start_position_seeds_flattener() {
         let inputs = crate::start::StartInputs {
             start: Some(crate::start::StartState {
                 axes: vec![("X".into(), 0.0), ("Y".into(), 0.0), ("Z".into(), 0.0)],

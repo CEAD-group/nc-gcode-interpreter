@@ -403,7 +403,7 @@ def sanitize_dataframe(
     # Each value belongs only to the block that programs it, so it must not be
     # carried forward. Keep this list identical (and in the same order) to the
     # Rust BLOCK_ADDRESSES constant so both output layers agree on columns.
-    block_addresses = ["I", "J", "K", "CR", "PW", "SD", "PL"]
+    block_addresses = ["I", "J", "K", "CR", "PW", "SD", "PL", "FB"]
 
     # Value columns: anything that is not a known string/list column.
     value_columns = [

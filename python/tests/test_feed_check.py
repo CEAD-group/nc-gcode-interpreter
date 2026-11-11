@@ -1,7 +1,8 @@
 """Alarm 10860: a block that traverses a path needs a programmed feed.
 
-The control also deletes F when the feed type changes (G93/G94/G95,
-G96/G961/G962), so F has to be programmed again after such a change.
+The control also deletes F when the feed unit changes (inverse time G93,
+per minute G94/G961/G971/G942, per revolution G95/G96/G97/G952/G973), so F
+has to be programmed again after such a change.
 """
 
 import itertools
@@ -100,6 +101,9 @@ def error_of(call):
         (FLAT, None, 2, "feed_not_programmed"),
         (STRUCTURED, None, 6, "feed_not_programmed"),
         (AFTER_FEED_TYPE, None, 2, "feed_not_programmed"),
+        ("G0 X0\nG1 G95 FZ=0.02 X1\nG94 X2\n", None, 3, "feed_not_programmed"),
+        ("G0 X0\nG1 X1 FB=100\nX2\n", None, 3, "feed_not_programmed"),
+        ("G0 X0\nG63 Z-10 S300\n", None, 2, "feed_not_programmed"),
         # Errors inside a subprogram are wrapped in the context of the call.
         (IN_SUBPROGRAM, {"MOVE": MOVE}, 2, "parse_context"),
     ],
@@ -129,3 +133,48 @@ def test_the_error_is_identical_on_every_execution_path(
     ((message, *where),) = seen
     assert where == [kind, line]
     assert "feed rate F" in message or "F was not programmed" in message
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        "G95 G1 F0.1 X1\nG96 S100\nX2",
+        "G96 S100 G1 F0.1 X1\nG97 S500\nX2",
+        "G94 G1 F100 X1\nG942\nX2",
+    ],
+)
+def test_a_feed_type_change_within_one_unit_keeps_the_feed(program):
+    nc_to_dataframe(program)
+
+
+def test_a_seeded_feed_is_not_a_feed_programmed_in_the_first_block():
+    start = {"feed": 100, "g_groups": {"gg15_feed_type": "G94"}}
+    with pytest.raises(NcError) as info:
+        nc_to_dataframe("G95\nG1 X1", start=start)
+    assert (info.value.kind, info.value.line) == ("feed_not_programmed", 2)
+
+
+def test_tooth_feed_and_non_modal_feed_are_feeds():
+    df, _ = nc_to_dataframe("G0 X100 Y50\nG1 G95 FZ=0.02\nT3 D1\nM3 S200\nX20")
+    assert df["FZ"].to_list() == [None, 0.02, 0.02, 0.02, 0.02]
+    df, _ = nc_to_dataframe("G1 X1 FB=100\nF50 X2")
+    assert df["FB"].to_list() == [100.0, None]
+    with pytest.raises(NcError, match="no feed rate F"):
+        nc_to_dataframe("G1 X1 FB=100\nX2")
+
+
+def test_tapping_needs_a_feed():
+    with pytest.raises(NcError) as info:
+        nc_to_dataframe("G0 X0\nG63 Z-10 S300")
+    assert (info.value.kind, info.value.line) == ("feed_not_programmed", 2)
+
+
+def test_a_dwell_with_axis_words_is_an_error():
+    with pytest.raises(NcError, match="G4 must stand alone") as info:
+        nc_to_dataframe("G1 F100 X1\nG1 X2 G4 F2")
+    assert info.value.line == 2
+
+
+def test_the_message_names_the_start_key_for_python_and_the_cli():
+    with pytest.raises(NcError, match='in start \\(key "feed"\\)'):
+        nc_to_dataframe("G1 X1")

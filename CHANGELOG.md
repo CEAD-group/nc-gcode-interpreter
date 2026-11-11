@@ -121,7 +121,8 @@ released to PyPI.
     files as a list instead of concatenating them into `initial_state`.
   - `variables`: a dict of values (`float`, `int`, `bool`, `str`) written
     straight into the variable tables and checked against the declared type
-    (2.5 into an INT or a string into a REAL is an error). Names must be
+    (2.5 into an INT, or a string into a REAL or an R parameter, is an
+    error). Names must be
     defined unless they are R parameters, system variables or
     `allow_undefined_variables` is set. Migration: replace generated
     `NAME=VALUE` lines with `variables={"NAME": value}`; strings now work.
@@ -146,11 +147,20 @@ released to PyPI.
 - **Breaking:** a block that traverses a path (G1, G2, G3, CIP, splines and
   the other path motions) while no feed is programmed is an error
   (`NcError.kind == "feed_not_programmed"`), as alarm 10860 is on the
-  control. G0, the G4 dwell, G74/G75 and the thread commands need no F. A
-  feed type change (G93/G94/G95, G96/G961/G962) deletes F (Axes and
-  spindles manual 7.2.1), so the next path block needs a new F; when the
-  previous feed type is unknown (never programmed, not in
-  `start["g_groups"]`) nothing is deleted. G93 recommends but does not
+  control. G0, the G4 dwell, G74/G75 and the thread commands need no F;
+  G63 tapping does. A change of feed unit deletes F and FZ (Axes and
+  spindles manual 7.2.1, 7.2.2): inverse time (G93), traversing time
+  (G931), per minute (G94, G961, G971, G942) and per revolution (G95, G96,
+  G97, G952, G973); G962 and G972 keep the unit that was active. A change
+  within one unit (G95 to G96) keeps F. When the previous feed type is
+  unknown (never programmed, not in `start["g_groups"]`) nothing is
+  deleted. A feed seeded from `start` is start state, not an F of the first
+  block, so a feed type change there deletes it too. `FZ=` (feed per tooth)
+  counts as a feed under a revolutional feed type and `FB=` (non-modal feed,
+  7.4.10) for its own block; both are now output columns (`FZ`
+  forward-filled, `FB` not), where they used to become variables. G4 with
+  axis words in the same block is an error (G4 stands alone, manual
+  3.14.7). G93 recommends but does not
   require F in every block, so that is not checked. The control's default
   feed SD42110 `$SC_DEFAULT_FEED` (0 unless set) is evaluated at program
   start: pass it as `start["feed"]`. The check is off when F is not a

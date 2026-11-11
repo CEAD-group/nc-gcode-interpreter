@@ -281,3 +281,12 @@ def test_a_subprogram_call_in_a_definition_file_is_an_error_naming_it():
     with pytest.raises(NcError, match="'RESTORE_INIT' is not allowed") as info:
         nc_to_dataframe("X1", definitions=["DEF REAL FIRST\nRESTORE_INIT\nM17\n"])
     assert (info.value.definition_file, info.value.line) == (0, 2)
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"variables": {"R1": "abc"}}, {"start": {"string_table": {"R5": "x"}}}]
+)
+def test_a_string_for_an_r_parameter_is_an_error(kwargs):
+    with pytest.raises(NcError, match="R parameter") as info:
+        nc_to_dataframe("X1", **kwargs)
+    assert info.value.kind == "invalid_input"

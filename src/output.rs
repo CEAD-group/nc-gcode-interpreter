@@ -397,6 +397,10 @@ struct ModalTracker {
     non_modal: Vec<&'static str>,
     /// Whether the active motion takes its speed from F.
     motion_uses_feed: bool,
+    /// Unit class of the active feed type (group 15); `None` until known.
+    feed_class: Option<FeedClass>,
+    /// FZ (feed per tooth) programmed for the active feed class.
+    tooth_feed: bool,
     /// The active path feed; `None` when none was programmed for the active
     /// feed type.
     feed: Option<f64>,
@@ -417,6 +421,35 @@ pub(crate) struct MissingFeed {
     deleted_by: Option<String>,
 }
 
+/// Why a flushed row is rejected.
+pub(crate) enum TrackError {
+    MissingFeed(MissingFeed),
+    /// G4 with axis words: G4 must stand alone in its block (manual 3.14.7).
+    DwellNotAlone,
+}
+
+/// Unit class of a feed type: F is deleted only when the class changes
+/// (Axes and spindles 7.2.1, 7.2.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FeedClass {
+    InverseTime,
+    TraversingTime,
+    PerMinute,
+    PerRevolution,
+}
+
+/// The class of a group 15 code; `None` for G962/G972, which keep the
+/// linear or revolutional feed that was active.
+fn feed_class(code: &str) -> Option<FeedClass> {
+    match code {
+        "G93" => Some(FeedClass::InverseTime),
+        "G931" => Some(FeedClass::TraversingTime),
+        "G94" | "G961" | "G971" | "G942" => Some(FeedClass::PerMinute),
+        "G95" | "G96" | "G97" | "G952" | "G973" => Some(FeedClass::PerRevolution),
+        _ => None,
+    }
+}
+
 /// Motion commands whose path speed comes from F. G0 is rapid traverse and
 /// the thread commands take the pitch, not F.
 fn uses_path_feed(motion: &str) -> bool {
@@ -427,7 +460,7 @@ fn uses_path_feed(motion: &str) -> bool {
 fn is_non_motion_value(key: &str) -> bool {
     matches!(
         key,
-        "N" | "F" | "S" | "D" | FLATTENED_COLUMN | DWELL_COLUMN | SUBPROGRAM_LINE_COLUMN
+        "N" | "F" | "FZ" | "FB" | "S" | "D" | FLATTENED_COLUMN | DWELL_COLUMN | SUBPROGRAM_LINE_COLUMN
     ) || BLOCK_ADDRESSES.contains(&key)
         || key.starts_with(FGREF_PREFIX)
 }
@@ -451,6 +484,8 @@ impl ModalTracker {
         }
         if key_eq(group, "gg01_motion") {
             self.motion_uses_feed = uses_path_feed(code);
+        } else if key_eq(group, "gg15_feed_type") {
+            self.feed_class = feed_class(code).or(self.feed_class);
         }
         true
     }
@@ -477,24 +512,29 @@ impl ModalTracker {
 
     /// Track one flushed row and check its feed: a block that traverses a
     /// path needs a feed programmed for the active feed type (alarm 10860).
-    fn track(&mut self, cells: &CellMap) -> Result<(), MissingFeed> {
+    fn track(&mut self, cells: &CellMap) -> Result<(), TrackError> {
         if cells.is_empty() {
             return Ok(());
         }
         let mut feed: Option<f64> = None;
+        let mut block_feed = false;
+        let mut tooth_feed = false;
+        let mut dwell = false;
         let mut no_feed_motion = false;
-        let mut feed_type_changed: Option<&str> = None;
+        let mut tapping = false;
+        let mut class_changed: Option<&str> = None;
         for (key, value) in cells.iter() {
             match value {
                 Value::Str(code) if key.starts_with("gg") => {
                     if key_eq(key, "gg02_wait") {
-                        // Dwell and reference/fixed-point approach do not use F.
-                        no_feed_motion |= matches!(code.as_str(), "G4" | "G74" | "G75");
+                        dwell |= code == "G4";
+                        // Reference and fixed-point approach do not use F; G63 does.
+                        no_feed_motion |= matches!(code.as_str(), "G74" | "G75");
+                        tapping |= code == "G63";
                     } else if key_eq(key, "gg15_feed_type") {
-                        // A first feed type replaces an unknown one: nothing to delete.
-                        let known = self.group(key).is_some();
-                        if self.set_group(key, code) && known {
-                            feed_type_changed = Some(code);
+                        let before = self.feed_class;
+                        if self.set_group(key, code) && before.is_some() && before != self.feed_class {
+                            class_changed = Some(code);
                         }
                     } else {
                         self.set_group(key, code);
@@ -506,32 +546,58 @@ impl ModalTracker {
                 }
                 Value::Str(text) if key_eq(key, FGROUP_COLUMN) => Self::set_text(&mut self.fgroup, text),
                 Value::Float(value) if key_eq(key, "F") => feed = Some(*value),
+                Value::Float(_) if key_eq(key, "FZ") => tooth_feed = true,
+                Value::Float(_) if key_eq(key, "FB") => block_feed = true,
                 Value::Float(radius) if key.starts_with(FGREF_PREFIX) => self.set_fgref(key, *radius),
                 _ => {}
             }
         }
-        // The control deletes F when the feed type changes (Axes and spindles 7.2.1).
-        if let (Some(code), None) = (feed_type_changed, feed) {
-            self.feed = None;
-            self.feed_deleted_by = Some(code.to_string());
+        // A change of feed unit class deletes F and FZ (Axes and spindles 7.2.1, 7.2.2).
+        if let Some(code) = class_changed {
+            if feed.is_none() {
+                self.feed = None;
+                self.feed_deleted_by = Some(code.to_string());
+            }
+            if !tooth_feed {
+                self.tooth_feed = false;
+            }
         }
         if let Some(value) = feed {
             self.feed = Some(value);
             self.feed_deleted_by = None;
         }
-        // Whether the block moves is only looked at when the feed is missing.
+        if tooth_feed {
+            self.tooth_feed = true;
+            self.feed_deleted_by = None;
+        }
+        // Axis cells are only looked at when they can matter.
+        let moves = |cells: &CellMap| {
+            cells
+                .iter()
+                .any(|(key, value)| matches!(value, Value::Float(_)) && !is_non_motion_value(key))
+        };
+        if dwell && moves(cells) {
+            return Err(TrackError::DwellNotAlone);
+        }
+        // FZ is a feed per tooth, so it only stands in for F under a revolutional feed.
+        let tooth = self.tooth_feed && self.feed_class.is_none_or(|class| class == FeedClass::PerRevolution);
         let missing = self.check_feed
             && self.feed.is_none()
-            && self.motion_uses_feed
+            && !tooth
+            && !block_feed
+            && (self.motion_uses_feed || tapping)
             && !no_feed_motion
-            && cells
-                .iter()
-                .any(|(key, value)| matches!(value, Value::Float(_)) && !is_non_motion_value(key));
+            && !dwell
+            && moves(cells);
         if missing {
-            return Err(MissingFeed {
-                motion: self.group("gg01_motion").unwrap_or_default().to_string(),
+            return Err(TrackError::MissingFeed(MissingFeed {
+                motion: if tapping {
+                    "G63".to_string()
+                } else {
+                    self.group("gg01_motion").unwrap_or_default().to_string()
+                },
                 deleted_by: self.feed_deleted_by.clone(),
-            });
+            }));
         }
         Ok(())
     }
@@ -808,15 +874,16 @@ impl OutputRows {
             }
         }
         rekey_g4_dwell(&mut row);
+        // Track before seeding: seeded values are start state, not words of this block.
+        if let Err(error) = self.modal.track(&row.cells) {
+            return Err(self.track_error(&row, error));
+        }
         if !self.seed.is_empty() && !row.cells.is_empty() {
             for (key, value) in self.seed.drain(..) {
                 if row.cells.get(key).is_none() {
                     row.cells.insert(key, value);
                 }
             }
-        }
-        if let Err(missing) = self.modal.track(&row.cells) {
-            return Err(self.missing_feed_error(&row, missing));
         }
         // G91 is parsed but incremental dimensioning is NOT applied: every
         // axis value is emitted as if absolute, so positions are wrong from
@@ -897,7 +964,7 @@ impl OutputRows {
         self.modal.check_feed = check_feed;
     }
 
-    fn missing_feed_error(&self, row: &Row, missing: MissingFeed) -> ParsingError {
+    fn track_error(&self, row: &Row, error: TrackError) -> ParsingError {
         let preview = self
             .source
             .as_ref()
@@ -908,10 +975,22 @@ impl OutputRows {
             (Some(Value::Str(path)), Some(Value::Float(line))) => format!(" (in subprogram {path}, line {line})"),
             _ => String::new(),
         };
-        let reason = match missing.deleted_by {
-            Some(code) => {
-                format!("the feed type changed to {code} and F was not programmed again (a feed type change deletes F)")
+        let missing = match error {
+            TrackError::MissingFeed(missing) => missing,
+            TrackError::DwellNotAlone => {
+                return ParsingError::ParsingContext {
+                    line_no: row.line_no,
+                    column: None,
+                    preview,
+                    context: "dwell".to_string(),
+                    message: format!("G4 must stand alone in its block{place}, without axis words (manual 3.14.7)"),
+                }
             }
+        };
+        let reason = match missing.deleted_by {
+            Some(code) => format!(
+                "the feed type changed to {code} and F was not programmed again (a change of feed unit deletes F)"
+            ),
             None => "no feed rate F has been programmed".to_string(),
         };
         ParsingError::FeedNotProgrammed {
@@ -919,7 +998,7 @@ impl OutputRows {
             preview,
             message: format!(
                 "{} block traverses a path{place}, but {reason}. Program F in this block or before it, \
-                 or pass the control's default feed (SD42110 $SC_DEFAULT_FEED) as start['feed'].",
+                 or pass the control's default feed (SD42110 $SC_DEFAULT_FEED) in start (key \"feed\").",
                 missing.motion
             ),
         }
@@ -1280,6 +1359,7 @@ fn is_feed_group_column(name: &str) -> bool {
 /// iterator so both fill identically.
 pub fn is_forward_filled_column(name: &str) -> bool {
     let is_value = name != "M"
+        && name != NON_MODAL_FEED_COLUMN
         && name != FLATTENED_COLUMN
         && name != DWELL_COLUMN
         && name != SUBPROGRAM_LINE_COLUMN
@@ -1288,6 +1368,10 @@ pub fn is_forward_filled_column(name: &str) -> bool {
         && !BLOCK_ADDRESSES.contains(&name);
     is_value || MODAL_G_GROUPS.contains(&name) || name == FGROUP_COLUMN || name == TRANSFORMATION_COLUMN
 }
+
+/// Non-modal feed `FB=` (Axes and spindles 7.4.10): applies to its own block
+/// only, so it is never forward-filled.
+pub const NON_MODAL_FEED_COLUMN: &str = "FB";
 
 /// Per-block dwell-time column: on a `G4` block the `F` word is the dwell
 /// time in seconds (`S` the dwell in spindle revolutions) - a block-local
@@ -1949,9 +2033,57 @@ mod feed_tests {
         ] {
             run(program, None).unwrap_or_else(|e| panic!("{program}: {e}"));
         }
-        assert_eq!(missing_on("G95 G1 X1 F0.1\nG96 S200\nX2"), 3);
+        // Only a change of unit class deletes F.
+        assert_eq!(missing_on("G96 S100 G1 X1 F0.1\nG961\nX2"), 3);
+        assert_eq!(missing_on("G94 G1 X1 F100\nG93\nX2"), 3);
+        for program in [
+            "G95 G1 F0.1 X1\nG96 S100\nX2",
+            "G96 S100 G1 F0.1 X1\nG97 S500\nX2",
+            "G94 G1 F100 X1\nG942\nX2",
+            "G94 G1 F100 X1\nG962\nX2",
+        ] {
+            run(program, None).unwrap_or_else(|e| panic!("{program}: {e}"));
+        }
         // G93 keeps its F from block to block (the manual only recommends a new F).
         run("G93 G1 X1 F2\nX2", None).unwrap();
+    }
+
+    #[test]
+    fn a_seeded_feed_is_state_and_a_class_change_deletes_it() {
+        let inputs = StartInputs {
+            start: Some(StartState {
+                feed: Some(100.0),
+                g_groups: vec![("gg15_feed_type".into(), "G94".into())],
+                ..StartState::default()
+            }),
+            ..StartInputs::default()
+        };
+        let error = nc_to_table("G95\nG1 X1", Some(&inputs), None, None, 1000, false, None, false, None).unwrap_err();
+        assert_eq!(error.kind(), "feed_not_programmed", "{error}");
+        assert_eq!(error.location().unwrap().line, 2);
+        let error = nc_to_table("G95 G1 X1", Some(&inputs), None, None, 1000, false, None, false, None).unwrap_err();
+        assert_eq!(error.location().unwrap().line, 1);
+    }
+
+    #[test]
+    fn tooth_feed_and_non_modal_feed_count() {
+        // The manual's FZ example (Axes and spindles 7.2.1).
+        run("G0 X100 Y50\nG1 G95 FZ=0.02\nT3 D1\nM3 S200\nX20", None).unwrap();
+        // FZ does not survive a change to a per-minute feed.
+        assert_eq!(missing_on("G1 G95 FZ=0.02 X1\nG94 X2"), 2);
+        // FB applies to its own block only (7.4.10).
+        run("G1 X1 FB=100", None).unwrap();
+        assert_eq!(missing_on("G1 X1 FB=100\nX2"), 2);
+    }
+
+    #[test]
+    fn tapping_needs_a_feed_and_a_dwell_stands_alone() {
+        assert_eq!(missing_on("G0 X0\nG63 Z-10 S300"), 2);
+        run("G63 Z-10 S300 F600", None).unwrap();
+        let error = run("G1 F100 X1\nG1 X2 G4 F2", None).unwrap_err();
+        assert!(error.to_string().contains("G4 must stand alone"), "{error}");
+        assert_eq!(error.location().unwrap().line, 2);
+        run("G1 F100 X1\nG4 F2\nX2", None).unwrap();
     }
 
     #[test]
