@@ -4,7 +4,7 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
-## [Unreleased]
+## [v0.2.10] - 2026-11-10
 
 ### Changed
 
@@ -30,6 +30,14 @@ released to PyPI.
   `DictColumn::NULL` for a null cell). Code that matches `Column`
   exhaustively needs one more arm; `DictColumn::iter` yields the cells as
   `Option<&str>` (#89).
+
+### Fixed
+
+- A numeric tool selection (`T2`, `T=3`, `T=R1`) now reaches the output table.
+  It is written to the same string `T` column as `T="name"`, as the number's
+  text (`"2"`), on the row of the block that programs it. Before, only named
+  tools appeared and a numeric one was dropped without a warning. The value is
+  still stored as the variable `T` in the final state, as before (#101).
 
 ## [v0.2.9] - 2026-11-01
 

@@ -800,6 +800,15 @@ const KNOWN_AXIS_COLUMNS: &[&str] = &[
     "X", "Y", "Z", "A", "B", "C", "D", "E", "F", "S", "U", "V", "RA1", "RA2", "RA3", "RA4", "RA5", "RA6",
 ];
 
+/// Text of a numeric tool selection (`T2`, `T=3`) for the string `T` column.
+pub(crate) fn tool_number_text(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
+}
+
 pub fn is_string_column(name: &str) -> bool {
     MODAL_G_GROUPS.contains(&name)
         || NON_MODAL_G_GROUPS.contains(&name)
