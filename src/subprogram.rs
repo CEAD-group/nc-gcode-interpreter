@@ -133,8 +133,6 @@ pub(crate) struct ExtState {
     /// Active modal G function per G group, as far as the program set them;
     /// a PROC with the SAVE attribute restores these on return.
     pub modal_g: HashMap<&'static str, String>,
-    /// The supplied subprogram the current block has called, if any.
-    pub called_in_block: Option<String>,
 }
 
 impl std::fmt::Debug for ExtState {
@@ -198,7 +196,6 @@ impl ExtState {
             flush: None,
             frames: Vec::new(),
             modal_g: HashMap::new(),
-            called_in_block: None,
         }
     }
 
@@ -450,6 +447,30 @@ mod tests {
         assert_eq!(lines, [None, Some(2), Some(2), Some(3)]);
         let error = run("LOOPING\n", &[("LOOPING", "LOOPING\n")]).unwrap_err();
         assert!(error.contains("nested more than"), "{error}");
+    }
+
+    #[test]
+    fn repetition_count_runs_the_body_and_is_recorded() {
+        let sub = "PROC STEP(VAR REAL AT)\nAT = AT + 1\nG1 X=AT\n";
+        let (table, _) = run("DEF REAL POS = 0\nSTEP(POS) P=3\nL6 P2\n", &[("STEP", sub)]).unwrap();
+        let moves: Vec<_> = floats(&table, "X").into_iter().flatten().collect();
+        assert_eq!(moves, [1.0, 2.0, 3.0]);
+        let calls: Vec<_> = texts(&table, "non_returning_function_call")
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(calls, ["STEP(POS)", "L6"]);
+        let counts = match &table.columns.iter().find(|(n, _)| n == "call_repetitions").unwrap().1 {
+            Column::Int(v) => v.iter().flatten().copied().collect::<Vec<_>>(),
+            other => panic!("call_repetitions is not an int column: {other:?}"),
+        };
+        assert_eq!(counts, [3, 2]);
+    }
+
+    #[test]
+    fn second_call_in_a_block_is_an_error() {
+        let error = run("FOO BAR\n", &[("FOO", "G1 X1\n")]).unwrap_err();
+        assert!(error.contains("BAR follows the call FOO in the same block"), "{error}");
     }
 
     #[test]

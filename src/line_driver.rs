@@ -88,7 +88,7 @@ enum Word<'a> {
     },
     /// An identifier that is neither a vocabulary command, a frame or
     /// reserved keyword, nor a word operator: a subprogram call with optional
-    /// numeric arguments, stored like `interpret_non_returning_function_call`.
+    /// numeric arguments, stored like the grammar path's call value.
     /// `value` preserves the trailing whitespace that pest's span includes;
     /// `typo_warn` mirrors `looks_like_axis_word_typo` and is emitted at
     /// execution time (like the pest path, once per execution, never for
@@ -870,7 +870,7 @@ fn parse_number(line: &str, i: &mut usize) -> Option<f64> {
 /// to parse), so the fast path must reject it to the grammar.
 const RESERVED_WORDS: &[&str] = &[
     "IF", "ELSE", "ENDIF", "GOTOB", "GOTOF", "GOTOC", "GOTOS", "GOTO", "CASE", "OF", "DEFAULT", "LOOP", "FOR", "WHILE",
-    "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP", "PROC", "EXTERN", "RET", "REDEF",
+    "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP", "PROC", "EXTERN", "RET", "REDEF", "PCALL",
 ];
 
 /// The grammar's word operators (op_int_div .. op_or). After a constant
@@ -1312,7 +1312,21 @@ fn decode_line_inner<'a>(
                         let value = &line[word_start..ws_end];
                         i = ws_end;
                         let typo_warn = !has_args && crate::interpret_rules::looks_like_axis_word_typo(word);
+                        // `P=3 FOO` is a repeat count before the name, an error the grammar reports.
+                        let p_before = arena[words_start..].iter().any(|w| match w {
+                            Word::Assign(key, _) | Word::AssignDynamic { key, .. } => key.eq_ignore_ascii_case("P"),
+                            _ => false,
+                        });
+                        if p_before {
+                            return DecodeResult::NeedsGrammar;
+                        }
                         arena.push(Word::Call { value, typo_warn });
+                        // A repetition count or a second call after the call needs the grammar.
+                        let mut rest = i;
+                        skip_ws(&mut rest);
+                        if rest < n_len && bytes[rest] != b';' {
+                            return DecodeResult::NeedsGrammar;
+                        }
                     }
                 }
             }
@@ -1532,9 +1546,15 @@ mod tests {
             "Y2O\nX10Y20",
             // calls that collide with special words are not claimed
             "DEF REAL DEPTH=2.5\nX=DEPTH\nTRANS X10\nX1\nTRANS\nX2",
+            // repetition counts and PCALL take the grammar
+            "X1\nL6 P2\nL6 P=2\nPCALL L6\nCALLED X2\nX3",
         ] {
             assert_paths_agree(program, false);
         }
+        // a second call in a block: identical error on both paths
+        assert_paths_agree("X1\nFOO BAR", false);
+        // a repeat count before the name: identical error on both paths
+        assert_paths_agree("X1\nP=3 FOO", false);
         // frame keyword mid-block: identical UnsupportedStatement error
         assert_paths_agree("G1 CROTS X0", false);
     }
@@ -1589,7 +1609,6 @@ M30
             "CUSTOM()",
             "CUSTOM ( )",
             "CUSTOM(1)   ; comment",
-            "CUSTOM(1) OTHER(2)",
         ] {
             let line = format!("N20 target: {call}");
             assert!(matches!(
@@ -1610,6 +1629,7 @@ M30
             "CUSTOM(1,,2)",
             "TRANS(1)",
             "IF(1)",
+            "CUSTOM(1) OTHER(2)",
         ] {
             assert!(matches!(
                 super::decode_line(call, 1, &mut Vec::new()),

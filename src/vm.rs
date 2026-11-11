@@ -20,7 +20,7 @@
 use super::{
     evaluate_condition, evaluate_expression, get_error_context, interpret_assignment, interpret_block_number,
     interpret_case, interpret_definition, interpret_frame_op, interpret_goto, interpret_if_goto, interpret_statement,
-    resolve_jump, scan_jump_targets, BlockFlow,
+    reject_second_call, resolve_jump, scan_jump_targets, BlockFlow,
 };
 use crate::errors::ParsingError;
 use crate::output::OutputRows as Output;
@@ -305,6 +305,7 @@ fn exec_block<'i>(block: Pair<'i, Rule>, output: &mut Output, state: &mut State)
         });
     }
     let line_no = block.line_col().0;
+    reject_second_call(&block, state)?;
     output.start_row(line_no)?;
 
     // Mirror `interpret_block`: process EVERY item, letting the control-flow
