@@ -1,6 +1,6 @@
 import json
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 
@@ -56,6 +56,40 @@ def _normalize_input(input: "TextFileLike | str | os.PathLike") -> tuple[str, bo
     return input.read(), False
 
 
+class ExternalVariables(Protocol):
+    """Answers the variables an NC program reads from the machine.
+
+    The interpreter knows no machine. Every read or write of a name listed in
+    ``names`` (``$A_IN``, ``$A_DBB``, ``$AA_IW``, a user variable the PLC
+    changes, ...) is passed to this object and not stored by the interpreter.
+    ``indices`` holds the array indices as ints, or the axis name where an
+    axis is used as index (``$AA_IW[X]`` gives ``("X",)``).
+
+    Where the program compares a served variable with a string, ``read`` must
+    return a ``str``. A frame assignment (``$P_UIFR[1] = CTRANS(X, 10) :
+    CROT(Z, 90)``) reaches ``write`` as ``[("CTRANS", ("X", 10.0)), ("CROT",
+    ("Z", 90.0))]``.
+
+    With :func:`nc_to_batches` the calls happen on the consuming thread, from
+    inside ``next()``, after every row that precedes the access was yielded.
+    """
+
+    names: Sequence[str]
+
+    def read(self, name: str, indices: tuple[int | str, ...]) -> float | str: ...
+
+    def write(
+        self,
+        name: str,
+        indices: tuple[int | str, ...],
+        value: "float | list[tuple[str, tuple[float | str, ...]]]",
+    ) -> None: ...
+
+
+def _subprogram_texts(subprograms: "Mapping[str, str] | None") -> dict[str, str] | None:
+    return None if subprograms is None else dict(subprograms)
+
+
 def nc_to_dataframe(
     input: "TextFileLike | str | os.PathLike",
     initial_state: TextFileLike | str | None = None,
@@ -67,6 +101,11 @@ def nc_to_dataframe(
     allow_undefined_variables: bool = False,
     flatten_tolerance: float | None = None,
     include_line_numbers: bool = False,
+    subprograms: "Mapping[str, str] | None" = None,
+    external_variables: "ExternalVariables | None" = None,
+    m_function_subprograms: "Mapping[int, str] | None" = None,
+    required_subprograms: "Iterable[str] | None" = None,
+    stop_on_setal: bool = False,
 ) -> tuple[pl.DataFrame, dict]:
     """
     Parses Sinumerik-flavored NC G-code and converts it into a Polars DataFrame along with the final state.
@@ -156,6 +195,14 @@ def nc_to_dataframe(
         input_is_path,
         flatten_tolerance,
         include_line_numbers,
+        False,
+        _subprogram_texts(subprograms),
+        external_variables,
+        None if m_function_subprograms is None else dict(m_function_subprograms),
+        None if required_subprograms is None else list(required_subprograms),
+        stop_on_setal,
+        # No row is read before the run ends, so a provider call need not wait for one.
+        defer_rows=True,
     )
     # pl.DataFrame wraps each Arrow record batch via __arrow_c_array__ (polars
     # >= 1.3), no pyarrow needed. Exhaust the iterator before reading .state.
@@ -570,6 +617,11 @@ def nc_to_batches(
     flatten_tolerance: float | None = None,
     include_line_numbers: bool = False,
     include_variables: bool = False,
+    subprograms: "Mapping[str, str] | None" = None,
+    external_variables: "ExternalVariables | None" = None,
+    m_function_subprograms: "Mapping[int, str] | None" = None,
+    required_subprograms: "Iterable[str] | None" = None,
+    stop_on_setal: bool = False,
 ) -> _BatchIterator:
     """Interpret an NC program into a stream of columnar polars DataFrames.
 
@@ -630,5 +682,10 @@ def nc_to_batches(
         flatten_tolerance,
         include_line_numbers,
         include_variables,
+        _subprogram_texts(subprograms),
+        external_variables,
+        None if m_function_subprograms is None else dict(m_function_subprograms),
+        None if required_subprograms is None else list(required_subprograms),
+        stop_on_setal,
     )
     return _BatchIterator(inner)

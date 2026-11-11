@@ -58,6 +58,9 @@ const UNSUPPORTED_ADDRESSES: &[(&str, &str)] = &[
     ("K1", "CIP intermediate point (I1= J1= K1=)"),
 ];
 
+/// Addresses in the configured axis list that are not channel axes (FGROUP, FGREF).
+pub const NON_AXIS_ADDRESSES: &[&str] = &["N", "F", "S", "D", "T"];
+
 /// Which kind of output column an assignment key resolves to. Variables (which
 /// never appear as output cells) are represented by the absence of a resolution
 /// (see [`State::resolve_output_key`]).
@@ -65,6 +68,8 @@ const UNSUPPORTED_ADDRESSES: &[(&str, &str)] = &[
 pub enum ColKind {
     Axis,
     Block,
+    /// Modal per-axis setting such as `FGREF[<axis>]`: forward-filled, never a variable.
+    Modal,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +133,8 @@ pub struct State {
     /// `output_keys` for one-letter keys in either case, indexed by the ASCII
     /// byte: most axis words (X, Y, Z, E, F, ...) resolve without hashing.
     one_letter_keys: [Option<(ColKind, &'static str)>; 128],
+    /// Subprogram texts, the external-variable provider and the call stack (#48).
+    pub(crate) ext: crate::subprogram::ExtState,
 }
 
 impl State {
@@ -179,6 +186,16 @@ impl State {
                 .or_insert((ColKind::Block, crate::output::intern_column(block)));
         }
 
+        for axis in &axis_identifiers {
+            let axis = axis.to_uppercase();
+            if NON_AXIS_ADDRESSES.contains(&axis.as_str()) {
+                continue;
+            }
+            let column = crate::output::fgref_column(&axis);
+            let interned = crate::output::intern_column(&column);
+            output_keys.insert(column, (ColKind::Modal, interned));
+        }
+
         let mut one_letter_keys = [None; 128];
         for (name, entry) in &output_keys {
             if let [byte] = name.as_bytes() {
@@ -212,6 +229,7 @@ impl State {
             input: SourceText::from(""),
             output_keys,
             one_letter_keys,
+            ext: crate::subprogram::ExtState::default(),
         }
     }
 
@@ -272,6 +290,15 @@ impl State {
             .collect::<Vec<_>>()
             .into();
         self.input = source;
+    }
+
+    /// Switch the program text diagnostics refer to, returning the previous
+    /// one. A subprogram call swaps its text in and the caller's back out.
+    pub(crate) fn swap_source(&mut self, source: SourceText, line_offsets: Arc<[usize]>) -> (SourceText, Arc<[usize]>) {
+        (
+            std::mem::replace(&mut self.input, source),
+            std::mem::replace(&mut self.line_offsets, line_offsets),
+        )
     }
 
     /// Gets a line from the input by line number (1-based indexing)

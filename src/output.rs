@@ -230,7 +230,13 @@ enum RowSink {
     /// traffic into a handful of whole-batch messages.
     #[allow(dead_code)] // constructed by the python-feature bindings, not the bin
     Batch(BatchStreamSink),
+    /// A batch sink the external-variable provider can flush between rows (#48).
+    #[allow(dead_code)]
+    SharedBatch(std::sync::Arc<std::sync::Mutex<BatchStreamSink>>),
 }
+
+/// Where a batch sink sends its finished tables; `Err` when the consumer is gone.
+pub type BatchSend = Box<dyn FnMut(Table) -> Result<(), ()> + Send>;
 
 /// Accumulates finished rows into whole columnar batches on the worker thread.
 /// Only cell-bearing rows count toward a batch (variable-only rows are dropped,
@@ -240,7 +246,8 @@ enum RowSink {
 /// program order - concatenating the emitted batches reconstructs the whole-file
 /// table byte-for-byte.
 pub struct BatchStreamSink {
-    sender: std::sync::mpsc::SyncSender<Table>,
+    /// `None` once finished, which releases the channel.
+    send: Option<BatchSend>,
     builder: BatchBuilder,
     buffer: Vec<Row>,
     /// Emptied rows kept for reuse: after a batch is built the buffered rows'
@@ -315,7 +322,7 @@ impl BatchStreamSink {
     /// Build and send the buffered rows as one [`Table`], threading the
     /// forward-fill carry into the next batch. A no-op when the buffer is empty
     /// (no trailing empty batch). Returns `StreamClosed` if the consumer hung up.
-    fn emit(&mut self) -> Result<(), ParsingError> {
+    pub(crate) fn emit(&mut self) -> Result<(), ParsingError> {
         if self.buffer.is_empty() {
             return Ok(());
         }
@@ -333,7 +340,18 @@ impl BatchStreamSink {
         // `rows` is now empty but keeps its `Vec<Row>` capacity - reinstate it as
         // the buffer so the outer vector is not reallocated each batch either.
         self.buffer = rows;
-        self.sender.send(table).map_err(|_| ParsingError::StreamClosed)
+        match self.send.as_mut() {
+            Some(send) => send(table).map_err(|_| ParsingError::StreamClosed),
+            None => Err(ParsingError::StreamClosed),
+        }
+    }
+
+    /// Send the trailing batch and the variable events, then release the channel.
+    fn close(&mut self) -> Result<(), ParsingError> {
+        self.emit()?;
+        self.send_events();
+        self.send = None;
+        Ok(())
     }
 }
 
@@ -357,6 +375,11 @@ pub struct OutputRows {
     flattened: Vec<Row>,
     /// Whether the once-per-run G91 warning has fired (see `flush`).
     warned_g91: bool,
+    /// Set while a subprogram runs: the main-program line of the outermost
+    /// call and the call path (`OUTER/INNER`), stamped on every row.
+    call_context: Option<(usize, String)>,
+    /// The call path and subprogram line to stamp on the row being filled.
+    current_subprogram: Option<(String, usize)>,
 }
 
 impl OutputRows {
@@ -368,6 +391,8 @@ impl OutputRows {
             flattener: None,
             flattened: Vec::new(),
             warned_g91: false,
+            call_context: None,
+            current_subprogram: None,
         }
     }
 
@@ -380,6 +405,8 @@ impl OutputRows {
             flattener: None,
             flattened: Vec::new(),
             warned_g91: false,
+            call_context: None,
+            current_subprogram: None,
         }
     }
 
@@ -419,10 +446,30 @@ impl OutputRows {
         events_sender: std::sync::mpsc::Sender<VariableEvents>,
         emit_line_no: bool,
     ) -> Self {
+        Self::batch_stream_to(
+            Box::new(move |table| sender.send(table).map_err(|_| ())),
+            batch_size,
+            disable_forward_fill,
+            record_variables,
+            events_sender,
+            emit_line_no,
+        )
+    }
+
+    /// As [`batch_stream_with_line_numbers`](Self::batch_stream_with_line_numbers),
+    /// sending each table through `send`.
+    pub fn batch_stream_to(
+        send: BatchSend,
+        batch_size: usize,
+        disable_forward_fill: bool,
+        record_variables: bool,
+        events_sender: std::sync::mpsc::Sender<VariableEvents>,
+        emit_line_no: bool,
+    ) -> Self {
         OutputRows {
             current: Row::default(),
             sink: RowSink::Batch(BatchStreamSink {
-                sender,
+                send: Some(send),
                 builder: BatchBuilder::new(disable_forward_fill).with_line_numbers(emit_line_no),
                 buffer: Vec::new(),
                 recycle: Vec::new(),
@@ -439,7 +486,41 @@ impl OutputRows {
             flattener: None,
             flattened: Vec::new(),
             warned_g91: false,
+            call_context: None,
+            current_subprogram: None,
         }
+    }
+
+    /// Move a batch sink behind a shared handle and return the handle, so the
+    /// external-variable provider can flush finished rows before it is asked.
+    /// `None` for sinks that hold no batches.
+    pub(crate) fn share_batch_sink(&mut self) -> Option<std::sync::Arc<std::sync::Mutex<BatchStreamSink>>> {
+        let sink = std::mem::replace(&mut self.sink, RowSink::Collect(Vec::new()));
+        match sink {
+            RowSink::Batch(sink) => {
+                let shared = std::sync::Arc::new(std::sync::Mutex::new(sink));
+                self.sink = RowSink::SharedBatch(shared.clone());
+                Some(shared)
+            }
+            RowSink::SharedBatch(shared) => {
+                self.sink = RowSink::SharedBatch(shared.clone());
+                Some(shared)
+            }
+            other => {
+                self.sink = other;
+                None
+            }
+        }
+    }
+
+    /// Set or clear the subprogram stamp for the rows started from here on,
+    /// returning the previous one.
+    pub(crate) fn set_call_context(&mut self, context: Option<(usize, String)>) -> Option<(usize, String)> {
+        std::mem::replace(&mut self.call_context, context)
+    }
+
+    pub(crate) fn call_context(&self) -> Option<&(usize, String)> {
+        self.call_context.as_ref()
     }
 
     /// Install a curve flattener: every subsequent row passes through it on
@@ -477,6 +558,8 @@ impl OutputRows {
                 flattener: None,
                 flattened: Vec::new(),
                 warned_g91: self.warned_g91,
+                call_context: self.call_context.clone(),
+                current_subprogram: self.current_subprogram.clone(),
             }),
             _ => None,
         }
@@ -488,8 +571,10 @@ impl OutputRows {
     /// the pool instead of being freed, so recycling stays effective on
     /// flattened paths too. A no-op for the non-recycling sinks.
     fn reclaim(&mut self, row: Row) {
-        if let RowSink::Batch(sink) = &mut self.sink {
-            sink.recycle.push(row);
+        match &mut self.sink {
+            RowSink::Batch(sink) => sink.recycle.push(row),
+            RowSink::SharedBatch(sink) => sink.lock().expect("batch sink mutex poisoned").recycle.push(row),
+            _ => {}
         }
     }
 
@@ -539,6 +624,7 @@ impl OutputRows {
             // interpretation instead of running the rest of the program.
             RowSink::Stream(sender) => sender.send(row).map(|_| None).map_err(|_| ParsingError::StreamClosed),
             RowSink::Batch(sink) => sink.accept(row),
+            RowSink::SharedBatch(sink) => sink.lock().expect("batch sink mutex poisoned").accept(row),
         }
     }
 
@@ -547,6 +633,13 @@ impl OutputRows {
             return Ok(());
         }
         let mut row = std::mem::take(&mut self.current);
+        // Stamped here, not at start: a block that yields no cell stays empty.
+        if let Some((path, line)) = self.current_subprogram.take() {
+            if !row.cells.is_empty() {
+                row.cells.insert(SUBPROGRAM_COLUMN, Value::Str(path));
+                row.cells.insert(SUBPROGRAM_LINE_COLUMN, Value::Float(line as f64));
+            }
+        }
         rekey_g4_dwell(&mut row);
         // G91 is parsed but incremental dimensioning is NOT applied: every
         // axis value is emitted as if absolute, so positions are wrong from
@@ -572,7 +665,16 @@ impl OutputRows {
     /// Begin the row for the block at `line_no`, flushing the previous row.
     pub fn start_row(&mut self, line_no: usize) -> Result<(), ParsingError> {
         self.flush()?;
-        self.current.line_no = line_no;
+        match &self.call_context {
+            Some((call_line, name)) => {
+                self.current.line_no = *call_line;
+                self.current_subprogram = Some((name.clone(), line_no));
+            }
+            None => {
+                self.current.line_no = line_no;
+                self.current_subprogram = None;
+            }
+        }
         Ok(())
     }
 
@@ -610,8 +712,11 @@ impl OutputRows {
             // Send the trailing partial batch (the buffered rows since the last
             // full batch), then close the channel by dropping the sender.
             RowSink::Batch(mut sink) => {
-                sink.emit()?;
-                sink.send_events();
+                sink.close()?;
+                Ok(Vec::new())
+            }
+            RowSink::SharedBatch(sink) => {
+                sink.lock().expect("batch sink mutex poisoned").close()?;
                 Ok(Vec::new())
             }
         }
@@ -845,10 +950,65 @@ pub(crate) fn tool_number_text(value: f64) -> String {
     }
 }
 
+/// The call path of the subprogram that produced a row (`OUTER/INNER`); null
+/// for main-program rows.
+pub const SUBPROGRAM_COLUMN: &str = "subprogram";
+/// The line of that row's block inside the innermost subprogram's text.
+pub const SUBPROGRAM_LINE_COLUMN: &str = "subprogram_line";
+
+/// The number of runs programmed with `P` on a subprogram call (manual
+/// 4.2.3.3); null on rows without one.
+pub const CALL_REPETITIONS_COLUMN: &str = "call_repetitions";
+
+/// The kinematic transformation in effect: the last TRAORI, TRANSMIT, TRACYL,
+/// TRAANG, TRACON or TRAFOOF call as written. Modal, so forward-filled.
+pub const TRANSFORMATION_COLUMN: &str = "transformation";
+
+/// The [`TRANSFORMATION_COLUMN`] value of a call, if it selects or deselects
+/// a transformation: uppercased, without whitespace.
+pub fn transformation_value(call: &str) -> Option<String> {
+    let name = call.split('(').next().unwrap_or("").trim();
+    ["TRAORI", "TRANSMIT", "TRACYL", "TRAANG", "TRACON", "TRAFOOF"]
+        .iter()
+        .any(|kw| kw.eq_ignore_ascii_case(name))
+        .then(|| call.split_whitespace().collect::<String>().to_uppercase())
+}
+
 pub fn is_string_column(name: &str) -> bool {
-    MODAL_G_GROUPS.contains(&name)
-        || NON_MODAL_G_GROUPS.contains(&name)
-        || matches!(name, "T" | "non_returning_function_call" | "comment")
+    is_dict_column(name)
+        || matches!(
+            name,
+            "T" | "non_returning_function_call" | "comment" | SUBPROGRAM_COLUMN | TRANSFORMATION_COLUMN
+        )
+}
+
+/// String columns held as per-batch dictionary codes: the G groups and the
+/// feed group, which take a few distinct values repeated over long runs.
+fn is_dict_column(name: &str) -> bool {
+    MODAL_G_GROUPS.contains(&name) || NON_MODAL_G_GROUPS.contains(&name) || name == FGROUP_COLUMN
+}
+
+/// Modal feed-group column (`FGROUP(<axes>)`, manual 3.7.1): the channel axes
+/// the path feed `F` refers to, comma-separated as programmed, on the block
+/// that programs it. `FGROUP()` gives the empty string, which means the
+/// machine-data default set; rows before any `FGROUP` are null, which means
+/// the same. The interpreter does not know that default, so it never names
+/// the axes in it.
+pub const FGROUP_COLUMN: &str = "FGROUP";
+
+/// Prefix of the per-axis reference-radius columns `FGREF[<axis>]` (manual
+/// 3.7.1). A column exists only for an axis the program sets; null before the
+/// first assignment means the control default (360 mm / 2 pi for a rotary
+/// axis, 1 mm for a linear one).
+pub const FGREF_PREFIX: &str = "FGREF[";
+
+/// Output column name of the reference radius of `axis` (uppercase).
+pub fn fgref_column(axis: &str) -> String {
+    format!("{FGREF_PREFIX}{axis}]")
+}
+
+fn is_feed_group_column(name: &str) -> bool {
+    name == FGROUP_COLUMN || name.starts_with(FGREF_PREFIX)
 }
 
 /// Whether a column is forward-filled in the sanitized table: value columns
@@ -859,9 +1019,11 @@ pub fn is_forward_filled_column(name: &str) -> bool {
     let is_value = name != "M"
         && name != FLATTENED_COLUMN
         && name != DWELL_COLUMN
+        && name != SUBPROGRAM_LINE_COLUMN
+        && name != CALL_REPETITIONS_COLUMN
         && !is_string_column(name)
         && !BLOCK_ADDRESSES.contains(&name);
-    is_value || MODAL_G_GROUPS.contains(&name)
+    is_value || MODAL_G_GROUPS.contains(&name) || name == FGROUP_COLUMN || name == TRANSFORMATION_COLUMN
 }
 
 /// Per-block dwell-time column: on a `G4` block the `F` word is the dwell
@@ -906,7 +1068,8 @@ pub const LINE_NO_COLUMN: &str = "line_no";
 /// Canonical output-column order over the set of columns present so far:
 /// N, modal then non-modal G-group columns, the fixed axis columns, any
 /// remaining value columns (e.g. user extra axes) in alphabetical order, the
-/// spline/arc block addresses, then T, M, function calls and comment. Column
+/// feed group and its reference radii, the spline/arc block addresses, then
+/// T, M, function calls and comment. Column
 /// names are `&'static str` (constant vocabulary or interned row keys), so the
 /// order is comparison-by-content and independent of which `&'static str`
 /// instance carries a given name.
@@ -934,18 +1097,46 @@ fn canonical_order(present: &FxSet<&'static str>) -> Vec<&'static str> {
                 && !BLOCK_ADDRESSES.contains(name)
                 && *name != FLATTENED_COLUMN
                 && *name != DWELL_COLUMN
-                && !matches!(*name, "T" | "M" | "non_returning_function_call" | "comment")
+                && !is_feed_group_column(name)
+                && !matches!(
+                    *name,
+                    "T" | "M"
+                        | "non_returning_function_call"
+                        | CALL_REPETITIONS_COLUMN
+                        | "comment"
+                        | SUBPROGRAM_COLUMN
+                        | SUBPROGRAM_LINE_COLUMN
+                        | TRANSFORMATION_COLUMN
+                )
         })
         .collect();
     extra.sort_unstable();
     ordered.extend(extra);
+    // The feed group and its reference radii qualify the axis columns.
+    push_if_present(intern_column(FGROUP_COLUMN), &mut ordered);
+    let mut radii: Vec<&'static str> = present
+        .iter()
+        .copied()
+        .filter(|name| name.starts_with(FGREF_PREFIX))
+        .collect();
+    radii.sort_unstable();
+    ordered.extend(radii);
     // Block addresses (spline PW/SD/PL) come after the axes.
     for &name in BLOCK_ADDRESSES {
         push_if_present(name, &mut ordered);
     }
     push_if_present(intern_column(DWELL_COLUMN), &mut ordered);
     push_if_present(intern_column(FLATTENED_COLUMN), &mut ordered);
-    for name in ["T", "M", "non_returning_function_call", "comment"] {
+    for name in [
+        TRANSFORMATION_COLUMN,
+        "T",
+        "M",
+        "non_returning_function_call",
+        CALL_REPETITIONS_COLUMN,
+        SUBPROGRAM_COLUMN,
+        SUBPROGRAM_LINE_COLUMN,
+        "comment",
+    ] {
         push_if_present(name, &mut ordered);
     }
     ordered
@@ -1125,11 +1316,11 @@ enum ColumnBuilder {
 
 impl ColumnBuilder {
     fn new(name: &str, height: usize) -> Self {
-        if name == "N" {
+        if name == "N" || name == SUBPROGRAM_LINE_COLUMN || name == CALL_REPETITIONS_COLUMN {
             ColumnBuilder::Int(vec![None; height])
         } else if name == "M" {
             ColumnBuilder::StrList(vec![None; height])
-        } else if MODAL_G_GROUPS.contains(&name) || NON_MODAL_G_GROUPS.contains(&name) {
+        } else if is_dict_column(name) {
             ColumnBuilder::Dict(DictColumn {
                 values: Vec::new(),
                 codes: vec![DictColumn::NULL; height],

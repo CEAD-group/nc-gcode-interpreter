@@ -16,6 +16,7 @@ mod modal_groups;
 mod output;
 mod state;
 mod structure_scan;
+mod subprogram;
 mod types;
 
 use interpreter::nc_to_table;

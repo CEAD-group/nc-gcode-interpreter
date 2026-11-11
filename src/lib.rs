@@ -13,6 +13,7 @@ mod modal_groups;
 pub mod output;
 mod state;
 mod structure_scan;
+pub mod subprogram;
 
 // Unstable research helpers, excluded from normal library/Python builds.
 #[cfg(feature = "bench-experiments")]
@@ -24,7 +25,7 @@ mod python_bindings {
     use pyo3::prelude::*;
     use pyo3::pybacked::PyBackedStr;
     use pyo3::types::PyCapsule;
-    use pyo3::types::{PyDict, PyList};
+    use pyo3::types::{PyDict, PyList, PyTuple};
     use pyo3::wrap_pyfunction;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -65,9 +66,10 @@ mod python_bindings {
     use std::sync::{mpsc, Mutex};
 
     use crate::errors::ErrorLocation;
-    use crate::interpreter::{nc_to_batch_stream_with_line_numbers, nc_to_row_stream, SourceText};
+    use crate::interpreter::{nc_to_batch_stream_with, nc_to_row_stream, SourceText};
     use crate::output::{is_forward_filled_column, is_string_column, Column, Row, Table, VariableEvents};
     use crate::state::FinalState;
+    use crate::subprogram::{Extensions, ExternalError, ExternalIndex, ExternalVariables, FrameArgument, FrameTerm};
     use crate::types::Value;
 
     pyo3::create_exception!(
@@ -328,8 +330,14 @@ mod python_bindings {
         flatten_tolerance: Option<f64>,
         emit_line_no: bool,
         include_variables: bool,
+        subprograms: HashMap<String, String>,
+        external_names: Option<Vec<String>>,
+        m_functions: HashMap<u32, String>,
+        required_subprograms: Vec<String>,
+        stop_on_setal: bool,
+        defer_rows: bool,
     ) -> PyResult<(
-        mpsc::Receiver<Table>,
+        mpsc::Receiver<WorkerMessage>,
         mpsc::Receiver<Result<FinalState, ErrInfo>>,
         mpsc::Receiver<VariableEvents>,
         std::thread::JoinHandle<()>,
@@ -337,7 +345,26 @@ mod python_bindings {
         // A cap of 3 lets the worker build one batch ahead while the consumer
         // converts the previous one to a polars DataFrame, without unbounded
         // buffering.
-        let (batch_sender, batch_receiver) = mpsc::sync_channel::<Table>(3);
+        let (batch_sender, batch_receiver) = mpsc::sync_channel::<WorkerMessage>(3);
+        let external = external_names.map(|names| {
+            let provider: Box<dyn ExternalVariables> = Box::new(ChannelProvider {
+                sender: batch_sender.clone(),
+            });
+            (names, provider)
+        });
+        let extensions = Extensions {
+            subprograms,
+            external,
+            m_functions,
+            required_subprograms,
+            stop_on_setal,
+            defer_rows,
+        };
+        if let Some(name) = extensions.duplicate_subprogram() {
+            return Err(PyErr::new::<PyValueError, _>(format!(
+                "subprograms has more than one entry for {name} (names are not case-sensitive)"
+            )));
+        }
         let (result_sender, result_receiver) = mpsc::sync_channel::<Result<FinalState, ErrInfo>>(1);
         // Variable-change events are a small sparse side-table sent once at the
         // end; an unbounded channel so the worker never blocks emitting them
@@ -347,7 +374,7 @@ mod python_bindings {
         let handle = std::thread::Builder::new()
             .name("nc-interpreter".to_string())
             .spawn(move || {
-                let outcome = nc_to_batch_stream_with_line_numbers(
+                let outcome = nc_to_batch_stream_with(
                     input,
                     initial_state.as_deref(),
                     axis_identifiers,
@@ -359,9 +386,10 @@ mod python_bindings {
                     flatten_tolerance,
                     batch_size,
                     emit_line_no,
-                    batch_sender,
+                    Box::new(move |table| batch_sender.send(WorkerMessage::Batch(table)).map_err(|_| ())),
                     include_variables,
                     events_sender,
+                    extensions,
                 );
                 let message = match outcome {
                     Ok(state) => Ok(state.final_state()),
@@ -373,6 +401,148 @@ mod python_bindings {
             })
             .map_err(|e| PyErr::new::<PyValueError, _>(format!("failed to spawn interpreter thread: {}", e)))?;
         Ok((batch_receiver, result_receiver, events_receiver, handle))
+    }
+
+    /// What the interpreter thread sends the batch iterator: a finished batch,
+    /// or an external-variable access it waits on. One channel keeps them in
+    /// program order.
+    enum WorkerMessage {
+        Batch(Table),
+        Read {
+            name: String,
+            indices: Vec<ExternalIndex>,
+            reply: mpsc::SyncSender<Result<f64, String>>,
+        },
+        ReadText {
+            name: String,
+            indices: Vec<ExternalIndex>,
+            reply: mpsc::SyncSender<Result<String, String>>,
+        },
+        Write {
+            name: String,
+            indices: Vec<ExternalIndex>,
+            value: f64,
+            reply: mpsc::SyncSender<Result<(), String>>,
+        },
+        WriteFrame {
+            name: String,
+            indices: Vec<ExternalIndex>,
+            frame: Vec<FrameTerm>,
+            reply: mpsc::SyncSender<Result<(), String>>,
+        },
+    }
+
+    /// The interpreter-thread end of the Python provider: forwards each access
+    /// to the consumer thread and blocks until it answers.
+    struct ChannelProvider {
+        sender: mpsc::SyncSender<WorkerMessage>,
+    }
+
+    impl ChannelProvider {
+        fn ask<T>(&self, message: WorkerMessage, reply: mpsc::Receiver<Result<T, String>>) -> Result<T, ExternalError> {
+            self.sender.send(message).map_err(|_| ExternalError::Closed)?;
+            match reply.recv() {
+                Ok(Ok(value)) => Ok(value),
+                Ok(Err(message)) => Err(ExternalError::Failed(message)),
+                Err(_) => Err(ExternalError::Closed),
+            }
+        }
+    }
+
+    impl ExternalVariables for ChannelProvider {
+        fn read(&mut self, name: &str, indices: &[ExternalIndex]) -> Result<f64, ExternalError> {
+            let (reply, answer) = mpsc::sync_channel(1);
+            self.ask(
+                WorkerMessage::Read {
+                    name: name.to_string(),
+                    indices: indices.to_vec(),
+                    reply,
+                },
+                answer,
+            )
+        }
+
+        fn write(&mut self, name: &str, indices: &[ExternalIndex], value: f64) -> Result<(), ExternalError> {
+            let (reply, answer) = mpsc::sync_channel(1);
+            self.ask(
+                WorkerMessage::Write {
+                    name: name.to_string(),
+                    indices: indices.to_vec(),
+                    value,
+                    reply,
+                },
+                answer,
+            )
+        }
+
+        fn read_text(&mut self, name: &str, indices: &[ExternalIndex]) -> Result<String, ExternalError> {
+            let (reply, answer) = mpsc::sync_channel(1);
+            self.ask(
+                WorkerMessage::ReadText {
+                    name: name.to_string(),
+                    indices: indices.to_vec(),
+                    reply,
+                },
+                answer,
+            )
+        }
+
+        fn write_frame(
+            &mut self,
+            name: &str,
+            indices: &[ExternalIndex],
+            frame: &[FrameTerm],
+        ) -> Result<(), ExternalError> {
+            let (reply, answer) = mpsc::sync_channel(1);
+            self.ask(
+                WorkerMessage::WriteFrame {
+                    name: name.to_string(),
+                    indices: indices.to_vec(),
+                    frame: frame.to_vec(),
+                    reply,
+                },
+                answer,
+            )
+        }
+    }
+
+    /// A frame chain as the Python provider receives it:
+    /// `[("CTRANS", ("X", 10.0)), ("CROT", ("Z", 90.0))]`.
+    fn frame_to_py<'py>(py: Python<'py>, frame: &[FrameTerm]) -> PyResult<Bound<'py, PyList>> {
+        let terms: Vec<Py<PyAny>> = frame
+            .iter()
+            .map(|term| {
+                let arguments: Vec<Py<PyAny>> = term
+                    .arguments
+                    .iter()
+                    .map(|argument| {
+                        Ok(match argument {
+                            FrameArgument::Axis(a) => a.into_pyobject(py)?.into_any().unbind(),
+                            FrameArgument::Number(n) => n.into_pyobject(py)?.into_any().unbind(),
+                        })
+                    })
+                    .collect::<PyResult<_>>()?;
+                Ok((term.function.as_str(), PyTuple::new(py, arguments)?)
+                    .into_pyobject(py)?
+                    .into_any()
+                    .unbind())
+            })
+            .collect::<PyResult<_>>()?;
+        PyList::new(py, terms)
+    }
+
+    /// The index tuple handed to the Python provider: ints and axis names.
+    fn indices_to_py<'py>(py: Python<'py>, indices: &[ExternalIndex]) -> PyResult<Bound<'py, PyTuple>> {
+        let items: Vec<Py<PyAny>> = indices
+            .iter()
+            .map(|index| {
+                Ok(match index {
+                    ExternalIndex::Int(i) => i.into_pyobject(py)?.into_any().unbind(),
+                    ExternalIndex::Name(n) => n.into_pyobject(py)?.into_any().unbind(),
+                })
+            })
+            .collect::<PyResult<_>>()?;
+        PyTuple::new(py, items)
     }
 
     /// Iterator over interpreted rows: `next()` yields
@@ -597,7 +767,9 @@ mod python_bindings {
     /// whole-file `nc_to_dataframe` table.
     #[pyclass]
     struct NcBatchIterator {
-        batches: Option<Mutex<mpsc::Receiver<Table>>>,
+        batches: Option<Mutex<mpsc::Receiver<WorkerMessage>>>,
+        /// The Python provider answering external-variable accesses.
+        external: Option<Py<PyAny>>,
         result: Option<Mutex<mpsc::Receiver<Result<FinalState, ErrInfo>>>>,
         /// Set at construction only when `include_variables`; drained at finish
         /// into `variable_events`.
@@ -610,6 +782,40 @@ mod python_bindings {
     }
 
     impl NcBatchIterator {
+        fn provider<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+            self.external
+                .as_ref()
+                .map(|provider| provider.bind(py).clone())
+                .ok_or_else(|| PyErr::new::<PyValueError, _>("external variable access without a provider"))
+        }
+
+        /// Answer the interpreter thread. A provider exception ends the run:
+        /// the worker is released with a failure and the exception propagates
+        /// to the caller of `next()` unchanged.
+        fn reply<T>(
+            &mut self,
+            py: Python<'_>,
+            reply: mpsc::SyncSender<Result<T, String>>,
+            answer: PyResult<T>,
+        ) -> PyResult<()> {
+            match answer {
+                Ok(value) => {
+                    let _ = reply.send(Ok(value));
+                    Ok(())
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(error.to_string()));
+                    // Drop the channel: the worker's error is superseded by this one.
+                    self.batches = None;
+                    self.result = None;
+                    self.events = None;
+                    let _ = py;
+                    self.join();
+                    Err(error)
+                }
+            }
+        }
+
         fn finish(&mut self, py: Python<'_>) -> PyResult<()> {
             if let Some(result) = self.result.take() {
                 let receiver = result.into_inner().expect("result receiver mutex poisoned");
@@ -650,34 +856,81 @@ mod python_bindings {
         }
 
         fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-            let Some(mutex) = self.batches.take() else {
-                // The channel closed on a previous call (its final batch was
-                // already yielded); finalize now - capture the state or raise
-                // the interpreter's error, mirroring nc_to_rows.
-                self.finish(py)?;
-                return Ok(None);
-            };
-            // Wait for the next whole batch with the GIL released; the owned
-            // Receiver moves into the detached closure and back out. The worker
-            // built the columnar `Table` already (off this thread), so all that
-            // remains here is converting it to a polars DataFrame below.
-            let receiver = mutex.into_inner().expect("batch receiver mutex poisoned");
-            let (received, receiver) = py.detach(move || {
-                let received = receiver.recv();
-                (received, receiver)
-            });
-            match received {
-                Ok(table) => {
-                    self.batches = Some(Mutex::new(receiver));
-                    let batch = table_to_arrow_batch(table)?;
-                    Ok(Some(Py::new(py, batch)?.into_any()))
-                }
-                // Channel closed: interpretation is done (or failed). Capture
-                // the final state / raise the error.
-                Err(_) => {
-                    self.batches = None;
+            loop {
+                let Some(mutex) = self.batches.take() else {
+                    // The channel closed on a previous call (its final batch was
+                    // already yielded); finalize now - capture the state or raise
+                    // the interpreter's error, mirroring nc_to_rows.
                     self.finish(py)?;
-                    Ok(None)
+                    return Ok(None);
+                };
+                // Wait for the next message with the GIL released; the owned
+                // Receiver moves into the detached closure and back out. The worker
+                // built the columnar `Table` already (off this thread), so all that
+                // remains here is converting it to a polars DataFrame below.
+                let receiver = mutex.into_inner().expect("batch receiver mutex poisoned");
+                let (received, receiver) = py.detach(move || {
+                    let received = receiver.recv();
+                    (received, receiver)
+                });
+                let message = match received {
+                    Ok(message) => {
+                        self.batches = Some(Mutex::new(receiver));
+                        message
+                    }
+                    // Channel closed: interpretation is done (or failed). Capture
+                    // the final state / raise the error.
+                    Err(_) => {
+                        self.batches = None;
+                        self.finish(py)?;
+                        return Ok(None);
+                    }
+                };
+                // An access is answered here, on the consumer's thread, after
+                // every batch that precedes it was returned from `next()`.
+                match message {
+                    WorkerMessage::Batch(table) => {
+                        let batch = table_to_arrow_batch(table)?;
+                        return Ok(Some(Py::new(py, batch)?.into_any()));
+                    }
+                    WorkerMessage::Read { name, indices, reply } => {
+                        let answer = self
+                            .provider(py)?
+                            .call_method1("read", (name, indices_to_py(py, &indices)?))
+                            .and_then(|value| value.extract::<f64>());
+                        self.reply(py, reply, answer)?;
+                    }
+                    WorkerMessage::ReadText { name, indices, reply } => {
+                        let answer = self
+                            .provider(py)?
+                            .call_method1("read", (name, indices_to_py(py, &indices)?))
+                            .and_then(|value| value.extract::<String>());
+                        self.reply(py, reply, answer)?;
+                    }
+                    WorkerMessage::WriteFrame {
+                        name,
+                        indices,
+                        frame,
+                        reply,
+                    } => {
+                        let answer = self
+                            .provider(py)?
+                            .call_method1("write", (name, indices_to_py(py, &indices)?, frame_to_py(py, &frame)?))
+                            .map(|_| ());
+                        self.reply(py, reply, answer)?;
+                    }
+                    WorkerMessage::Write {
+                        name,
+                        indices,
+                        value,
+                        reply,
+                    } => {
+                        let answer = self
+                            .provider(py)?
+                            .call_method1("write", (name, indices_to_py(py, &indices)?, value))
+                            .map(|_| ());
+                        self.reply(py, reply, answer)?;
+                    }
                 }
             }
         }
@@ -718,7 +971,7 @@ mod python_bindings {
     /// thread. Wrapping each with `pl.DataFrame` and concatenating reconstructs
     /// `nc_to_dataframe`.
     #[pyfunction]
-    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false))]
+    #[pyo3(signature = (input, batch_size = 500_000, initial_state = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false, subprograms = None, external_variables = None, m_function_subprograms = None, required_subprograms = None, stop_on_setal = false, defer_rows = false))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_batches(
         input: PyBackedStr,
@@ -734,7 +987,19 @@ mod python_bindings {
         flatten_tolerance: Option<f64>,
         include_line_numbers: bool,
         include_variables: bool,
+        subprograms: Option<HashMap<String, String>>,
+        external_variables: Option<Py<PyAny>>,
+        m_function_subprograms: Option<HashMap<u32, String>>,
+        required_subprograms: Option<Vec<String>>,
+        stop_on_setal: bool,
+        defer_rows: bool,
+        py: Python<'_>,
     ) -> PyResult<NcBatchIterator> {
+        // The provider declares the variable names it serves.
+        let external_names = external_variables
+            .as_ref()
+            .map(|provider| provider.bind(py).getattr("names")?.extract::<Vec<String>>())
+            .transpose()?;
         if batch_size == 0 {
             return Err(PyErr::new::<PyValueError, _>("batch_size must be greater than 0"));
         }
@@ -753,10 +1018,17 @@ mod python_bindings {
             flatten_tolerance,
             include_line_numbers,
             include_variables,
+            subprograms.unwrap_or_default(),
+            external_names,
+            m_function_subprograms.unwrap_or_default(),
+            required_subprograms.unwrap_or_default(),
+            stop_on_setal,
+            defer_rows,
         )?;
 
         Ok(NcBatchIterator {
             batches: Some(Mutex::new(batch_receiver)),
+            external: external_variables,
             result: Some(Mutex::new(result_receiver)),
             // Only hold the events receiver when recording; otherwise leave it
             // `None` so `.variable_events` stays `None`.
