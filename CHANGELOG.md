@@ -4,6 +4,94 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- Subprogram execution (#48). `nc_to_dataframe` and `nc_to_batches` take
+  `subprograms`, a mapping of subprogram name to source text. A call whose
+  name is in the mapping runs that text; any other call stays a
+  `non_returning_function_call` cell as before. Supported: a `PROC` header
+  with by-value parameters (numbers and strings, with defaults), `VAR`
+  parameters and `VAR` array parameters, local `DEF` variables (invisible to
+  callees, gone on return), return on `M17` or `RET`, and nested calls up to
+  16 levels. Rows produced inside a call keep the main-program line of the
+  call in `line_no` and carry two new columns: `subprogram`, the call path
+  (`OUTER/INNER`), and `subprogram_line`, the line inside that subprogram's
+  text. The interpreter does not read files; the caller supplies the texts.
+- `m_function_subprograms`, a mapping of M function number to subprogram
+  name: the subprogram runs at the end of every block that programs that M
+  function, as a control does for a tool-change cycle on `M6`. It does not
+  apply inside the replacement subprogram itself.
+- External variables. `external_variables` takes a provider object with
+  `names`, `read(name, indices)` and `write(name, indices, value)`. Every
+  read or write of a listed name (`$A_IN`, `$A_DBB`, `$AA_IM`, or any other
+  variable name) goes to the provider and is not stored by the interpreter,
+  so a program can branch and wait on machine state the interpreter does not
+  model. Indices arrive as ints, or as the axis name where an axis is the
+  index. With `nc_to_batches` the rows produced so far are yielded before the
+  provider is asked, and the provider is called on the consuming thread, so
+  a simulator can play those rows first. An exception raised by the provider
+  ends the run and propagates unchanged.
+- Rust API: `interpreter::nc_to_table_with` and
+  `interpreter::nc_to_batch_stream_with` take a `subprogram::Extensions`
+  value with the same extensions; the provider is the
+  `subprogram::ExternalVariables` trait.
+- `required_subprograms`: a call of a listed name that is not among
+  `subprograms` is an error that names the call path, where it would
+  otherwise stay an opaque cell.
+- `stop_on_setal`: a `SETAL` call ends the run with an error that carries the
+  call as written and the call path.
+- String comparison with `==` and `<>` in conditions and expressions
+  (`IF (KIND == "MILL")`). Other operators on strings, and a string compared
+  with a number, are errors. A served external variable compared with a
+  string is read from the provider as text (`read` returns a `str`).
+- A frame value assigned to a served external variable
+  (`$P_UIFR[7] = CTRANS(X, 10) : CROT(Z, 90)`) reaches the provider's `write`
+  as `[("CTRANS", ("X", 10.0)), ("CROT", ("Z", 90.0))]`. Assigned to any
+  other variable it is an error.
+- Machine axis names (`AX1`) and frame components (`TR`, `FI`, `RT`, `SC`,
+  `MI`) are passed to the provider as index names.
+- `transformation` column: the last `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`,
+  `TRACON` or `TRAFOOF` call as written, forward-filled like a modal G group.
+  The call also stays in `non_returning_function_call`.
+- Definition files parse: the `DEF` attributes for range, preprocessing stop,
+  access rights, unit and limits (`DEF CHAN APW 4 REAL LLI 0 ULI 10 NAME`),
+  the `CHAR` type, and attribute-only `REDEF` lines are accepted and not
+  interpreted.
+- Array assignment as a statement: `NAME[n] = SET(v, ...)` and
+  `NAME[n] = REP(v[, count])` write consecutive elements starting at the
+  indexed one, last index fastest. Before, only the `DEF` initializer form
+  was interpreted and the statement form was an internal error.
+- A subprogram whose `PROC` header has the `SAVE` attribute gives the caller
+  back its modal G functions on return: each G group the subprogram changed
+  gets the caller's value on the row after the body's rows. A group the
+  program never set before the call cannot be restored and gives a warning.
+- Loud errors for constructs the subprogram mechanism does not model: a
+  repeat count after a call (`NAME P3`), a `FOR` counter, a `PROC` parameter
+  or a local `DEF` with the name of an external variable, a string assigned
+  to an external variable, a `PROC` parameter with the name of an axis or
+  address, `SET`/`REP` statements that write past the declared array, and
+  two `subprograms` entries whose names differ only in case.
+
+### Changed
+
+- A program that calls `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`, `TRACON` or
+  `TRAFOOF` gets the new `transformation` column, also when it uses none of
+  the new arguments.
+- `PROC`, `EXTERN` and `RET` are reserved words and no longer read as
+  subprogram calls. A `PROC` header and an `EXTERN` declaration produce no
+  output; `RET` ends the program at the top level like `M17`. Before,
+  `PROC FOO SAVE` was recorded as a call named `SAVE` and `RET` as a call
+  while interpretation continued (part of #105). A main program whose `PROC`
+  header declares parameters is an error.
+- When any of the three extensions is used, the program is interpreted by
+  the grammar path and not the line fast path, which is slower on very large
+  programs. Runs without the extensions are unaffected.
+- `DEF REAL A[n]` declares the elements `A[0]` to `A[n-1]`. Before, it also
+  created `A[n]`, so an out-of-range access went unnoticed.
+- `REDEF` is a reserved word.
+
 ## [v0.2.10] - 2026-11-10
 
 ### Changed

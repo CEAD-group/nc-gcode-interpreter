@@ -3,6 +3,7 @@ use crate::errors::ParsingError;
 use crate::interpret_rules::{interpret_blocks, BlockFlow};
 use crate::output::{OutputRows, Row, Table};
 use crate::state::{self, State};
+use crate::subprogram::Extensions;
 use crate::types::{NCParser, Rule};
 use pest::Parser;
 use std::collections::HashMap;
@@ -71,6 +72,35 @@ pub fn nc_to_table(
     allow_undefined_variables: bool,
     flatten_tolerance: Option<f64>,
 ) -> Result<(Table, state::State), ParsingError> {
+    nc_to_table_with(
+        input,
+        initial_state,
+        axis_identifiers,
+        extra_axes,
+        iteration_limit,
+        disable_forward_fill,
+        axis_index_map,
+        allow_undefined_variables,
+        flatten_tolerance,
+        Extensions::default(),
+    )
+}
+
+/// As [`nc_to_table`], with subprogram texts and an external-variable
+/// provider (see [`crate::subprogram`]).
+#[allow(clippy::too_many_arguments)]
+pub fn nc_to_table_with(
+    input: impl Into<SourceText>,
+    initial_state: Option<&str>,
+    axis_identifiers: Option<Vec<String>>,
+    extra_axes: Option<Vec<String>>,
+    iteration_limit: usize,
+    disable_forward_fill: bool,
+    axis_index_map: Option<HashMap<String, usize>>,
+    allow_undefined_variables: bool,
+    flatten_tolerance: Option<f64>,
+    extensions: Extensions,
+) -> Result<(Table, state::State), ParsingError> {
     let mut state = build_state(
         axis_identifiers,
         extra_axes,
@@ -78,6 +108,15 @@ pub fn nc_to_table(
         axis_index_map,
         allow_undefined_variables,
     );
+    if let Some(name) = extensions.duplicate_subprogram() {
+        return Err(ParsingError::with_context(
+            0,
+            String::new(),
+            "subprograms".to_string(),
+            format!("more than one entry for {name} (names are not case-sensitive)"),
+        ));
+    }
+    state.ext = crate::subprogram::ExtState::new(extensions);
     if let Some(initial_state) = initial_state {
         // Propagate the error instead of exiting: this is library code, and
         // process::exit would kill e.g. a host Python interpreter. The rows
@@ -87,6 +126,7 @@ pub fn nc_to_table(
     }
 
     // Now interpret the main input using the axis_index_map from state
+    state.ext.begin_main();
     let mut output = OutputRows::collect();
     install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_source(input.into(), &mut state, &mut output)?;
@@ -246,6 +286,47 @@ pub fn nc_to_batch_stream_with_line_numbers(
     include_variables: bool,
     events_sender: std::sync::mpsc::Sender<crate::output::VariableEvents>,
 ) -> Result<state::State, ParsingError> {
+    nc_to_batch_stream_with(
+        input,
+        initial_state,
+        axis_identifiers,
+        extra_axes,
+        iteration_limit,
+        disable_forward_fill,
+        axis_index_map,
+        allow_undefined_variables,
+        flatten_tolerance,
+        batch_size,
+        emit_line_no,
+        Box::new(move |table| sender.send(table).map_err(|_| ())),
+        include_variables,
+        events_sender,
+        Extensions::default(),
+    )
+}
+
+/// As [`nc_to_batch_stream_with_line_numbers`], sending each batch through
+/// `send` and running with `extensions` (see [`crate::subprogram`]). Before
+/// the external-variable provider is called, the rows finished so far are
+/// sent as a batch, so the consumer has them when it is asked.
+#[allow(clippy::too_many_arguments)]
+pub fn nc_to_batch_stream_with(
+    input: impl Into<SourceText>,
+    initial_state: Option<&str>,
+    axis_identifiers: Option<Vec<String>>,
+    extra_axes: Option<Vec<String>>,
+    iteration_limit: usize,
+    disable_forward_fill: bool,
+    axis_index_map: Option<HashMap<String, usize>>,
+    allow_undefined_variables: bool,
+    flatten_tolerance: Option<f64>,
+    batch_size: usize,
+    emit_line_no: bool,
+    send: crate::output::BatchSend,
+    include_variables: bool,
+    events_sender: std::sync::mpsc::Sender<crate::output::VariableEvents>,
+    extensions: Extensions,
+) -> Result<state::State, ParsingError> {
     let mut state = build_state(
         axis_identifiers,
         extra_axes,
@@ -253,18 +334,31 @@ pub fn nc_to_batch_stream_with_line_numbers(
         axis_index_map,
         allow_undefined_variables,
     );
+    if let Some(name) = extensions.duplicate_subprogram() {
+        return Err(ParsingError::with_context(
+            0,
+            String::new(),
+            "subprograms".to_string(),
+            format!("more than one entry for {name} (names are not case-sensitive)"),
+        ));
+    }
+    state.ext = crate::subprogram::ExtState::new(extensions);
     if let Some(initial_state) = initial_state {
         let mut discard = OutputRows::collect();
         interpret_file(initial_state, &mut state, &mut discard)?;
     }
-    let mut output = OutputRows::batch_stream_with_line_numbers(
-        sender,
+    state.ext.begin_main();
+    let mut output = OutputRows::batch_stream_to(
+        send,
         batch_size,
         disable_forward_fill,
         include_variables,
         events_sender,
         emit_line_no,
     );
+    if state.ext.has_external() {
+        state.ext.flush = output.share_batch_sink();
+    }
     install_flattener(&mut output, &state, flatten_tolerance)?;
     interpret_source(input.into(), &mut state, &mut output)?;
     output.finish()?;
@@ -289,7 +383,8 @@ fn interpret_source(source: SourceText, state: &mut State, output: &mut OutputRo
     // interpreted line by line - trivial lines through the byte decoder,
     // the rest through pest, retaining one line at a time when there are no
     // jumps. NC_STAGE1=0 disables it.
-    if !shape.has_block_structures && crate::line_driver::stage1_enabled() {
+    // Calls and external variables are dispatched by the block walker only.
+    if !shape.has_block_structures && crate::line_driver::stage1_enabled() && !state.ext.active() {
         return match crate::line_driver::interpret_lines(input, output, state)? {
             BlockFlow::Continue | BlockFlow::EndProgram => Ok(()),
             BlockFlow::Jump(request) => Err(request.into_not_found_error(state)),
