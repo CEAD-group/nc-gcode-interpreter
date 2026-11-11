@@ -1100,14 +1100,22 @@ fn evaluate_call_number(arg: &Pair<Rule>, state: &mut State) -> Result<f64, Pars
 /// Execute the subprogram `name` for the call `statement`: bind the PROC
 /// parameters, run the body in its own local scope, copy VAR parameters back.
 fn call_subprogram(
-    statement: Pair<Rule>,
-    name: &str,
+    statement: &Pair<Rule>,
+    call: CallParts,
+    repetitions: u32,
     output: &mut Output,
     state: &mut State,
 ) -> Result<(), ParsingError> {
-    let (call_line, call_preview) = get_error_context(&statement, state);
-    let arguments = statement.into_inner().nth(1);
-    run_subprogram(name, arguments, call_line, call_preview, output, state)
+    let (call_line, call_preview) = get_error_context(statement, state);
+    run_subprogram(
+        &call.name,
+        call.arguments,
+        repetitions,
+        call_line,
+        call_preview,
+        output,
+        state,
+    )
 }
 
 /// Run the subprogram that replaces an M function programmed in this block,
@@ -1137,7 +1145,7 @@ fn run_m_function_subprograms(
                 format!("M{number} is mapped to subprogram {name}, which is not among the supplied subprograms"),
             ));
         }
-        run_subprogram(&name, None, block_line, preview, output, state)?;
+        run_subprogram(&name, None, 1, block_line, preview, output, state)?;
     }
     Ok(())
 }
@@ -1145,6 +1153,7 @@ fn run_m_function_subprograms(
 fn run_subprogram(
     name: &str,
     arguments: Option<Pair<Rule>>,
+    repetitions: u32,
     call_line: usize,
     call_preview: String,
     output: &mut Output,
@@ -1223,46 +1232,7 @@ fn run_subprogram(
     for (index, param) in params.iter().enumerate() {
         let argument = arguments.get(index);
         let value = if param.by_reference {
-            let Some(argument) = argument else {
-                return Err(call_error(format!("VAR parameter {} needs an argument", param.name)));
-            };
-            let key: String = argument.as_str().split_whitespace().collect::<String>().to_uppercase();
-            if param.is_array {
-                let prefix = format!("{key}[");
-                let elements: Vec<(String, f64)> = state
-                    .symbol_table
-                    .iter()
-                    .filter(|(k, _)| k.starts_with(&prefix))
-                    .map(|(k, v)| (k[key.len()..].to_string(), *v))
-                    .collect();
-                if elements.is_empty() {
-                    return Err(call_error(format!(
-                        "'{key}' passed for VAR array parameter {} is not a defined array",
-                        param.name
-                    )));
-                }
-                BoundValue::ArrayRef(key, elements)
-            } else if param.is_string {
-                match state.string_table.get(&key) {
-                    Some(text) => BoundValue::TextRef(key, text.clone()),
-                    None => {
-                        return Err(call_error(format!(
-                            "'{key}' passed for VAR parameter {} is not a defined STRING variable",
-                            param.name
-                        )))
-                    }
-                }
-            } else {
-                match state.symbol_table.get(&key) {
-                    Some(value) => BoundValue::NumberRef(key, *value),
-                    None => {
-                        return Err(call_error(format!(
-                            "'{key}' passed for VAR parameter {} is not a defined variable",
-                            param.name
-                        )))
-                    }
-                }
-            }
+            bind_reference(param, argument, state, &call_error)?
         } else {
             match argument.or(param.default.as_ref()) {
                 Some(source) if param.is_string => BoundValue::Text(evaluate_string(source.clone(), state)?),
@@ -1275,9 +1245,53 @@ fn run_subprogram(
         bound.push(value);
     }
 
+    // PROC ... SAVE: the modal G functions before the call return after its last run.
     let saved_g_functions = saves_g_functions.then(|| state.ext.modal_g.clone());
+    // Manual 4.2.3.3: the arguments are passed once, on the first run; a VAR
+    // parameter still refers to the caller's variable on every run.
+    for pass in 0..repetitions {
+        if pass > 0 {
+            for (index, param) in params.iter().enumerate() {
+                if param.by_reference {
+                    bound[index] = bind_reference(param, arguments.get(index), state, &call_error)?;
+                }
+            }
+        }
+        run_subprogram_pass(
+            name,
+            &subprogram,
+            blocks.clone(),
+            &params,
+            &bound,
+            call_line,
+            &call_error,
+            output,
+            state,
+        )?;
+    }
+    // The rest of the calling block gets a row of its own, after the body's rows.
+    output.start_row(call_line)?;
+    if let Some(saved) = saved_g_functions {
+        restore_g_functions(name, saved, output, state);
+    }
+    Ok(())
+}
+
+/// One run of a subprogram body with its parameters bound to `bound`.
+#[allow(clippy::too_many_arguments)]
+fn run_subprogram_pass(
+    name: &str,
+    subprogram: &crate::subprogram::Subprogram,
+    blocks: Pair<Rule>,
+    params: &[ProcParam],
+    bound: &[BoundValue],
+    call_line: usize,
+    call_error: &dyn Fn(String) -> ParsingError,
+    output: &mut Output,
+    state: &mut State,
+) -> Result<(), ParsingError> {
     state.enter_call(name);
-    for (param, value) in params.iter().zip(&bound) {
+    for (param, value) in params.iter().zip(bound) {
         state.declare_local(&param.name);
         match value {
             BoundValue::Number(v) | BoundValue::NumberRef(_, v) => {
@@ -1310,7 +1324,7 @@ fn run_subprogram(
     let mut numbers_back: Vec<(String, f64)> = Vec::new();
     let mut strings_back: Vec<(String, String)> = Vec::new();
     let mut written_both_ways: Option<(String, String)> = None;
-    for (param, value) in params.iter().zip(&bound) {
+    for (param, value) in params.iter().zip(bound) {
         match value {
             // Only a value the subprogram changed goes back, so a direct
             // write to the caller's variable inside the subprogram survives.
@@ -1373,11 +1387,6 @@ fn run_subprogram(
         state.symbol_table.insert(key, value);
     }
     state.string_table.extend(strings_back);
-    // The rest of the calling block gets a row of its own, after the body's rows.
-    output.start_row(call_line)?;
-    if let Some(saved) = saved_g_functions {
-        restore_g_functions(name, saved, output, state);
-    }
     Ok(())
 }
 
@@ -1411,14 +1420,189 @@ fn restore_g_functions(name: &str, saved: HashMap<&'static str, String>, output:
     }
 }
 
-fn interpret_non_returning_function_call(function_call: Pair<Rule>) -> (&'static str, String) {
-    // Log the interpretd function call for debugging
-    //println!("Parsed function call: {:?}", function_call);
+/// Bind a VAR parameter to the caller's variable named by `argument`.
+fn bind_reference(
+    param: &ProcParam,
+    argument: Option<&Pair<Rule>>,
+    state: &State,
+    call_error: &dyn Fn(String) -> ParsingError,
+) -> Result<BoundValue, ParsingError> {
+    let Some(argument) = argument else {
+        return Err(call_error(format!("VAR parameter {} needs an argument", param.name)));
+    };
 
-    let command_str = function_call.as_str().to_string();
+    let key: String = argument.as_str().split_whitespace().collect::<String>().to_uppercase();
+    let value = if param.is_array {
+        let prefix = format!("{key}[");
+        let elements: Vec<(String, f64)> = state
+            .symbol_table
+            .iter()
+            .filter(|(k, _)| k.starts_with(&prefix))
+            .map(|(k, v)| (k[key.len()..].to_string(), *v))
+            .collect();
+        if elements.is_empty() {
+            return Err(call_error(format!(
+                "'{key}' passed for VAR array parameter {} is not a defined array",
+                param.name
+            )));
+        }
+        BoundValue::ArrayRef(key, elements)
+    } else if param.is_string {
+        match state.string_table.get(&key) {
+            Some(text) => BoundValue::TextRef(key, text.clone()),
+            None => {
+                return Err(call_error(format!(
+                    "'{key}' passed for VAR parameter {} is not a defined STRING variable",
+                    param.name
+                )))
+            }
+        }
+    } else {
+        match state.symbol_table.get(&key) {
+            Some(value) => BoundValue::NumberRef(key, *value),
+            None => {
+                return Err(call_error(format!(
+                    "'{key}' passed for VAR parameter {} is not a defined variable",
+                    param.name
+                )))
+            }
+        }
+    };
+    Ok(value)
+}
 
-    // Return the tuple with the rule name as the column header and the specific function call as the value
-    ("non_returning_function_call", command_str)
+/// A subprogram call statement taken apart.
+pub(crate) struct CallParts<'i> {
+    /// The subprogram name, uppercased.
+    pub(crate) name: String,
+    /// The call as recorded in the call column.
+    text: String,
+    arguments: Option<Pair<'i, Rule>>,
+    pcall: bool,
+    path: Option<&'i str>,
+    repetitions: Option<Pair<'i, Rule>>,
+}
+
+pub(crate) fn call_parts<'i>(statement: &Pair<'i, Rule>) -> CallParts<'i> {
+    let mut pcall = false;
+    let mut path = None;
+    let mut target = None;
+    let mut repetitions = None;
+    for part in statement.clone().into_inner() {
+        match part.as_rule() {
+            Rule::pcall_kw => pcall = true,
+            Rule::call_path => path = Some(part.as_str()),
+            Rule::call_target => target = Some(part),
+            Rule::call_repetitions => repetitions = Some(part),
+            _ => {}
+        }
+    }
+    let target = target.expect("a call has a call_target");
+    let mut inner = target.clone().into_inner();
+    let name = inner.next().map(|p| p.as_str().to_uppercase()).unwrap_or_default();
+    // A plain call records its target span as written, as it always has.
+    let text = if pcall || repetitions.is_some() {
+        target.as_str().trim().to_string()
+    } else {
+        target.as_str().to_string()
+    };
+    CallParts {
+        name,
+        text,
+        arguments: inner.next(),
+        pcall,
+        path,
+        repetitions,
+    }
+}
+
+/// The number of program runs set with `P<n>` or `P=<expr>` after a call.
+fn call_repetition_count(pair: Pair<Rule>, state: &mut State) -> Result<u32, ParsingError> {
+    let value = match pair.clone().into_inner().next() {
+        Some(p) if p.as_rule() == Rule::call_repetitions_literal => p.as_str()[1..].parse::<f64>().unwrap_or(f64::NAN),
+        Some(p) => evaluate_expression(p, state)?,
+        None => f64::NAN,
+    };
+    // Manual 4.2.3.3: an INT from 1 to 9999.
+    if value.fract() != 0.0 || !(1.0..=9999.0).contains(&value) {
+        return Err(annotate_error(
+            &pair,
+            "subprogram call",
+            format!("the number of program repetitions must be an integer from 1 to 9999, got {value}"),
+            state,
+        ));
+    }
+    Ok(value as u32)
+}
+
+/// A block holds one subprogram call: the output row has one call cell, and
+/// a second call would silently replace the first. A repeat count before the
+/// name would otherwise run the call once or set a variable P.
+pub(crate) fn reject_second_call(block: &Pair<Rule>, state: &State) -> Result<(), ParsingError> {
+    let mut first: Option<Pair<Rule>> = None;
+    let mut count_before: Option<Pair<Rule>> = None;
+    for statement in block.clone().into_inner().filter(|p| p.as_rule() == Rule::statement) {
+        let Some(item) = statement.into_inner().next() else {
+            continue;
+        };
+        if item.as_rule() == Rule::assignment
+            && item
+                .as_str()
+                .split('=')
+                .next()
+                .is_some_and(|lhs| lhs.trim().eq_ignore_ascii_case("P"))
+        {
+            count_before.get_or_insert(item);
+            continue;
+        }
+        if item.as_rule() != Rule::non_returning_function_call {
+            continue;
+        }
+        let call = item;
+        let parts = call_parts(&call);
+        // `P3` ahead of a call parses as a call named P3.
+        let count_shaped = parts.name.len() > 1
+            && parts.name.starts_with('P')
+            && parts.name[1..].bytes().all(|b| b.is_ascii_digit())
+            && !parts.text.contains('(');
+        if count_shaped && first.is_none() && count_before.is_none() {
+            count_before = Some(call);
+            continue;
+        }
+        let is_g_keyword = !parts.text.contains('(')
+            && !parts.pcall
+            && parts.repetitions.is_none()
+            && crate::modal_groups::classify_g_command(&parts.name).is_some();
+        if is_g_keyword {
+            continue;
+        }
+        if let Some(count) = count_before.as_ref().filter(|_| first.is_none()) {
+            return Err(annotate_error(
+                &count,
+                "subprogram call",
+                format!(
+                    "{} before the call {}: a repeat count follows the subprogram name (manual 4.2.3.3)",
+                    count.as_str().trim(),
+                    call.as_str().trim()
+                ),
+                state,
+            ));
+        }
+        if let Some(first) = &first {
+            return Err(annotate_error(
+                &call,
+                "subprogram call",
+                format!(
+                    "{} follows the call {} in the same block; program one call per block",
+                    call.as_str().trim(),
+                    first.as_str().trim()
+                ),
+                state,
+            ));
+        }
+        first = Some(call);
+    }
+    Ok(())
 }
 
 /// Axis and block-address names are case-insensitive; normalize them to
@@ -3272,31 +3456,26 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
     let mut flow = BlockFlow::Continue;
     for statement in element.into_inner() {
         let last = output.last_mut().expect("Output vector should not be empty");
-        if let Some(name) = &state.ext.called_in_block {
-            // `NAME P3` or `NAME P=3` repeats the call (manual 4.2.3.3).
-            let word: String = statement.as_str().split_whitespace().collect::<String>().to_uppercase();
-            let is_count = word.strip_prefix('P').is_some_and(|rest| {
-                (rest.len() > 1 && rest.starts_with('='))
-                    || (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
-            });
-            if is_count {
-                return Err(annotate_error(
-                    &statement,
-                    "subprogram call",
-                    format!("a repeat count ({word}) after the call of {name} is not supported"),
-                    state,
-                ));
-            }
-        }
         match statement.as_rule() {
             Rule::non_returning_function_call => {
+                let (line_no, preview) = get_error_context(&statement, state);
+                let call = call_parts(&statement);
+                let repetitions = match call.repetitions.clone() {
+                    Some(pair) => Some(call_repetition_count(pair, state)?),
+                    None => None,
+                };
+                if let Some(path) = call.path {
+                    crate::state::emit_warning(format_args!(
+                        "Warning: the PCALL path '{}' (line {}) is not interpreted; {} is called by its name",
+                        path, line_no, call.name
+                    ));
+                }
+                let last = output.last_mut().expect("Output vector should not be empty");
+                if let Some(count) = repetitions {
+                    last.insert(crate::output::CALL_REPETITIONS_COLUMN, Value::Float(count as f64));
+                }
                 if state.ext.active() {
-                    let name = statement
-                        .clone()
-                        .into_inner()
-                        .next()
-                        .map(|p| p.as_str().to_uppercase())
-                        .unwrap_or_default();
+                    let name = call.name.clone();
                     if !state.ext.subprograms.contains_key(&name) {
                         if state.ext.required.contains(&name) {
                             return Err(annotate_error(
@@ -3317,18 +3496,14 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                     } else {
                         // The call stays visible as a marker row ahead of the
                         // rows its body produces.
-                        last.insert(
-                            "non_returning_function_call",
-                            Value::Str(statement.as_str().trim().to_string()),
-                        );
-                        call_subprogram(statement, &name, output, state)?;
-                        state.ext.called_in_block = Some(name);
+                        last.insert("non_returning_function_call", Value::Str(call.text.trim().to_string()));
+                        call_subprogram(&statement, call, repetitions.unwrap_or(1), output, state)?;
                         continue;
                     }
                 }
-                let (line_no, preview) = get_error_context(&statement, state);
-                let (key, value) = interpret_non_returning_function_call(statement);
-                let name = value.split('(').next().unwrap_or("").trim();
+                let value = call.text;
+                let name = call.name.as_str();
+                let decorated = call.pcall || repetitions.is_some();
                 if !value.contains('(') {
                     // Frame instructions are only interpreted as frame_op at
                     // the start of a block ("alone in the block" per manual
@@ -3350,11 +3525,19 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                     // Keyword-shaped G commands (POLY, BSPLINE, SOFT, CP, ...)
                     // parse as bare words; the vocabulary table decides
                     // whether this is a G command or a subprogram call.
-                    if let Some((group, _modal)) = crate::modal_groups::classify_g_command(&name.to_uppercase()) {
+                    if let Some((group, _modal)) = crate::modal_groups::classify_g_command(name) {
+                        if decorated {
+                            return Err(annotate_error(
+                                &statement,
+                                "subprogram call",
+                                format!("{name} is a G command, not a subprogram: PCALL and P do not apply"),
+                                state,
+                            ));
+                        }
                         // `value` may carry trailing whitespace from the
                         // backtracked optional argument list; store the
                         // trimmed word uppercased like the g_command path.
-                        last.insert(group, Value::Str(name.to_uppercase()));
+                        last.insert(group, Value::Str(name.to_string()));
                         continue;
                     }
                     // A parenless word like Y2O or X10Y20 is far more likely
@@ -3371,7 +3554,7 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                 if let Some(transformation) = crate::output::transformation_value(&value) {
                     last.insert(crate::output::TRANSFORMATION_COLUMN, Value::Str(transformation));
                 }
-                last.insert(key, Value::Str(value));
+                last.insert("non_returning_function_call", Value::Str(value));
             }
             Rule::g_command => {
                 let (key, value) = interpret_g_command(statement, state)?;
@@ -3650,7 +3833,7 @@ pub(crate) fn interpret_block(
         Rule::block => {
             // Start this block's output row, flushing the previous one.
             let line_no = element.line_col().0;
-            state.ext.called_in_block = None;
+            reject_second_call(&element, state)?;
             output.start_row(line_no)?;
 
             let mut flow = BlockFlow::Continue;
