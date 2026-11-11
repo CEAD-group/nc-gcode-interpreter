@@ -88,7 +88,7 @@ enum Word<'a> {
     },
     /// An identifier that is neither a vocabulary command, a frame or
     /// reserved keyword, nor a word operator: a subprogram call with optional
-    /// numeric arguments, stored like `interpret_non_returning_function_call`.
+    /// numeric arguments, stored like the grammar path's call value.
     /// `value` preserves the trailing whitespace that pest's span includes;
     /// `typo_warn` mirrors `looks_like_axis_word_typo` and is emitted at
     /// execution time (like the pest path, once per execution, never for
@@ -267,7 +267,7 @@ pub fn interpret_lines(input: &str, output: &mut Output, state: &mut State) -> R
             t_pass1.elapsed().as_secs_f64()
         );
     }
-    let result = run_lines(&execs, &chunk_arenas, &targets, output, state);
+    let result = run_lines(&lines, &execs, &chunk_arenas, &targets, output, state);
     state.jump_scopes.pop();
     result
 }
@@ -491,8 +491,12 @@ fn execute_streamed(
 ) -> Result<BlockFlow, ParsingError> {
     match decoded {
         DecodeResult::Blank => Ok(BlockFlow::Continue),
-        DecodeResult::Trivial(decoded, _) => execute_decoded(decoded, arena, output, state),
-        DecodeResult::NeedsGrammar => interpret_block(parse_single_line(line, index, state)?, output, state),
+        DecodeResult::Trivial(decoded, _) if !needs_extension(decoded, arena, state) => {
+            execute_decoded(decoded, arena, output, state)
+        }
+        DecodeResult::Trivial(..) | DecodeResult::NeedsGrammar => {
+            interpret_block(parse_single_line(line, index, state)?, output, state)
+        }
     }
 }
 
@@ -565,6 +569,7 @@ fn decode_all_lines<'a>(lines: &[&'a str], input_bytes: usize) -> (Vec<Vec<Word<
 }
 
 fn run_lines(
+    lines: &[&str],
     execs: &[LineExec],
     chunk_arenas: &[Vec<Word>],
     targets: &HashMap<String, Vec<usize>>,
@@ -576,6 +581,9 @@ fn run_lines(
     while index < execs.len() {
         let flow = match &execs[index] {
             LineExec::Blank => BlockFlow::Continue,
+            LineExec::Decoded(line, chunk_idx) if needs_extension(line, &chunk_arenas[*chunk_idx], state) => {
+                interpret_block(parse_single_line(lines[index], index, state)?, output, state)?
+            }
             LineExec::Decoded(line, chunk_idx) => execute_decoded(line, &chunk_arenas[*chunk_idx], output, state)?,
             LineExec::Parsed(block) => interpret_block(block.clone(), output, state)?,
         };
@@ -602,6 +610,25 @@ fn run_lines(
         }
     }
     Ok(BlockFlow::Continue)
+}
+
+/// Whether a decoded line touches a caller extension (a call, an M function
+/// mapped to a subprogram, a variable the provider serves); such a line runs
+/// through the grammar path, which dispatches them.
+fn needs_extension(line: &DecodedLine, arena: &[Word], state: &State) -> bool {
+    if !state.ext.active() {
+        return false;
+    }
+    let external = |name: &str| state.ext.has_external() && state.ext.is_external(&name.to_uppercase());
+    arena[line.words.clone()].iter().any(|word| match word {
+        Word::Call { .. } => true,
+        Word::MCode(code) => code[1..]
+            .parse::<u32>()
+            .is_ok_and(|number| state.ext.m_functions.contains_key(&number)),
+        Word::Assign(key, _) => external(key),
+        Word::AssignDynamic { key, ident, .. } => external(key) || ident.is_some_and(external),
+        Word::GCommand(..) => false,
+    })
 }
 
 /// Execute a decoded trivial line: the exact effects of `interpret_block`
@@ -742,6 +769,9 @@ fn execute_decoded(
                     ));
                 }
                 let last = output.last_mut().expect("row was just pushed");
+                if let Some(transformation) = crate::output::transformation_value(value) {
+                    last.insert(crate::output::TRANSFORMATION_COLUMN, Value::Str(transformation));
+                }
                 last.insert("non_returning_function_call", Value::Str(value.to_string()));
             }
             Word::GCommand(group, as_written) => {
@@ -750,6 +780,10 @@ fn execute_decoded(
                 // The plane feeds the frame model, exactly as interpret_g_command does.
                 if *group == "gg06_plane_select" {
                     state.set_plane(&code);
+                }
+                // A PROC with SAVE restores these, as interpret_g_command records them.
+                if state.ext.active() && classify_g_command(&code).is_some_and(|(_, modal)| modal) {
+                    state.ext.modal_g.insert(group, code.clone());
                 }
                 let last = output.last_mut().expect("row was just pushed");
                 last.insert(group, Value::Str(code));
@@ -867,7 +901,7 @@ fn parse_number(line: &str, i: &mut usize) -> Option<f64> {
 /// to parse), so the fast path must reject it to the grammar.
 const RESERVED_WORDS: &[&str] = &[
     "IF", "ELSE", "ENDIF", "GOTOB", "GOTOF", "GOTOC", "GOTOS", "GOTO", "CASE", "OF", "DEFAULT", "LOOP", "FOR", "WHILE",
-    "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP",
+    "REPEAT", "LABEL", "TO", "UNTIL", "ENDWHILE", "ENDFOR", "ENDLOOP", "PROC", "EXTERN", "RET", "REDEF", "PCALL",
 ];
 
 /// The grammar's word operators (op_int_div .. op_or). After a constant
@@ -1311,7 +1345,21 @@ fn decode_line_inner<'a>(
                         let value = &line[word_start..ws_end];
                         i = ws_end;
                         let typo_warn = !has_args && crate::interpret_rules::looks_like_axis_word_typo(word);
+                        // `P=3 FOO` is a repeat count before the name, an error the grammar reports.
+                        let p_before = arena[words_start..].iter().any(|w| match w {
+                            Word::Assign(key, _) | Word::AssignDynamic { key, .. } => key.eq_ignore_ascii_case("P"),
+                            _ => false,
+                        });
+                        if p_before {
+                            return DecodeResult::NeedsGrammar;
+                        }
                         arena.push(Word::Call { value, typo_warn });
+                        // A repetition count or a second call after the call needs the grammar.
+                        let mut rest = i;
+                        skip_ws(&mut rest);
+                        if rest < n_len && bytes[rest] != b';' {
+                            return DecodeResult::NeedsGrammar;
+                        }
                     }
                 }
             }
@@ -1531,9 +1579,15 @@ mod tests {
             "Y2O\nX10Y20",
             // calls that collide with special words are not claimed
             "DEF REAL DEPTH=2.5\nX=DEPTH\nTRANS X10\nX1\nTRANS\nX2",
+            // repetition counts and PCALL take the grammar
+            "X1\nL6 P2\nL6 P=2\nPCALL L6\nCALLED X2\nX3",
         ] {
             assert_paths_agree(program, false);
         }
+        // a second call in a block: identical error on both paths
+        assert_paths_agree("X1\nFOO BAR", false);
+        // a repeat count before the name: identical error on both paths
+        assert_paths_agree("X1\nP=3 FOO", false);
         // frame keyword mid-block: identical UnsupportedStatement error
         assert_paths_agree("G1 CROTS X0", false);
     }
@@ -1588,7 +1642,6 @@ M30
             "CUSTOM()",
             "CUSTOM ( )",
             "CUSTOM(1)   ; comment",
-            "CUSTOM(1) OTHER(2)",
         ] {
             let line = format!("N20 target: {call}");
             assert!(matches!(
@@ -1609,6 +1662,7 @@ M30
             "CUSTOM(1,,2)",
             "TRANS(1)",
             "IF(1)",
+            "CUSTOM(1) OTHER(2)",
         ] {
             assert!(matches!(
                 super::decode_line(call, 1, &mut Vec::new()),

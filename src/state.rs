@@ -133,6 +133,8 @@ pub struct State {
     /// `output_keys` for one-letter keys in either case, indexed by the ASCII
     /// byte: most axis words (X, Y, Z, E, F, ...) resolve without hashing.
     one_letter_keys: [Option<(ColKind, &'static str)>; 128],
+    /// Subprogram texts, the external-variable provider and the call stack (#48).
+    pub(crate) ext: crate::subprogram::ExtState,
 }
 
 impl State {
@@ -227,6 +229,7 @@ impl State {
             input: SourceText::from(""),
             output_keys,
             one_letter_keys,
+            ext: crate::subprogram::ExtState::default(),
         }
     }
 
@@ -287,6 +290,15 @@ impl State {
             .collect::<Vec<_>>()
             .into();
         self.input = source;
+    }
+
+    /// Switch the program text diagnostics refer to, returning the previous
+    /// one. A subprogram call swaps its text in and the caller's back out.
+    pub(crate) fn swap_source(&mut self, source: SourceText, line_offsets: Arc<[usize]>) -> (SourceText, Arc<[usize]>) {
+        (
+            std::mem::replace(&mut self.input, source),
+            std::mem::replace(&mut self.line_offsets, line_offsets),
+        )
     }
 
     /// Gets a line from the input by line number (1-based indexing)

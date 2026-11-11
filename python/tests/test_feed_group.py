@@ -115,3 +115,18 @@ def test_reading_fgref_errors(options):
         nc_to_dataframe("FGREF[RA1]=300\nR1=FGREF[RA1]\nX=R1\n", **options)
     assert exc.value.kind == "unsupported_statement"
     assert exc.value.line == 2
+
+
+@pytest.mark.parametrize("stage1", ["0", "1"])
+def test_fgroup_stays_state_with_subprograms(monkeypatch, stage1):
+    """With an extension active, FGROUP is still feed-group state and not a call."""
+    monkeypatch.setenv("NC_STAGE1", stage1)
+    df, _ = nc_to_dataframe("G1 F100 X0\nFGROUP(X,RA1)\nFOO\nX1\n", subprograms={"FOO": "PROC FOO\nY1\nM17\n"})
+    assert df["FGROUP"].to_list()[-1] == "X,RA1"
+    assert "FGROUP(X,RA1)" not in df["non_returning_function_call"].to_list()
+
+
+@pytest.mark.parametrize("program", ["PCALL FGROUP(X)\n", "FGROUP(X) P2\n"])
+def test_fgroup_rejects_call_forms(program):
+    with pytest.raises(NcError):
+        nc_to_dataframe(program)

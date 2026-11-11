@@ -8,6 +8,80 @@ released to PyPI.
 
 ### Added
 
+- Subprogram execution (#48). `nc_to_dataframe` and `nc_to_batches` take
+  `subprograms`, a mapping of subprogram name to source text. A call whose
+  name is in the mapping runs that text; any other call stays a
+  `non_returning_function_call` cell as before. Supported: a `PROC` header
+  with by-value parameters (numbers and strings, with defaults), `VAR`
+  parameters and `VAR` array parameters, local `DEF` variables (invisible to
+  callees, gone on return), return on `M17` or `RET`, and nested calls up to
+  16 levels. Rows produced inside a call keep the main-program line of the
+  call in `line_no` and carry two new columns: `subprogram`, the call path
+  (`OUTER/INNER`), and `subprogram_line`, the line inside that subprogram's
+  text. The interpreter does not read files; the caller supplies the texts.
+- `m_function_subprograms`, a mapping of M function number to subprogram
+  name: the subprogram runs at the end of every block that programs that M
+  function, as a control does for a tool-change cycle on `M6`. It does not
+  apply inside the replacement subprogram itself.
+- External variables. `external_variables` takes a provider object with
+  `names`, `read(name, indices)` and `write(name, indices, value)`. Every
+  read or write of a listed name (`$A_IN`, `$A_DBB`, `$AA_IM`, or any other
+  variable name) goes to the provider and is not stored by the interpreter,
+  so a program can branch and wait on machine state the interpreter does not
+  model. Indices arrive as ints, or as the axis name where an axis is the
+  index. With `nc_to_batches` the rows produced so far are yielded before the
+  provider is asked, and the provider is called on the consuming thread, so
+  a simulator can play those rows first. An exception raised by the provider
+  ends the run and propagates unchanged.
+- Rust API: `interpreter::nc_to_table_with` and
+  `interpreter::nc_to_batch_stream_with` take a `subprogram::Extensions`
+  value with the same extensions; the provider is the
+  `subprogram::ExternalVariables` trait.
+- `required_subprograms`: a call of a listed name that is not among
+  `subprograms` is an error that names the call path, where it would
+  otherwise stay an opaque cell.
+- `stop_on_setal`: a `SETAL` call ends the run with an error that carries the
+  call as written and the call path.
+- String comparison with `==` and `<>` in conditions and expressions
+  (`IF (KIND == "MILL")`). Other operators on strings, and a string compared
+  with a number, are errors. A served external variable compared with a
+  string is read from the provider as text (`read` returns a `str`).
+- A frame value assigned to a served external variable
+  (`$P_UIFR[7] = CTRANS(X, 10) : CROT(Z, 90)`) reaches the provider's `write`
+  as `[("CTRANS", ("X", 10.0)), ("CROT", ("Z", 90.0))]`. Assigned to any
+  other variable it is an error.
+- Machine axis names (`AX1`) and frame components (`TR`, `FI`, `RT`, `SC`,
+  `MI`) are passed to the provider as index names.
+- `transformation` column: the last `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`,
+  `TRACON` or `TRAFOOF` call as written, forward-filled like a modal G group.
+  The call also stays in `non_returning_function_call`.
+- Definition files parse: the `DEF` attributes for range, preprocessing stop,
+  access rights, unit and limits (`DEF CHAN APW 4 REAL LLI 0 ULI 10 NAME`),
+  the `CHAR` type, and attribute-only `REDEF` lines are accepted and not
+  interpreted.
+- Array assignment as a statement: `NAME[n] = SET(v, ...)` and
+  `NAME[n] = REP(v[, count])` write consecutive elements starting at the
+  indexed one, last index fastest. Before, only the `DEF` initializer form
+  was interpreted and the statement form was an internal error.
+- A subprogram whose `PROC` header has the `SAVE` attribute gives the caller
+  back its modal G functions on return: each G group the subprogram changed
+  gets the caller's value on the row after the body's rows. A group the
+  program never set before the call cannot be restored and gives a warning.
+- Loud errors for constructs the subprogram mechanism does not model: a
+  `FOR` counter, a `PROC` parameter or a local `DEF` with the name of an
+  external variable, a string assigned to an external variable, a `PROC` parameter with the name of an axis or
+  address, `SET`/`REP` statements that write past the declared array, and
+  two `subprograms` entries whose names differ only in case.
+- Program repetitions: `L6 P2` and `L6 P=2` call `L6` twice (manual
+  4.2.3.3). A supplied subprogram runs that many times, with its arguments
+  passed once; without a supplied body the call keeps its name and the
+  count goes to a new `call_repetitions` column. A count outside 1 to 9999
+  is an error. Before, `L6 P2` was recorded as a call named `P2` and
+  `L6 P=2` set a user variable `P` (part of #105).
+- `PCALL NAME(...)` calls `NAME` (manual 4.2.3.8). A path before the name
+  (`PCALL/_N_WKS_DIR/_N_X_WPD/NAME`) is not interpreted and gives a
+  warning; the call goes to `NAME`. Before, `PCALL` was dropped silently.
+
 - `FGROUP(<axes>)` and `FGREF[<axis>]=<radius>` are modal state (manual
   3.7.1). A forward-filled, dictionary-encoded `FGROUP` column holds the axes
   the path feed refers to, comma-separated as programmed; `FGROUP()` writes
@@ -21,6 +95,41 @@ released to PyPI.
   a configured channel axis (including N, F, S, D and T) is an
   `unexpected_axis` error. Reading `FGREF[<axis>]` is an
   `unsupported_statement` error, and so is a user array named `FGREF` (#107).
+
+### Changed
+
+- A program that calls `TRAORI`, `TRANSMIT`, `TRACYL`, `TRAANG`, `TRACON` or
+  `TRAFOOF` gets the new `transformation` column, also when it uses none of
+  the new arguments.
+- Two subprogram calls in one block (`FOO BAR`) are an error. Before, the
+  second silently replaced the first. Keyword G commands such as `SOFT`
+  next to a call are unaffected. A repeat count before the name (`P3 FOO`,
+  `P=3 FOO`) is an error as well (part of #105).
+- `PROC`, `EXTERN` and `RET` are reserved words and no longer read as
+  subprogram calls. A `PROC` header and an `EXTERN` declaration produce no
+  output; `RET` ends the program at the top level like `M17`. Before,
+  `PROC FOO SAVE` was recorded as a call named `SAVE` and `RET` as a call
+  while interpretation continued (part of #105). A main program whose `PROC`
+  header declares parameters is an error.
+- A program without control structures keeps the line fast path when an
+  extension is used. Only its lines with a call, an M function mapped to a
+  subprogram, or a word that names a served variable go through the
+  grammar, which dispatches them. Before, any extension sent the whole
+  program through the grammar path, about seven times slower per line.
+- `DEF REAL A[n]` declares the elements `A[0]` to `A[n-1]`. Before, it also
+  created `A[n]`, so an out-of-range access went unnoticed.
+- `REDEF` and `PCALL` are reserved words.
+- A supplied subprogram is checked and parsed on its first call, and later
+  calls in the same run reuse the parse tree. Before, every call parsed the
+  text again, which was about two thirds of the time of a call of a 20-line
+  body. Adds the `self_cell` dependency, which holds the tree next to the
+  text it borrows from.
+- `nc_to_dataframe` with `external_variables` no longer sends the rows
+  produced so far as a separate batch before each provider call, since its
+  caller reads no row before the run ends. A program that reads the provider
+  on every motion row built one batch per row. `nc_to_batches` and the Rust
+  API keep handing the rows over first; Rust callers can opt out with
+  `Extensions::defer_rows`.
 
 ## [v0.2.10] - 2026-11-10
 
