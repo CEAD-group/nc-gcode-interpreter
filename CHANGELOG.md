@@ -4,6 +4,19 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Changed
+
+- The G-group columns reach Python as one-byte codes and become `pl.Enum`
+  by a gather from each group's categories. Before, Rust sent an Arrow
+  dictionary tagged with an undocumented polars metadata key, and polars
+  looked up every row's string on import. On polars 1.40 a 7M-row program
+  with eleven G-group columns takes 15% less CPU (3.92 s to 3.32 s); on
+  polars 2.1 the time is unchanged. The output is identical, and the
+  interpreter no longer depends on that key. Polars 2 does not cast
+  integers to an Enum, so the gather works on both.
+
 ## [v0.3.0] - 2026-11-11
 
 This release changes the API and the output. To upgrade:

@@ -33,19 +33,20 @@ def test_dtypes_cover_every_group_in_manual_order():
     assert G_GROUP_DTYPES["gg01_motion"].categories.to_list()[:4] == ["G0", "G1", "G2", "G3"]
 
 
-def test_g_group_columns_arrive_as_enum_without_a_cast():
-    # Bypasses _batch_frame: red here means polars no longer reads the Enum tag Rust writes.
+def test_g_group_columns_arrive_as_manual_order_codes():
+    # Bypasses _batch_frame: Rust hands over UInt8 indices into each group's manual-order list.
     from nc_gcode_interpreter import _internal
 
-    batches = _internal.nc_to_batches(PROGRAM, batch_size=3)
-    seen = set()
-    for batch in batches:
-        frame = pl.DataFrame(batch)
-        for name, dtype in frame.schema.items():
-            if name in G_GROUP_DTYPES:
-                assert dtype == G_GROUP_DTYPES[name], f"{name} arrived as {dtype}"
-                seen.add(name)
-    assert {"gg01_motion", "gg02_wait", "gg06_plane_select"} <= seen
+    frames = [pl.DataFrame(batch) for batch in _internal.nc_to_batches(PROGRAM, batch_size=3)]
+    raw = pl.concat(frames, how="diagonal")
+    expected, _ = nc_to_dataframe(PROGRAM)
+    seen = [name for name in raw.columns if name in G_GROUP_DTYPES]
+    assert {"gg01_motion", "gg02_wait", "gg06_plane_select"} <= set(seen)
+    for name in seen:
+        assert raw.schema[name] == pl.UInt8, name
+        categories = G_GROUP_DTYPES[name].categories.to_list()
+        decoded = [None if code is None else categories[code] for code in raw[name].to_list()]
+        assert decoded == expected[name].to_list(), name
 
 
 def test_batches_share_one_enum_dtype_and_concat_vertically():
