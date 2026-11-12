@@ -4,6 +4,16 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Fixed
+
+- A local build on Windows no longer fails with "metadata version does not
+  match". The build backend restored `Cargo.toml` and `Cargo.lock` with CRLF
+  line endings, so the tree looked modified to the next build phase, which
+  then stamped a different `.dirty` version. Both files now come back byte
+  for byte, and a CRLF `Cargo.toml` is stamped too.
+
 ## [v0.3.1] - 2026-11-11
 
 ### Changed
