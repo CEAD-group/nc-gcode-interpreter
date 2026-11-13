@@ -868,8 +868,8 @@ enum DecodeResult<'a> {
 
 /// Parse a single numeric literal (`value` in the grammar: optional sign,
 /// digits with an optional decimal point, including .5) at `*i`, advancing
-/// past it. Rejects exponents,
-/// a second dot, or letter/underscore tails - those need the real grammar.
+/// past it. Rejects exponents, a second dot, or letter/underscore tails;
+/// those need the real grammar.
 fn parse_number(line: &str, i: &mut usize) -> Option<f64> {
     let bytes = line.as_bytes();
     let start = *i;
@@ -1917,7 +1917,7 @@ M30
             "N10", "N", "10", "X5", "X", "Y1", "=", "5", "-3", "2.5", ".5", "AND", "OR", "XOR", "B_AND", "B_OR",
             "B_XOR", "DIV", "MOD", "NOT", "TRANS", "ROT", "SCALE", "MIRROR", "RPL", "DEF", "IC(2)", "(3*R1)", "(", ")",
             "*", "+", "/", "LBL:", ";c", "G1", "M3", "R1", "_V", "SIN(30)", "E", "F100", "IF", "GOTOF", "X1=", "T",
-            "\"s\"", "[", ",", "<", "x5", "n10", "SET", "$P",
+            "\"s\"", "[", ",", "<", "x5", "n10", "SET", "$P", "G01", "g003", "M03", "+.5", "1.", "-.",
         ];
         let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut next = |bound: usize| {

@@ -96,6 +96,18 @@ fn padded_g_codes_match_canonical_output_and_flattening() {
 }
 
 #[test]
+fn padded_m_codes_match_canonical_output_and_end_the_program() {
+    let source = "G0 X1 M03 m008\nX2 M005 M0\nM030\nX3\n";
+    let canonical = "G0 X1 M3 M8\nX2 M5 M0\nM30\nX3\n";
+    let fixture = Fixture::new();
+    let expected = fixture.csv(canonical, "whole-file", false);
+    assert!(expected.ends_with(",M30\n"), "M30 must end the program:\n{expected}");
+    for mode in MODES {
+        assert_eq!(fixture.csv(source, mode, false), expected, "{mode}");
+    }
+}
+
+#[test]
 fn padded_plane_codes_control_frame_rotation() {
     let source = "G018\nROT RPL=90\nG000 X1 Y2 Z3\nG019\nROT RPL=90\nG000 X1 Y2 Z3\n";
     let canonical = "G18\nROT RPL=90\nG0 X1 Y2 Z3\nG19\nROT RPL=90\nG0 X1 Y2 Z3\n";

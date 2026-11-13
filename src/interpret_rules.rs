@@ -3496,6 +3496,19 @@ fn interpret_control(element: Pair<Rule>, output: &mut Output, state: &mut State
     }
     Ok(BlockFlow::Continue)
 }
+/// Canonical spelling of an M word: uppercase (m30 IS M30) and without
+/// leading zeros (M03 IS M3, manual 3.2.2.1), so output values compare equal.
+pub(crate) fn normalize_m_command(word: &str) -> String {
+    let mut code = word.to_ascii_uppercase();
+    if let Some(digits) = code.strip_prefix('M') {
+        if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+            let zeros = digits.bytes().take_while(|&b| b == b'0').count();
+            code.drain(1..1 + zeros.min(digits.len() - 1));
+        }
+    }
+    code
+}
+
 pub(crate) fn insert_m_key(
     last: &mut crate::output::CellMap,
     value: &str,
@@ -3503,9 +3516,7 @@ pub(crate) fn insert_m_key(
     preview: String,
 ) -> Result<(), ParsingError> {
     let m_key = "M";
-    // Uppercase: the language is case-insensitive (m30 IS M30); source case
-    // must not leak into the output values.
-    let value = value.to_uppercase();
+    let value = normalize_m_command(value);
     for _i in 1..=5 {
         if let Some(existing_value) = last.get_mut(m_key) {
             // If the key already exists and is a list, append the new value

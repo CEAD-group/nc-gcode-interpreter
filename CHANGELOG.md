@@ -10,8 +10,9 @@ released to PyPI.
 
 - Accept Siemens numeric literals with leading-dot decimals (`X.5`,
   `Z-.5`, `X=IC(.375)`) and explicit positive signs (`X+0.5`, `R1=+2`).
-  Zero-padded G codes such as `G00` and `G01` now use their canonical
-  spelling for interpretation and output, including frame and curve handling.
+  Zero-padded G and M codes (`G01`, `G017`, `M03`, `M030`) now use their
+  canonical spelling for interpretation and output, including frame and curve
+  handling. `start.g_groups` accepts padded codes too.
 
 ## [v0.3.1] - 2026-11-11
 
