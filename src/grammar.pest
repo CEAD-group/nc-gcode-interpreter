@@ -225,9 +225,10 @@ assignment_multi =  { variable_array ~ "=" ~ (value_array | value_repeating) }
 value_array      =  { "SET" ~ "(" ~ (expression | value_none) ~ ("," ~ (expression | value_none))* ~ ")" }
 value_repeating  =  { "REP" ~ "(" ~ expression ~ ("," ~ expression)? ~ ")" }
 value_none       =  { "" }
-// Atomic: the interpreter only reads the full lexeme (as_str), so the inner
-// float/integer pairs would be two dead tokens per coordinate on the queue.
-value            = @{ float | integer }
+// Atomic: the interpreter only reads the full lexeme (as_str). Siemens
+// accepts X.5, Z-.5 and an explicit positive sign; at least one digit is
+// required, on either side of the decimal point. Keep block numbers separate.
+value            = @{ ("+" | "-")? ~ (ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT*)? | "." ~ ASCII_DIGIT+) ~ !ASCII_ALPHA }
 op               = _{
     op_add | op_sub | op_mul | op_div | op_int_div | op_mod
   | op_b_and | op_b_xor | op_b_or
@@ -259,7 +260,6 @@ neg              =  { "-" }
 not_op           = @{ ^"NOT" ~ !(ASCII_ALPHANUMERIC | "_") }
 // A quoted string is an operand only of == and <> (manual 4.1.3.2).
 primary          =  { arith_fun | value | string_value | variable_array | variable | "(" ~ expression ~ ")" }
-float            = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* ~ !ASCII_ALPHA } // Ensure floats are not followed by letters
 integer          = @{ "-"? ~ ASCII_DIGIT+ ~ !ASCII_ALPHA } // Ensure integers are not followed by letters
 // Any call-shaped name is accepted here; the interpreter dispatches on the
 // (case-insensitive) name and rejects unknown functions with line context.

@@ -13,6 +13,11 @@ released to PyPI.
   line endings, so the tree looked modified to the next build phase, which
   then stamped a different `.dirty` version. Both files now come back byte
   for byte, and a CRLF `Cargo.toml` is stamped too.
+- Accept Siemens numeric literals with leading-dot decimals (`X.5`,
+  `Z-.5`, `X=IC(.375)`) and explicit positive signs (`X+0.5`, `R1=+2`).
+  Zero-padded G and M codes (`G01`, `G017`, `M03`, `M030`) now use their
+  canonical spelling for interpretation and output, including frame and curve
+  handling. `start.g_groups` accepts padded codes too.
 
 ## [v0.3.1] - 2026-11-11
 

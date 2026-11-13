@@ -14,7 +14,7 @@
 
 use crate::errors::ParsingError;
 use crate::frame::{self, Matrix3};
-use crate::modal_groups::{classify_g_command, MODAL_G_GROUPS, NON_MODAL_G_GROUPS};
+use crate::modal_groups::{classify_g_command, normalize_g_command, MODAL_G_GROUPS, NON_MODAL_G_GROUPS};
 use crate::output::OutputRows;
 use crate::state::{State, VarType};
 use crate::types::{NCParser, Rule, Value};
@@ -521,7 +521,7 @@ fn modal_group(field: &str, group: &str, code: &str) -> Result<(&'static str, St
         };
         return Err(invalid(field, &reason));
     };
-    let code = code.trim().to_uppercase();
+    let code = normalize_g_command(code.trim());
     match classify_g_command(&code) {
         Some((found, _)) if found == column => Ok((column, code)),
         Some((found, _)) => Err(invalid(field, &format!("{code} belongs to {found}, not to {column}"))),
