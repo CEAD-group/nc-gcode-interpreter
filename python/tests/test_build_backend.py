@@ -16,7 +16,7 @@ def backend(tmp_path, monkeypatch):
     pytest.importorskip("maturin")
     spec = importlib.util.spec_from_file_location("_test_nc_build_backend", BACKEND)
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
+    monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "_git_version", lambda root: "0.4.0-dev.1+gabc1234")
     # The backend resolves its root from __file__; point it at the scratch tree.
