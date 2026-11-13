@@ -39,7 +39,8 @@ from maturin import (
 )
 
 PLACEHOLDER = "0.0.0-dev"
-_VERSION_LINE = re.compile(r'^version = ".*"$', re.MULTILINE)
+# No trailing `$`: under MULTILINE it does not match before the `\r` of a CRLF file.
+_VERSION_LINE = re.compile(rb'^version = "[^"\r\n]*"', re.MULTILINE)
 # v0.2.6-3-g1234abc[-dirty]
 _DESCRIBE = re.compile(r"^v(?P<tag>.+)-(?P<distance>\d+)-g(?P<sha>[0-9a-f]+)(?P<dirty>-dirty)?$")
 
@@ -71,8 +72,10 @@ def _versioned_cargo_toml():
     root = Path(__file__).resolve().parent.parent
     cargo_toml = root / "Cargo.toml"
     cargo_lock = root / "Cargo.lock"
-    original = cargo_toml.read_text()
-    if f'version = "{PLACEHOLDER}"' not in original:
+    # Bytes throughout: text mode writes CRLF on Windows, which dirties the tree on restore
+    # and makes the next build phase stamp a different (.dirty) version.
+    original = cargo_toml.read_bytes()
+    if f'version = "{PLACEHOLDER}"'.encode() not in original:
         # CI already stamped the release version; nothing to do.
         yield
         return
@@ -80,15 +83,16 @@ def _versioned_cargo_toml():
     if version is None:
         yield
         return
-    lock_original = cargo_lock.read_text() if cargo_lock.exists() else None
-    cargo_toml.write_text(_VERSION_LINE.sub(f'version = "{version}"', original, count=1))
+    lock_original = cargo_lock.read_bytes() if cargo_lock.exists() else None
+    stamp = f'version = "{version}"'.encode()
+    cargo_toml.write_bytes(_VERSION_LINE.sub(lambda _: stamp, original, count=1))
     try:
         yield
     finally:
-        cargo_toml.write_text(original)
+        cargo_toml.write_bytes(original)
         # cargo rewrites the lock to match the patched version during the build.
         if lock_original is not None:
-            cargo_lock.write_text(lock_original)
+            cargo_lock.write_bytes(lock_original)
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
