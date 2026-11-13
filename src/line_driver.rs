@@ -26,7 +26,7 @@ use crate::interpret_rules::{
     canonical_block_number, insert_m_key, interpret_block, is_end_of_program_m_code, resolve_jump, scan_jump_targets,
     BlockFlow,
 };
-use crate::modal_groups::classify_g_command;
+use crate::modal_groups::{classify_g_command, normalize_g_command};
 use crate::state::{ColKind, State};
 use crate::types::{NCParser, Pair, Rule, Value};
 use pest::Parser;
@@ -775,8 +775,8 @@ fn execute_decoded(
                 last.insert("non_returning_function_call", Value::Str(value.to_string()));
             }
             Word::GCommand(group, as_written) => {
-                // Uppercase like the grammar path: g2 IS G2.
-                let code = as_written.to_uppercase();
+                // Canonical spelling like the grammar path: g02 IS G2.
+                let code = normalize_g_command(as_written);
                 // The plane feeds the frame model, exactly as interpret_g_command does.
                 if *group == "gg06_plane_select" {
                     state.set_plane(&code);
@@ -867,26 +867,31 @@ enum DecodeResult<'a> {
 }
 
 /// Parse a single numeric literal (`value` in the grammar: optional sign,
-/// digits, optional fraction) at `*i`, advancing past it. Rejects exponents,
-/// a second dot, or letter/underscore tails - those need the real grammar.
+/// digits with an optional decimal point, including .5) at `*i`, advancing
+/// past it. Rejects exponents, a second dot, or letter/underscore tails;
+/// those need the real grammar.
 fn parse_number(line: &str, i: &mut usize) -> Option<f64> {
     let bytes = line.as_bytes();
     let start = *i;
-    if *i < bytes.len() && bytes[*i] == b'-' {
+    if *i < bytes.len() && matches!(bytes[*i], b'+' | b'-') {
         *i += 1;
     }
     let digits_start = *i;
     while *i < bytes.len() && bytes[*i].is_ascii_digit() {
         *i += 1;
     }
-    if *i == digits_start {
-        return None;
-    }
+    let integer_digits = *i - digits_start;
+    let mut fraction_digits = 0;
     if *i < bytes.len() && bytes[*i] == b'.' {
         *i += 1;
+        let fraction_start = *i;
         while *i < bytes.len() && bytes[*i].is_ascii_digit() {
             *i += 1;
         }
+        fraction_digits = *i - fraction_start;
+    }
+    if integer_digits + fraction_digits == 0 {
+        return None;
     }
     // Exponents, a second dot, or letter tails need the real grammar.
     if *i < bytes.len() && (bytes[*i].is_ascii_alphabetic() || bytes[*i] == b'_' || bytes[*i] == b'.') {
@@ -1172,7 +1177,7 @@ fn decode_line_inner<'a>(
         }
         let word_start = i;
         i += 1;
-        let bare_number_follows = i < n_len && (bytes[i].is_ascii_digit() || bytes[i] == b'-' || bytes[i] == b'.');
+        let bare_number_follows = i < n_len && (bytes[i].is_ascii_digit() || matches!(bytes[i], b'+' | b'-' | b'.'));
         // The grammar's bare-word forms are all case-insensitive: M/G
         // addresses and variable_single_char (axis letters) alike.
         if bare_number_follows && bytes[word_start].is_ascii_alphabetic() {
@@ -1192,7 +1197,7 @@ fn decode_line_inner<'a>(
                 if letter == b'M' {
                     arena.push(Word::MCode(code));
                 } else {
-                    match classify_g_command(&code.to_uppercase()) {
+                    match classify_g_command(&normalize_g_command(code)) {
                         Some((group, _modal)) => arena.push(Word::GCommand(group, code)),
                         // Unknown G code: let the full path produce its error.
                         None => return DecodeResult::NeedsGrammar,
@@ -1912,7 +1917,7 @@ M30
             "N10", "N", "10", "X5", "X", "Y1", "=", "5", "-3", "2.5", ".5", "AND", "OR", "XOR", "B_AND", "B_OR",
             "B_XOR", "DIV", "MOD", "NOT", "TRANS", "ROT", "SCALE", "MIRROR", "RPL", "DEF", "IC(2)", "(3*R1)", "(", ")",
             "*", "+", "/", "LBL:", ";c", "G1", "M3", "R1", "_V", "SIN(30)", "E", "F100", "IF", "GOTOF", "X1=", "T",
-            "\"s\"", "[", ",", "<", "x5", "n10", "SET", "$P",
+            "\"s\"", "[", ",", "<", "x5", "n10", "SET", "$P", "G01", "g003", "M03", "+.5", "1.", "-.",
         ];
         let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut next = |bound: usize| {
