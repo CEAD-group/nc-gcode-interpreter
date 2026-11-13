@@ -93,12 +93,30 @@ def test_rows_keep_plain_strings():
 
 
 def test_unknown_g_command_is_a_loud_error():
-    with pytest.raises(NcError, match="G01") as info:
-        nc_to_dataframe("G01 X1\n")
+    with pytest.raises(NcError, match="G09999") as info:
+        nc_to_dataframe("G09999 X1\n")
     assert info.value.kind == "unknown_g_command"
+
+
+def test_start_g_groups_require_canonical_enum_values():
     with pytest.raises(NcError, match="G01") as info:
         nc_to_dataframe("X1\n", start={"g_groups": {"gg01_motion": "G01"}})
     assert info.value.kind == "invalid_input"
+
+
+@pytest.mark.parametrize("stage1,min_bytes", [("0", "0"), ("1", "0"), ("1", str(2**63))])
+def test_padded_g_codes_reach_python_as_canonical_values(monkeypatch, stage1, min_bytes):
+    monkeypatch.setenv("NC_STAGE1", stage1)
+    monkeypatch.setenv("NC_STREAM_MIN_BYTES", min_bytes)
+    program = "G00 X.5\ng001 F+100 X+.75\n"
+    df, _ = nc_to_dataframe(program)
+    frames = list(nc_to_batches(program, batch_size=1))
+    for frame in [df, *frames]:
+        _assert_g_group_dtypes(frame)
+    assert df["gg01_motion"].to_list() == ["G0", "G1"]
+    assert df["X"].to_list() == [0.5, 0.75]
+    assert_frame_equal(pl.concat(frames, how="diagonal").select(df.columns), df)
+    assert [row["gg01_motion"] for _, row in nc_to_rows(program)] == ["G0", "G1"]
 
 
 @pytest.mark.parametrize("batch_size", [1, 2, 500_000])

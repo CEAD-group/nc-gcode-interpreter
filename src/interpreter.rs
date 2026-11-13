@@ -550,7 +550,7 @@ fn describe_rule(rule: Rule) -> &'static str {
         Rule::assignment_multi => "an array assignment (SET/REP)",
         Rule::axis_increment => "an incremental value IC(...)",
         Rule::expression | Rule::primary => "an expression",
-        Rule::value | Rule::float | Rule::integer => "a number",
+        Rule::value | Rule::integer => "a number",
         Rule::identifier | Rule::variable => "a name",
         Rule::variable_array => "an array element",
         Rule::indices => "array indices",

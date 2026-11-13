@@ -821,16 +821,15 @@ fn evaluate_unary(pairs: &[Pair<Rule>], pos: &mut usize, state: &mut State) -> R
 }
 /// Classify a lexically G-shaped command (`G<digits>` or `GFRAME[<n>]`)
 /// against the vocabulary table: the column key is the G-group name, the
-/// value the command as written. An unknown G number is a hard error, like
+/// value the canonical command. An unknown G number is a hard error, like
 /// alarm 12470 "undefined G function" on a real control.
 fn interpret_g_command(g_command: Pair<Rule>, state: &mut State) -> Result<(&'static str, String), ParsingError> {
     let command_str = g_command.as_str().trim().to_string();
-    // Store uppercase: the language is case-insensitive (g2 IS G2), and
-    // source case leaking into the output breaks downstream comparisons -
-    // worst case the flattener seeing 'g18' would arc in the wrong plane.
-    match crate::modal_groups::classify_g_command(&command_str.to_uppercase()) {
+    // Normalize both case and padding: downstream frame/curve handling
+    // compares canonical codes, so g02 and G018 must become G2 and G18.
+    let code = crate::modal_groups::normalize_g_command(&command_str);
+    match crate::modal_groups::classify_g_command(&code) {
         Some((group, modal)) => {
-            let code = command_str.to_uppercase();
             // The frame model needs the active plane for RPL and the arc check.
             if group == "gg06_plane_select" {
                 state.set_plane(&code);
