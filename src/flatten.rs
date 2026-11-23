@@ -214,6 +214,17 @@ impl Flattener {
     /// `out`. Most rows come straight back; arc rows expand into a sampled
     /// run, spline rows are buffered until the spline is deselected.
     pub fn push(&mut self, row: Row, out: &mut Vec<Row>) {
+        // A preset changes axis values without a movement: a pending spline
+        // ends at its programmed endpoint, and later motion starts from the new values.
+        if matches!(row.cells.get("non_returning_function_call"), Some(Value::Str(call)) if crate::output::is_preset_call(call))
+        {
+            if self.buffering_spline() {
+                self.flush_spline(out);
+            }
+            self.track_positions(&row);
+            out.push(row);
+            return;
+        }
         // A motion command on this block may deselect an active spline: the
         // buffered curve is complete and must be emitted first.
         if let Some(new_motion) = row_motion(&row) {
