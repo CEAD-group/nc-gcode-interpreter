@@ -4,6 +4,62 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [v0.4.0] - 2026-11-23
+
+### Changed
+
+- **Breaking:** four G-group columns are renamed to the group numbers of the
+  SINUMERIK G-group list (#120). `gg58_dyn_resp_path` is now
+  `gg59_dyn_resp_path` (DYNNORM and the other DYN words, confirmed by
+  `$P_GG[59]` on a controller), `gg59_area_limit` is now `gg60_area_limit`
+  (WALCS0 to WALCS10), `gg53_tool_wear` is now `gg56_tool_wear` (TOWSTD and the
+  other TOW words) and `gg56_frame_rot_tool` is now `gg53_frame_rot_tool`
+  (TOROT, TOFRAME and their variants). The `nr` fields in `GGroups.g_groups`
+  change with them. The old names are not kept as aliases.
+- `BSPLINE` flattening honours the knot distance `PL` (#121). When every
+  control-point block of the spline carries a `PL`, the curve is built on
+  non-uniform knots with the mapping measured on a SINUMERIK ONE: for a
+  cubic (`SD=3`) the knot spans take the `PL` of the second to the
+  second-to-last block, for a quadratic (`SD=2`) the `PL` of the first to the
+  second-to-last block. Only the ratios count, and a control point that
+  repeats its predecessor is dropped together with its `PL`. Before, `PL`
+  was ignored and such a program was flattened to a different curve than
+  the control runs.
+- A `BSPLINE` without `PL` keeps uniform knots and its output is unchanged.
+  This case is an approximation of the control, whose knot rule without
+  `PL` is not identified.
+- A `PL` on only some of the blocks, a `PL` that is not positive, or a `PL`
+  with a degree other than 2 or 3 is ignored with a warning, and the spline
+  is flattened on uniform knots.
+
+### Fixed
+
+- `PRESETON(<axis>, <value>, ...)` and `PRESETONS` set the axis value (#122).
+  The row of the call carries the new value, and later absolute and
+  incremental values start from it: `G1 E=10` / `PRESETON(E,0)` / `G1 E=4`
+  gives E 10, 0, 4, where the preset row kept 10 before. A preset before the
+  first value of an axis defines its start, so `E=IC(...)` no longer warns
+  about an unknown start and a flattened arc ramps the axis from the preset
+  value. The value is a machine value: under `TRANS` the frame stays active.
+  A preset of a name outside the configured axes warns and is not applied,
+  and a preset of a geometry axis under an active rotation is an error.
+  The preset row is not a movement: it needs no feed, and with flattening a
+  pending spline ends at its programmed endpoint before the preset. The call
+  must be alone in its block, apart from a block number and a comment.
+- A flattened arc that carries an axis's first value as `IC(...)` ramps the
+  axis from the start of 0 the interpreter already assumes, instead of holding
+  the end value on every sample (#123). A consumer that takes differences saw
+  the whole change on the first chord. An absolute first value is still held,
+  because no start is known, and that warning is now printed once instead of
+  twice for an axis that is both a default and an extra axis.
+- `GFRAME[n]` has number n+1 in `GGroups.g_groups`, as in the manual. Before,
+  `GFRAME[0]` and `GFRAME[1]` both had number 1.
+- The G-command table gains the commands it lacked against the manual: `G646`
+  (group 10), `CUT3DCP` (group 22), `COMPPATH` (group 30), `ORIANGLE`,
+  `ORICURINV` and `ORIAXESFR` (group 51), and group 38 with `SPIF1` and `SPIF2`
+  as the column `gg38_punch_fast_io`. `G646` was rejected as an unknown G code,
+  and the keywords were recorded as subprogram calls.
+
 ## [v0.3.2] - 2026-11-13
 
 ### Fixed
