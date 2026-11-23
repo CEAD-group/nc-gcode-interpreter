@@ -4,6 +4,8 @@ The axis does not move. The row of the call carries the new value, and later
 absolute and incremental values start from it.
 """
 
+import itertools
+
 import polars as pl
 import pytest
 from nc_gcode_interpreter import NcError, nc_to_batches, nc_to_dataframe
@@ -56,7 +58,7 @@ def test_batches_match_the_dataframe(stage1):
 def test_flattened_arc_starts_from_the_preset(stage1):
     text = "G0 X0 Y0 Z1\nPRESETON(E,0)\nG2 X200 Y0 I100 J0 E=4 F3000\n"
     values = column(text, "E", flatten_tolerance=0.5)[2:]
-    steps = [b - a for a, b in zip([0.0] + values, values)]
+    steps = [b - a for a, b in itertools.pairwise([0.0, *values])]
     assert values[-1] == pytest.approx(4.0)
     assert max(steps) == pytest.approx(min(steps))
 
