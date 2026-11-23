@@ -1707,7 +1707,16 @@ fn interpret_preset(call: &Pair<Rule>, state: &mut State) -> Result<Option<Vec<(
     }
     // The grammar skips an omitted argument, which would shift the pairs after it.
     let omitted = parts.arguments.as_ref().is_some_and(|arguments| {
-        let text: String = arguments.as_str().split_whitespace().collect();
+        // Commas inside a string literal separate nothing.
+        let mut quoted = false;
+        let text: String = arguments
+            .as_str()
+            .chars()
+            .filter(|&c| {
+                quoted ^= c == '"';
+                !quoted && c != '"' && !c.is_whitespace()
+            })
+            .collect();
         text.starts_with(',') || text.contains(",,")
     });
     if omitted {
