@@ -39,7 +39,7 @@ pub fn classify_g_command(word: &str) -> Option<(&'static str, bool)> {
         | "G584" | "G585" | "G586" | "G587" | "G588" | "G589" | "G590" | "G591" | "G592" | "G593" | "G594" | "G595"
         | "G596" | "G597" | "G598" | "G599" => ("gg08_work_offset", true),
         "G53" | "SUPA" | "G153" | "SUPD" => ("gg09_frame_tool_suppress", false),
-        "G60" | "G64" | "G641" | "G642" | "G643" | "G644" | "G645" => ("gg10_exact_stop_mode", true),
+        "G60" | "G64" | "G641" | "G642" | "G643" | "G644" | "G645" | "G646" => ("gg10_exact_stop_mode", true),
         "G9" => ("gg11_exact_stop_non_modal", false),
         "G601" | "G602" | "G603" => ("gg12_block_change_g60_g9", true),
         "G70" | "G71" | "G700" | "G710" => ("gg13_wp_measure", true),
@@ -53,7 +53,7 @@ pub fn classify_g_command(word: &str) -> Option<(&'static str, bool)> {
         "ENAT" | "ETAN" | "EAUTO" => ("gg20_curve_end_spline", true),
         "BRISK" | "SOFT" | "DRIVE" => ("gg21_accel_profile", true),
         "CUT2D" | "CUT2DF" | "CUT3DC" | "CUT3DF" | "CUT3DFS" | "CUT3DFF" | "CUT3DCC" | "CUT3DCCD" | "CUT2DD"
-        | "CUT2DFD" | "CUT3DCD" | "CUT3DFD" => ("gg22_tool_offset_type", true),
+        | "CUT2DFD" | "CUT3DCD" | "CUT3DFD" | "CUT3DCP" => ("gg22_tool_offset_type", true),
         "CDOF" | "CDON" | "CDOF2" => ("gg23_collision_monitor", true),
         "FFWOF" | "FFWON" => ("gg24_precontrol", true),
         "ORIWKS" | "ORIMKS" => ("gg25_tool_orient_ref", true),
@@ -61,7 +61,7 @@ pub fn classify_g_command(word: &str) -> Option<(&'static str, bool)> {
         "ORIC" | "ORID" => ("gg27_tool_offset_change", true),
         "WALIMON" | "WALIMOF" => ("gg28_area_limit", true),
         "DIAMOF" | "DIAMON" | "DIAM90" | "DIAMCYCOF" => ("gg29_rad_diam_prog", true),
-        "COMPOF" | "COMPON" | "COMPCURV" | "COMPCAD" | "COMPSURF" => ("gg30_nc_compress", true),
+        "COMPOF" | "COMPON" | "COMPCURV" | "COMPCAD" | "COMPSURF" | "COMPPATH" => ("gg30_nc_compress", true),
         "G810" | "G811" | "G812" | "G813" | "G814" | "G815" | "G816" | "G817" | "G818" | "G819" => ("gg31_oem_g", true),
         "G820" | "G821" | "G822" | "G823" | "G824" | "G825" | "G826" | "G827" | "G828" | "G829" => ("gg32_oem_g", true),
         "FTOCOF" | "FTOCON" => ("gg33_fine_tool_offset", true),
@@ -69,6 +69,7 @@ pub fn classify_g_command(word: &str) -> Option<(&'static str, bool)> {
         "SPOF" | "SON" | "PON" | "SONS" | "PONS" => ("gg35_punch_nibble", true),
         "PDELAYON" | "PDELAYOF" => ("gg36_punch_delay", true),
         "FNORM" | "FLIN" | "FCUB" => ("gg37_feedrate_profile", true),
+        "SPIF1" | "SPIF2" => ("gg38_punch_fast_io", true),
         "CPRECOF" | "CPRECON" => ("gg39_contour_acc", true),
         "CUTCONOF" | "CUTCONON" => ("gg40_tool_radius_const", true),
         "LFOF" | "LFON" => ("gg41_thread_interrupt", true),
@@ -82,18 +83,18 @@ pub fn classify_g_command(word: &str) -> Option<(&'static str, bool)> {
         "CP" | "PTP" | "PTPG0" | "PTPWOC" => ("gg49_ptp_motion", true),
         "ORIEULER" | "ORIRPY" | "ORIVIRT1" | "ORIVIRT2" | "ORIAXPOS" | "ORIRPY2" => ("gg50_orient_prog", true),
         "ORIVECT" | "ORIAXES" | "ORIPATH" | "ORIPLANE" | "ORICONCW" | "ORICONCCW" | "ORICONIO" | "ORICONTO"
-        | "ORICURVE" | "ORIPATHS" => ("gg51_interp_type_orient", true),
+        | "ORICURVE" | "ORIPATHS" | "ORIANGLE" | "ORICURINV" | "ORIAXESFR" => ("gg51_interp_type_orient", true),
         "PAROTOF" | "PAROT" => ("gg52_frame_rot_wp", true),
-        "TOWSTD" | "TOWMCS" | "TOWWCS" | "TOWBCS" | "TOWTCS" | "TOWKCS" => ("gg53_tool_wear", true),
+        "TOROTOF" | "TOROT" | "TOROTZ" | "TOROTY" | "TOROTX" | "TOFRAME" | "TOFRAMEZ" | "TOFRAMEY" | "TOFRAMEX" => {
+            ("gg53_frame_rot_tool", true)
+        }
         "ORIROTA" | "ORIROTR" | "ORIROTT" | "ORIROTC" => ("gg54_vector_rot_poly", true),
         "RTLION" | "RTLIOF" => ("gg55_rapid_traverse", true),
-        "TOROTOF" | "TOROT" | "TOROTZ" | "TOROTY" | "TOROTX" | "TOFRAME" | "TOFRAMEZ" | "TOFRAMEY" | "TOFRAMEX" => {
-            ("gg56_frame_rot_tool", true)
-        }
+        "TOWSTD" | "TOWMCS" | "TOWWCS" | "TOWBCS" | "TOWTCS" | "TOWKCS" => ("gg56_tool_wear", true),
         "FENDNORM" | "G62" | "G621" => ("gg57_corner_decel", true),
-        "DYNNORM" | "DYNPOS" | "DYNROUGH" | "DYNSEMIFIN" | "DYNFINISH" | "DYNPREC" => ("gg58_dyn_resp_path", true),
+        "DYNNORM" | "DYNPOS" | "DYNROUGH" | "DYNSEMIFIN" | "DYNFINISH" | "DYNPREC" => ("gg59_dyn_resp_path", true),
         "WALCS0" | "WALCS1" | "WALCS2" | "WALCS3" | "WALCS4" | "WALCS5" | "WALCS6" | "WALCS7" | "WALCS8" | "WALCS9"
-        | "WALCS10" => ("gg59_area_limit", true),
+        | "WALCS10" => ("gg60_area_limit", true),
         "ORISOF" | "ORISON" => ("gg61_tool_orient_smooth", true),
         "RMBBL" | "RMIBL" | "RMEBL" | "RMNBL" => ("gg62_repos_non_modal", false),
         "GFRAME[0]" | "GFRAME[1]" | "GFRAME[2]" | "GFRAME[3]" | "GFRAME[4]" | "GFRAME[5]" | "GFRAME[6]"
@@ -146,7 +147,7 @@ pub fn g_group_values(group: &str) -> Option<&'static [&'static str]> {
             "G592", "G593", "G594", "G595", "G596", "G597", "G598", "G599",
         ],
         "gg09_frame_tool_suppress" => &["G53", "SUPA", "G153", "SUPD"],
-        "gg10_exact_stop_mode" => &["G60", "G64", "G641", "G642", "G643", "G644", "G645"],
+        "gg10_exact_stop_mode" => &["G60", "G64", "G641", "G642", "G643", "G644", "G645", "G646"],
         "gg11_exact_stop_non_modal" => &["G9"],
         "gg12_block_change_g60_g9" => &["G601", "G602", "G603"],
         "gg13_wp_measure" => &["G70", "G71", "G700", "G710"],
@@ -162,7 +163,7 @@ pub fn g_group_values(group: &str) -> Option<&'static [&'static str]> {
         "gg21_accel_profile" => &["BRISK", "SOFT", "DRIVE"],
         "gg22_tool_offset_type" => &[
             "CUT2D", "CUT2DF", "CUT3DC", "CUT3DF", "CUT3DFS", "CUT3DFF", "CUT3DCC", "CUT3DCCD", "CUT2DD", "CUT2DFD",
-            "CUT3DCD", "CUT3DFD",
+            "CUT3DCD", "CUT3DFD", "CUT3DCP",
         ],
         "gg23_collision_monitor" => &["CDOF", "CDON", "CDOF2"],
         "gg24_precontrol" => &["FFWOF", "FFWON"],
@@ -171,7 +172,7 @@ pub fn g_group_values(group: &str) -> Option<&'static [&'static str]> {
         "gg27_tool_offset_change" => &["ORIC", "ORID"],
         "gg28_area_limit" => &["WALIMON", "WALIMOF"],
         "gg29_rad_diam_prog" => &["DIAMOF", "DIAMON", "DIAM90", "DIAMCYCOF"],
-        "gg30_nc_compress" => &["COMPOF", "COMPON", "COMPCURV", "COMPCAD", "COMPSURF"],
+        "gg30_nc_compress" => &["COMPOF", "COMPON", "COMPCURV", "COMPCAD", "COMPSURF", "COMPPATH"],
         "gg31_oem_g" => &[
             "G810", "G811", "G812", "G813", "G814", "G815", "G816", "G817", "G818", "G819",
         ],
@@ -183,6 +184,7 @@ pub fn g_group_values(group: &str) -> Option<&'static [&'static str]> {
         "gg35_punch_nibble" => &["SPOF", "SON", "PON", "SONS", "PONS"],
         "gg36_punch_delay" => &["PDELAYON", "PDELAYOF"],
         "gg37_feedrate_profile" => &["FNORM", "FLIN", "FCUB"],
+        "gg38_punch_fast_io" => &["SPIF1", "SPIF2"],
         "gg39_contour_acc" => &["CPRECOF", "CPRECON"],
         "gg40_tool_radius_const" => &["CUTCONOF", "CUTCONON"],
         "gg41_thread_interrupt" => &["LFOF", "LFON"],
@@ -206,17 +208,20 @@ pub fn g_group_values(group: &str) -> Option<&'static [&'static str]> {
             "ORICONTO",
             "ORICURVE",
             "ORIPATHS",
+            "ORIANGLE",
+            "ORICURINV",
+            "ORIAXESFR",
         ],
         "gg52_frame_rot_wp" => &["PAROTOF", "PAROT"],
-        "gg53_tool_wear" => &["TOWSTD", "TOWMCS", "TOWWCS", "TOWBCS", "TOWTCS", "TOWKCS"],
-        "gg54_vector_rot_poly" => &["ORIROTA", "ORIROTR", "ORIROTT", "ORIROTC"],
-        "gg55_rapid_traverse" => &["RTLION", "RTLIOF"],
-        "gg56_frame_rot_tool" => &[
+        "gg53_frame_rot_tool" => &[
             "TOROTOF", "TOROT", "TOROTZ", "TOROTY", "TOROTX", "TOFRAME", "TOFRAMEZ", "TOFRAMEY", "TOFRAMEX",
         ],
+        "gg54_vector_rot_poly" => &["ORIROTA", "ORIROTR", "ORIROTT", "ORIROTC"],
+        "gg55_rapid_traverse" => &["RTLION", "RTLIOF"],
+        "gg56_tool_wear" => &["TOWSTD", "TOWMCS", "TOWWCS", "TOWBCS", "TOWTCS", "TOWKCS"],
         "gg57_corner_decel" => &["FENDNORM", "G62", "G621"],
-        "gg58_dyn_resp_path" => &["DYNNORM", "DYNPOS", "DYNROUGH", "DYNSEMIFIN", "DYNFINISH", "DYNPREC"],
-        "gg59_area_limit" => &[
+        "gg59_dyn_resp_path" => &["DYNNORM", "DYNPOS", "DYNROUGH", "DYNSEMIFIN", "DYNFINISH", "DYNPREC"],
+        "gg60_area_limit" => &[
             "WALCS0", "WALCS1", "WALCS2", "WALCS3", "WALCS4", "WALCS5", "WALCS6", "WALCS7", "WALCS8", "WALCS9",
             "WALCS10",
         ],
@@ -329,7 +334,7 @@ pub fn g_group_values(group: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-pub const MODAL_G_GROUPS: [&str; 55] = [
+pub const MODAL_G_GROUPS: [&str; 56] = [
     "gg01_motion",
     "gg04_fifo",
     "gg06_plane_select",
@@ -362,6 +367,7 @@ pub const MODAL_G_GROUPS: [&str; 55] = [
     "gg35_punch_nibble",
     "gg36_punch_delay",
     "gg37_feedrate_profile",
+    "gg38_punch_fast_io",
     "gg39_contour_acc",
     "gg40_tool_radius_const",
     "gg41_thread_interrupt",
@@ -376,13 +382,13 @@ pub const MODAL_G_GROUPS: [&str; 55] = [
     "gg50_orient_prog",
     "gg51_interp_type_orient",
     "gg52_frame_rot_wp",
-    "gg53_tool_wear",
+    "gg53_frame_rot_tool",
     "gg54_vector_rot_poly",
     "gg55_rapid_traverse",
-    "gg56_frame_rot_tool",
+    "gg56_tool_wear",
     "gg57_corner_decel",
-    "gg58_dyn_resp_path",
-    "gg59_area_limit",
+    "gg59_dyn_resp_path",
+    "gg60_area_limit",
     "gg61_tool_orient_smooth",
     "gg64_grinding_frames",
 ];

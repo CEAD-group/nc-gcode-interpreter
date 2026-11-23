@@ -948,6 +948,11 @@
         "id": "G645",
         "nr": 7,
         "description": "Continuous-path mode with smoothing and tangential block transitions within defined tolerances"
+      },
+      {
+        "id": "G646",
+        "nr": 8,
+        "description": "Extended continuous-path mode with reduced velocity as per the overload factor"
       }
     ]
   },
@@ -1253,12 +1258,12 @@
       {
         "id": "CUT2D",
         "nr": 1,
-        "description": "2\u00bdD TRC"
+        "description": "2½D TRC"
       },
       {
         "id": "CUT2DF",
         "nr": 2,
-        "description": "2\u00bdD TRC relative to the current frame (inclined plane)"
+        "description": "2½D TRC relative to the current frame (inclined plane)"
       },
       {
         "id": "CUT3DC",
@@ -1293,12 +1298,12 @@
       {
         "id": "CUT2DD",
         "nr": 9,
-        "description": "2\u00bd D TRC in relation to the differential tool"
+        "description": "2½ D TRC in relation to the differential tool"
       },
       {
         "id": "CUT2DFD",
         "nr": 10,
-        "description": "2\u00bdD TRC in relation to a differential tool relative to the current frame (inclined plane)"
+        "description": "2½D TRC in relation to a differential tool relative to the current frame (inclined plane)"
       },
       {
         "id": "CUT3DCD",
@@ -1309,6 +1314,11 @@
         "id": "CUT3DFD",
         "nr": 12,
         "description": "3D TRC in relation to a differential tool for face milling with change in orientation"
+      },
+      {
+        "id": "CUT3DCP",
+        "nr": 13,
+        "description": "3D TRC for jet/beam cutting"
       }
     ]
   },
@@ -1493,6 +1503,11 @@
         "id": "COMPSURF",
         "nr": 5,
         "description": "COMPSURF ON compressor function"
+      },
+      {
+        "id": "COMPPATH",
+        "nr": 6,
+        "description": "Compressor function COMPPATH on"
       }
     ]
   },
@@ -1739,6 +1754,24 @@
         "id": "FCUB",
         "nr": 3,
         "description": "Feedrate variable according to cubic spline"
+      }
+    ]
+  },
+  {
+    "nr": 38,
+    "title": "G group 38: Assignment of fast inputs/outputs for punching/nibbling",
+    "effectiveness": "modal",
+    "short_name": "gg38_punch_fast_io",
+    "entries": [
+      {
+        "id": "SPIF1",
+        "nr": 1,
+        "description": "Fast NC inputs/outputs for punching/nibbling byte 1"
+      },
+      {
+        "id": "SPIF2",
+        "nr": 2,
+        "description": "Fast NC inputs/outputs for punching/nibbling byte 2"
       }
     ]
   },
@@ -2078,6 +2111,21 @@
         "id": "ORIPATHS",
         "nr": 10,
         "description": "Tool orientation in relation to the path, kinks in the orientation characteristic are smoothed"
+      },
+      {
+        "id": "ORIANGLE",
+        "nr": 11,
+        "description": "Interpolation via the virtual kinematics defined by G group 50"
+      },
+      {
+        "id": "ORICURINV",
+        "nr": 12,
+        "description": "Interpolation with additional space curve for orientation (orientation is defined inversely to ORICURVE)"
+      },
+      {
+        "id": "ORIAXESFR",
+        "nr": 13,
+        "description": "Linear interpolation of the orientation axes to programmed values"
       }
     ]
   },
@@ -2101,39 +2149,54 @@
   },
   {
     "nr": 53,
-    "title": "G group 53: Taking into account tool wear",
+    "title": "G group 53: Frame rotation in relation to tool",
     "effectiveness": "modal",
-    "short_name": "gg53_tool_wear",
+    "short_name": "gg53_frame_rot_tool",
     "entries": [
       {
-        "id": "TOWSTD",
+        "id": "TOROTOF",
         "nr": 1,
-        "description": "Initial setting value for offsets in tool length"
+        "description": "Frame rotation in relation to tool OFF"
       },
       {
-        "id": "TOWMCS",
+        "id": "TOROT",
         "nr": 2,
-        "description": "Wear values in the machine coordinate system (MCS)"
+        "description": "Align Z axis of the WCS by rotating the frame parallel to the tool orientation"
       },
       {
-        "id": "TOWWCS",
+        "id": "TOROTZ",
         "nr": 3,
-        "description": "Wear values in the workpiece coordinate system (WCS)"
+        "description": "As TOROT"
       },
       {
-        "id": "TOWBCS",
+        "id": "TOROTY",
         "nr": 4,
-        "description": "Wear values in the basic coordinate system (BCS)"
+        "description": "Align Y axis of the WCS by rotating the frame parallel to the tool orientation"
       },
       {
-        "id": "TOWTCS",
+        "id": "TOROTX",
         "nr": 5,
-        "description": "Wear values in the tool coordinate system (toolholder ref. point T at the toolholder)"
+        "description": "Align X axis of the WCS by rotating the frame parallel to the tool orientation"
       },
       {
-        "id": "TOWKCS",
+        "id": "TOFRAME",
         "nr": 6,
-        "description": "Wear values in the coordinate system of the tool head for kinetic transformation (differs from machine coordinate system through tool rotation)"
+        "description": "Align Z axis of the WCS by rotating the frame parallel to the tool orientation"
+      },
+      {
+        "id": "TOFRAMEZ",
+        "nr": 7,
+        "description": "As TOFRAME"
+      },
+      {
+        "id": "TOFRAMEY",
+        "nr": 8,
+        "description": "Align Y axis of the WCS by rotating the frame parallel to the tool orientation"
+      },
+      {
+        "id": "TOFRAMEX",
+        "nr": 9,
+        "description": "Align X axis of the WCS by rotating the frame parallel to the tool orientation"
       }
     ]
   },
@@ -2185,54 +2248,39 @@
   },
   {
     "nr": 56,
-    "title": "G group 56: Frame rotation in relation to tool",
+    "title": "G group 56: Taking into account tool wear",
     "effectiveness": "modal",
-    "short_name": "gg56_frame_rot_tool",
+    "short_name": "gg56_tool_wear",
     "entries": [
       {
-        "id": "TOROTOF",
+        "id": "TOWSTD",
         "nr": 1,
-        "description": "Frame rotation in relation to tool OFF"
+        "description": "Initial setting value for offsets in tool length"
       },
       {
-        "id": "TOROT",
+        "id": "TOWMCS",
         "nr": 2,
-        "description": "Align Z axis of the WCS by rotating the frame parallel to the tool orientation"
+        "description": "Wear values in the machine coordinate system (MCS)"
       },
       {
-        "id": "TOROTZ",
+        "id": "TOWWCS",
         "nr": 3,
-        "description": "As TOROT"
+        "description": "Wear values in the workpiece coordinate system (WCS)"
       },
       {
-        "id": "TOROTY",
+        "id": "TOWBCS",
         "nr": 4,
-        "description": "Align Y axis of the WCS by rotating the frame parallel to the tool orientation"
+        "description": "Wear values in the basic coordinate system (BCS)"
       },
       {
-        "id": "TOROTX",
+        "id": "TOWTCS",
         "nr": 5,
-        "description": "Align X axis of the WCS by rotating the frame parallel to the tool orientation"
+        "description": "Wear values in the tool coordinate system (toolholder ref. point T at the toolholder)"
       },
       {
-        "id": "TOFRAME",
+        "id": "TOWKCS",
         "nr": 6,
-        "description": "Align Z axis of the WCS by rotating the frame parallel to the tool orientation"
-      },
-      {
-        "id": "TOFRAMEZ",
-        "nr": 7,
-        "description": "As TOFRAME"
-      },
-      {
-        "id": "TOFRAMEY",
-        "nr": 8,
-        "description": "Align Y axis of the WCS by rotating the frame parallel to the tool orientation"
-      },
-      {
-        "id": "TOFRAMEX",
-        "nr": 9,
-        "description": "Align X axis of the WCS by rotating the frame parallel to the tool orientation"
+        "description": "Wear values in the coordinate system of the tool head for kinetic transformation (differs from machine coordinate system through tool rotation)"
       }
     ]
   },
@@ -2260,10 +2308,10 @@
     ]
   },
   {
-    "nr": 58,
+    "nr": 59,
     "title": "G group 59: Dynamic response mode for path interpolation",
     "effectiveness": "modal",
-    "short_name": "gg58_dyn_resp_path",
+    "short_name": "gg59_dyn_resp_path",
     "entries": [
       {
         "id": "DYNNORM",
@@ -2298,10 +2346,10 @@
     ]
   },
   {
-    "nr": 59,
+    "nr": 60,
     "title": "G group 60: Working area limitation",
     "effectiveness": "modal",
-    "short_name": "gg59_area_limit",
+    "short_name": "gg60_area_limit",
     "entries": [
       {
         "id": "WALCS0",
@@ -2419,502 +2467,502 @@
       },
       {
         "id": "GFRAME[1]",
-        "nr": 1,
+        "nr": 2,
         "description": "Grinding frame of the data management $P_GFR[1]"
       },
       {
         "id": "GFRAME[2]",
-        "nr": 2,
+        "nr": 3,
         "description": "Grinding frame of the data management $P_GFR[2]"
       },
       {
         "id": "GFRAME[3]",
-        "nr": 3,
+        "nr": 4,
         "description": "Grinding frame of the data management $P_GFR[3]"
       },
       {
         "id": "GFRAME[4]",
-        "nr": 4,
+        "nr": 5,
         "description": "Grinding frame of the data management $P_GFR[4]"
       },
       {
         "id": "GFRAME[5]",
-        "nr": 5,
+        "nr": 6,
         "description": "Grinding frame of the data management $P_GFR[5]"
       },
       {
         "id": "GFRAME[6]",
-        "nr": 6,
+        "nr": 7,
         "description": "Grinding frame of the data management $P_GFR[6]"
       },
       {
         "id": "GFRAME[7]",
-        "nr": 7,
+        "nr": 8,
         "description": "Grinding frame of the data management $P_GFR[7]"
       },
       {
         "id": "GFRAME[8]",
-        "nr": 8,
+        "nr": 9,
         "description": "Grinding frame of the data management $P_GFR[8]"
       },
       {
         "id": "GFRAME[9]",
-        "nr": 9,
+        "nr": 10,
         "description": "Grinding frame of the data management $P_GFR[9]"
       },
       {
         "id": "GFRAME[10]",
-        "nr": 10,
+        "nr": 11,
         "description": "Grinding frame of the data management $P_GFR[10]"
       },
       {
         "id": "GFRAME[11]",
-        "nr": 11,
+        "nr": 12,
         "description": "Grinding frame of the data management $P_GFR[11]"
       },
       {
         "id": "GFRAME[12]",
-        "nr": 12,
+        "nr": 13,
         "description": "Grinding frame of the data management $P_GFR[12]"
       },
       {
         "id": "GFRAME[13]",
-        "nr": 13,
+        "nr": 14,
         "description": "Grinding frame of the data management $P_GFR[13]"
       },
       {
         "id": "GFRAME[14]",
-        "nr": 14,
+        "nr": 15,
         "description": "Grinding frame of the data management $P_GFR[14]"
       },
       {
         "id": "GFRAME[15]",
-        "nr": 15,
+        "nr": 16,
         "description": "Grinding frame of the data management $P_GFR[15]"
       },
       {
         "id": "GFRAME[16]",
-        "nr": 16,
+        "nr": 17,
         "description": "Grinding frame of the data management $P_GFR[16]"
       },
       {
         "id": "GFRAME[17]",
-        "nr": 17,
+        "nr": 18,
         "description": "Grinding frame of the data management $P_GFR[17]"
       },
       {
         "id": "GFRAME[18]",
-        "nr": 18,
+        "nr": 19,
         "description": "Grinding frame of the data management $P_GFR[18]"
       },
       {
         "id": "GFRAME[19]",
-        "nr": 19,
+        "nr": 20,
         "description": "Grinding frame of the data management $P_GFR[19]"
       },
       {
         "id": "GFRAME[20]",
-        "nr": 20,
+        "nr": 21,
         "description": "Grinding frame of the data management $P_GFR[20]"
       },
       {
         "id": "GFRAME[21]",
-        "nr": 21,
+        "nr": 22,
         "description": "Grinding frame of the data management $P_GFR[21]"
       },
       {
         "id": "GFRAME[22]",
-        "nr": 22,
+        "nr": 23,
         "description": "Grinding frame of the data management $P_GFR[22]"
       },
       {
         "id": "GFRAME[23]",
-        "nr": 23,
+        "nr": 24,
         "description": "Grinding frame of the data management $P_GFR[23]"
       },
       {
         "id": "GFRAME[24]",
-        "nr": 24,
+        "nr": 25,
         "description": "Grinding frame of the data management $P_GFR[24]"
       },
       {
         "id": "GFRAME[25]",
-        "nr": 25,
+        "nr": 26,
         "description": "Grinding frame of the data management $P_GFR[25]"
       },
       {
         "id": "GFRAME[26]",
-        "nr": 26,
+        "nr": 27,
         "description": "Grinding frame of the data management $P_GFR[26]"
       },
       {
         "id": "GFRAME[27]",
-        "nr": 27,
+        "nr": 28,
         "description": "Grinding frame of the data management $P_GFR[27]"
       },
       {
         "id": "GFRAME[28]",
-        "nr": 28,
+        "nr": 29,
         "description": "Grinding frame of the data management $P_GFR[28]"
       },
       {
         "id": "GFRAME[29]",
-        "nr": 29,
+        "nr": 30,
         "description": "Grinding frame of the data management $P_GFR[29]"
       },
       {
         "id": "GFRAME[30]",
-        "nr": 30,
+        "nr": 31,
         "description": "Grinding frame of the data management $P_GFR[30]"
       },
       {
         "id": "GFRAME[31]",
-        "nr": 31,
+        "nr": 32,
         "description": "Grinding frame of the data management $P_GFR[31]"
       },
       {
         "id": "GFRAME[32]",
-        "nr": 32,
+        "nr": 33,
         "description": "Grinding frame of the data management $P_GFR[32]"
       },
       {
         "id": "GFRAME[33]",
-        "nr": 33,
+        "nr": 34,
         "description": "Grinding frame of the data management $P_GFR[33]"
       },
       {
         "id": "GFRAME[34]",
-        "nr": 34,
+        "nr": 35,
         "description": "Grinding frame of the data management $P_GFR[34]"
       },
       {
         "id": "GFRAME[35]",
-        "nr": 35,
+        "nr": 36,
         "description": "Grinding frame of the data management $P_GFR[35]"
       },
       {
         "id": "GFRAME[36]",
-        "nr": 36,
+        "nr": 37,
         "description": "Grinding frame of the data management $P_GFR[36]"
       },
       {
         "id": "GFRAME[37]",
-        "nr": 37,
+        "nr": 38,
         "description": "Grinding frame of the data management $P_GFR[37]"
       },
       {
         "id": "GFRAME[38]",
-        "nr": 38,
+        "nr": 39,
         "description": "Grinding frame of the data management $P_GFR[38]"
       },
       {
         "id": "GFRAME[39]",
-        "nr": 39,
+        "nr": 40,
         "description": "Grinding frame of the data management $P_GFR[39]"
       },
       {
         "id": "GFRAME[40]",
-        "nr": 40,
+        "nr": 41,
         "description": "Grinding frame of the data management $P_GFR[40]"
       },
       {
         "id": "GFRAME[41]",
-        "nr": 41,
+        "nr": 42,
         "description": "Grinding frame of the data management $P_GFR[41]"
       },
       {
         "id": "GFRAME[42]",
-        "nr": 42,
+        "nr": 43,
         "description": "Grinding frame of the data management $P_GFR[42]"
       },
       {
         "id": "GFRAME[43]",
-        "nr": 43,
+        "nr": 44,
         "description": "Grinding frame of the data management $P_GFR[43]"
       },
       {
         "id": "GFRAME[44]",
-        "nr": 44,
+        "nr": 45,
         "description": "Grinding frame of the data management $P_GFR[44]"
       },
       {
         "id": "GFRAME[45]",
-        "nr": 45,
+        "nr": 46,
         "description": "Grinding frame of the data management $P_GFR[45]"
       },
       {
         "id": "GFRAME[46]",
-        "nr": 46,
+        "nr": 47,
         "description": "Grinding frame of the data management $P_GFR[46]"
       },
       {
         "id": "GFRAME[47]",
-        "nr": 47,
+        "nr": 48,
         "description": "Grinding frame of the data management $P_GFR[47]"
       },
       {
         "id": "GFRAME[48]",
-        "nr": 48,
+        "nr": 49,
         "description": "Grinding frame of the data management $P_GFR[48]"
       },
       {
         "id": "GFRAME[49]",
-        "nr": 49,
+        "nr": 50,
         "description": "Grinding frame of the data management $P_GFR[49]"
       },
       {
         "id": "GFRAME[50]",
-        "nr": 50,
+        "nr": 51,
         "description": "Grinding frame of the data management $P_GFR[50]"
       },
       {
         "id": "GFRAME[51]",
-        "nr": 51,
+        "nr": 52,
         "description": "Grinding frame of the data management $P_GFR[51]"
       },
       {
         "id": "GFRAME[52]",
-        "nr": 52,
+        "nr": 53,
         "description": "Grinding frame of the data management $P_GFR[52]"
       },
       {
         "id": "GFRAME[53]",
-        "nr": 53,
+        "nr": 54,
         "description": "Grinding frame of the data management $P_GFR[53]"
       },
       {
         "id": "GFRAME[54]",
-        "nr": 54,
+        "nr": 55,
         "description": "Grinding frame of the data management $P_GFR[54]"
       },
       {
         "id": "GFRAME[55]",
-        "nr": 55,
+        "nr": 56,
         "description": "Grinding frame of the data management $P_GFR[55]"
       },
       {
         "id": "GFRAME[56]",
-        "nr": 56,
+        "nr": 57,
         "description": "Grinding frame of the data management $P_GFR[56]"
       },
       {
         "id": "GFRAME[57]",
-        "nr": 57,
+        "nr": 58,
         "description": "Grinding frame of the data management $P_GFR[57]"
       },
       {
         "id": "GFRAME[58]",
-        "nr": 58,
+        "nr": 59,
         "description": "Grinding frame of the data management $P_GFR[58]"
       },
       {
         "id": "GFRAME[59]",
-        "nr": 59,
+        "nr": 60,
         "description": "Grinding frame of the data management $P_GFR[59]"
       },
       {
         "id": "GFRAME[60]",
-        "nr": 60,
+        "nr": 61,
         "description": "Grinding frame of the data management $P_GFR[60]"
       },
       {
         "id": "GFRAME[61]",
-        "nr": 61,
+        "nr": 62,
         "description": "Grinding frame of the data management $P_GFR[61]"
       },
       {
         "id": "GFRAME[62]",
-        "nr": 62,
+        "nr": 63,
         "description": "Grinding frame of the data management $P_GFR[62]"
       },
       {
         "id": "GFRAME[63]",
-        "nr": 63,
+        "nr": 64,
         "description": "Grinding frame of the data management $P_GFR[63]"
       },
       {
         "id": "GFRAME[64]",
-        "nr": 64,
+        "nr": 65,
         "description": "Grinding frame of the data management $P_GFR[64]"
       },
       {
         "id": "GFRAME[65]",
-        "nr": 65,
+        "nr": 66,
         "description": "Grinding frame of the data management $P_GFR[65]"
       },
       {
         "id": "GFRAME[66]",
-        "nr": 66,
+        "nr": 67,
         "description": "Grinding frame of the data management $P_GFR[66]"
       },
       {
         "id": "GFRAME[67]",
-        "nr": 67,
+        "nr": 68,
         "description": "Grinding frame of the data management $P_GFR[67]"
       },
       {
         "id": "GFRAME[68]",
-        "nr": 68,
+        "nr": 69,
         "description": "Grinding frame of the data management $P_GFR[68]"
       },
       {
         "id": "GFRAME[69]",
-        "nr": 69,
+        "nr": 70,
         "description": "Grinding frame of the data management $P_GFR[69]"
       },
       {
         "id": "GFRAME[70]",
-        "nr": 70,
+        "nr": 71,
         "description": "Grinding frame of the data management $P_GFR[70]"
       },
       {
         "id": "GFRAME[71]",
-        "nr": 71,
+        "nr": 72,
         "description": "Grinding frame of the data management $P_GFR[71]"
       },
       {
         "id": "GFRAME[72]",
-        "nr": 72,
+        "nr": 73,
         "description": "Grinding frame of the data management $P_GFR[72]"
       },
       {
         "id": "GFRAME[73]",
-        "nr": 73,
+        "nr": 74,
         "description": "Grinding frame of the data management $P_GFR[73]"
       },
       {
         "id": "GFRAME[74]",
-        "nr": 74,
+        "nr": 75,
         "description": "Grinding frame of the data management $P_GFR[74]"
       },
       {
         "id": "GFRAME[75]",
-        "nr": 75,
+        "nr": 76,
         "description": "Grinding frame of the data management $P_GFR[75]"
       },
       {
         "id": "GFRAME[76]",
-        "nr": 76,
+        "nr": 77,
         "description": "Grinding frame of the data management $P_GFR[76]"
       },
       {
         "id": "GFRAME[77]",
-        "nr": 77,
+        "nr": 78,
         "description": "Grinding frame of the data management $P_GFR[77]"
       },
       {
         "id": "GFRAME[78]",
-        "nr": 78,
+        "nr": 79,
         "description": "Grinding frame of the data management $P_GFR[78]"
       },
       {
         "id": "GFRAME[79]",
-        "nr": 79,
+        "nr": 80,
         "description": "Grinding frame of the data management $P_GFR[79]"
       },
       {
         "id": "GFRAME[80]",
-        "nr": 80,
+        "nr": 81,
         "description": "Grinding frame of the data management $P_GFR[80]"
       },
       {
         "id": "GFRAME[81]",
-        "nr": 81,
+        "nr": 82,
         "description": "Grinding frame of the data management $P_GFR[81]"
       },
       {
         "id": "GFRAME[82]",
-        "nr": 82,
+        "nr": 83,
         "description": "Grinding frame of the data management $P_GFR[82]"
       },
       {
         "id": "GFRAME[83]",
-        "nr": 83,
+        "nr": 84,
         "description": "Grinding frame of the data management $P_GFR[83]"
       },
       {
         "id": "GFRAME[84]",
-        "nr": 84,
+        "nr": 85,
         "description": "Grinding frame of the data management $P_GFR[84]"
       },
       {
         "id": "GFRAME[85]",
-        "nr": 85,
+        "nr": 86,
         "description": "Grinding frame of the data management $P_GFR[85]"
       },
       {
         "id": "GFRAME[86]",
-        "nr": 86,
+        "nr": 87,
         "description": "Grinding frame of the data management $P_GFR[86]"
       },
       {
         "id": "GFRAME[87]",
-        "nr": 87,
+        "nr": 88,
         "description": "Grinding frame of the data management $P_GFR[87]"
       },
       {
         "id": "GFRAME[88]",
-        "nr": 88,
+        "nr": 89,
         "description": "Grinding frame of the data management $P_GFR[88]"
       },
       {
         "id": "GFRAME[89]",
-        "nr": 89,
+        "nr": 90,
         "description": "Grinding frame of the data management $P_GFR[89]"
       },
       {
         "id": "GFRAME[90]",
-        "nr": 90,
+        "nr": 91,
         "description": "Grinding frame of the data management $P_GFR[90]"
       },
       {
         "id": "GFRAME[91]",
-        "nr": 91,
+        "nr": 92,
         "description": "Grinding frame of the data management $P_GFR[91]"
       },
       {
         "id": "GFRAME[92]",
-        "nr": 92,
+        "nr": 93,
         "description": "Grinding frame of the data management $P_GFR[92]"
       },
       {
         "id": "GFRAME[93]",
-        "nr": 93,
+        "nr": 94,
         "description": "Grinding frame of the data management $P_GFR[93]"
       },
       {
         "id": "GFRAME[94]",
-        "nr": 94,
+        "nr": 95,
         "description": "Grinding frame of the data management $P_GFR[94]"
       },
       {
         "id": "GFRAME[95]",
-        "nr": 95,
+        "nr": 96,
         "description": "Grinding frame of the data management $P_GFR[95]"
       },
       {
         "id": "GFRAME[96]",
-        "nr": 96,
+        "nr": 97,
         "description": "Grinding frame of the data management $P_GFR[96]"
       },
       {
         "id": "GFRAME[97]",
-        "nr": 97,
+        "nr": 98,
         "description": "Grinding frame of the data management $P_GFR[97]"
       },
       {
         "id": "GFRAME[98]",
-        "nr": 98,
+        "nr": 99,
         "description": "Grinding frame of the data management $P_GFR[98]"
       },
       {
         "id": "GFRAME[99]",
-        "nr": 99,
+        "nr": 100,
         "description": "Grinding frame of the data management $P_GFR[99]"
       },
       {
         "id": "GFRAME[100]",
-        "nr": 100,
+        "nr": 101,
         "description": "Grinding frame of the data management $P_GFR[100]"
       }
     ]
