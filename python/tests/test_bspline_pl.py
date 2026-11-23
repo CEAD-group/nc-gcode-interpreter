@@ -4,6 +4,7 @@ The expected curves come from an independent de Boor evaluation on an
 explicit clamped knot vector, not from the flattener.
 """
 
+import itertools
 import math
 
 import polars as pl
@@ -120,7 +121,7 @@ class Reference:
 def distance_to_polyline(point, polyline):
     best = math.inf
     px, py = point
-    for (ax, ay), (bx, by) in zip(polyline, polyline[1:], strict=False):
+    for (ax, ay), (bx, by) in itertools.pairwise(polyline):
         dx, dy = bx - ax, by - ay
         length2 = dx * dx + dy * dy
         t = 0.0 if length2 == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / length2))
@@ -216,7 +217,7 @@ def test_repeated_control_points_are_dropped_with_their_pl(capfd):
     expected = moves(flatten(program()))
     # A first block on the start position, and block 4 programmed twice.
     first = (START[0], START[1], 999)
-    repeated = BLOCKS[:4] + [(BLOCKS[3][0], BLOCKS[3][1], 999)] + BLOCKS[4:]
+    repeated = [*BLOCKS[:4], (BLOCKS[3][0], BLOCKS[3][1], 999), *BLOCKS[4:]]
     df = flatten(program(blocks=[first, *repeated]))
     assert capfd.readouterr().err == ""
     assert moves(df) == pytest.approx(expected)
@@ -230,7 +231,7 @@ def moves(df):
     """The spline rows that move: a dropped block keeps a row for its other
     cells, which repeats the previous position."""
     points = [START, *curve_points(df)]
-    return [b for a, b in zip(points, points[1:], strict=False) if a != b]
+    return [b for a, b in itertools.pairwise(points) if a != b]
 
 
 def test_pw_weights_apply_on_pl_knots():
