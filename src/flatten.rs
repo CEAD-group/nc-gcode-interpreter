@@ -157,6 +157,9 @@ pub struct Flattener {
     spline_start: Vec<Option<f64>>,
     /// Current B-spline degree (`SD=`, modal within the spline).
     spline_degree: usize,
+    /// A preset ended the buffered spline: the next block continues the
+    /// same spline selection, so the modal degree stays.
+    spline_continues: bool,
     /// Curve motion words already warned about (CIP, CT, POLY, ...): one
     /// warning per word per run, not one per block.
     warned_motions: Vec<String>,
@@ -195,6 +198,7 @@ impl Flattener {
             spline_buffer: Vec::new(),
             spline_start: Vec::new(),
             spline_degree: 3,
+            spline_continues: false,
             warned_motions: Vec::new(),
         })
     }
@@ -209,6 +213,7 @@ impl Flattener {
         {
             if self.buffering_spline() {
                 self.flush_spline(out);
+                self.spline_continues = true;
             }
             self.track_positions(&row);
             out.push(row);
@@ -221,6 +226,7 @@ impl Flattener {
                 self.flush_spline(out);
             }
             self.motion = new_motion;
+            self.spline_continues = false;
         }
         if let Some(Value::Str(plane)) = row.cells.get("gg06_plane_select") {
             self.plane = match plane.as_str() {
@@ -234,7 +240,9 @@ impl Flattener {
             Motion::Spline(_) => {
                 if !self.buffering_spline() {
                     self.spline_start = self.positions.clone();
-                    self.spline_degree = 3;
+                    if !std::mem::take(&mut self.spline_continues) {
+                        self.spline_degree = 3;
+                    }
                 }
                 if let Some(Value::Float(sd)) = row.cells.get("SD") {
                     self.spline_degree = (*sd as usize).max(1);

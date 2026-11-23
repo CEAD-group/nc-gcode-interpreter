@@ -136,3 +136,21 @@ def test_arcs_around_a_preset_block_are_flattened(stage1):
     preset = df["non_returning_function_call"].to_list().index("PRESETON(E,0)")
     assert preset > 4
     assert df.height - preset - 1 == preset - 1
+
+
+def test_preset_keeps_the_spline_degree(stage1):
+    """SD is modal: a preset inside the spline selection does not reset it to 3."""
+    points = "X10 Y10\nX20 Y0\nX30 Y10\nX40 Y0\nG1 X50\n"
+
+    def curve(degree: int, preset: str) -> list:
+        text = f"G1 X0 Y0 F100\nBSPLINE SD={degree}\n{preset}{points}"
+        df, _ = nc_to_dataframe(text, extra_axes=["E"], flatten_tolerance=0.01)
+        df = df.filter(pl.col("X").is_not_null() & (pl.col("X") > 0))
+        return list(zip(df["X"].to_list(), df["Y"].to_list(), strict=True))
+
+    assert curve(2, "PRESETON(E,0)\n") == curve(2, "")
+    assert curve(2, "PRESETON(E,0)\n") != curve(3, "")
+
+
+def test_commas_in_a_string_argument_are_not_omitted_arguments(stage1):
+    assert column('G1 X1 F100\nPRESETON(X,STRLEN(",,"))\nX=IC(1)\n', "X") == [1.0, 2.0, 3.0]
