@@ -1547,7 +1547,45 @@ fn call_repetition_count(pair: Pair<Rule>, state: &mut State) -> Result<u32, Par
 /// A block holds one subprogram call: the output row has one call cell, and
 /// a second call would silently replace the first. A repeat count before the
 /// name would otherwise run the call once or set a variable P.
+/// `PRESETON` and `PRESETONS` stand alone in their block (manual 4.8.5): next
+/// to motion words the row could not tell the preset values from the movement.
+fn reject_mixed_preset(block: &Pair<Rule>, state: &State) -> Result<(), ParsingError> {
+    let mut preset: Option<Pair<Rule>> = None;
+    let mut others = 0;
+    for item in block.clone().into_inner() {
+        match item.as_rule() {
+            Rule::block_number | Rule::label_def | Rule::comment => {}
+            Rule::statement => {
+                let call = item
+                    .clone()
+                    .into_inner()
+                    .next()
+                    .filter(|inner| inner.as_rule() == Rule::non_returning_function_call)
+                    .filter(|inner| crate::output::is_preset_call(inner.as_str()));
+                match call {
+                    Some(call) if preset.is_none() => preset = Some(call),
+                    _ => others += 1,
+                }
+            }
+            _ => others += 1,
+        }
+    }
+    match preset {
+        Some(call) if others > 0 => {
+            let name = call_parts(&call).name;
+            Err(annotate_error(
+                &call,
+                &name,
+                format!("{name} must be alone in the block (manual 4.8.5)"),
+                state,
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(crate) fn reject_second_call(block: &Pair<Rule>, state: &State) -> Result<(), ParsingError> {
+    reject_mixed_preset(block, state)?;
     let mut first: Option<Pair<Rule>> = None;
     let mut count_before: Option<Pair<Rule>> = None;
     for statement in block.clone().into_inner().filter(|p| p.as_rule() == Rule::statement) {
