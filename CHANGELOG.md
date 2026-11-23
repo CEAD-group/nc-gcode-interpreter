@@ -4,6 +4,26 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Changed
+
+- `BSPLINE` flattening honours the knot distance `PL` (#121). When every
+  control-point block of the spline carries a `PL`, the curve is built on
+  non-uniform knots with the mapping measured on a SINUMERIK ONE: for a
+  cubic (`SD=3`) the knot spans take the `PL` of the second to the
+  second-to-last block, for a quadratic (`SD=2`) the `PL` of the first to the
+  second-to-last block. Only the ratios count, and a control point that
+  repeats its predecessor is dropped together with its `PL`. Before, `PL`
+  was ignored and such a program was flattened to a different curve than
+  the control runs.
+- A `BSPLINE` without `PL` keeps uniform knots and its output is unchanged.
+  This case is an approximation of the control, whose knot rule without
+  `PL` is not identified.
+- A `PL` on only some of the blocks, a `PL` that is not positive, or a `PL`
+  with a degree other than 2 or 3 is ignored with a warning, and the spline
+  is flattened on uniform knots.
+
 ## [v0.3.2] - 2026-11-13
 
 ### Fixed

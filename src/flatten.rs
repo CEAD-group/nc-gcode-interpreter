@@ -32,9 +32,12 @@
 //! * `CSPLINE` — cubic spline through the programmed points (natural end
 //!   conditions), chord-length parameterized.
 //! * `BSPLINE` — the programmed positions are control points of a clamped
-//!   uniform B-spline; `PW` weights (rational), `SD` degree (default 3).
-//!   A constant `PL` only rescales the parameter and never changes the
-//!   curve shape, so its value is ignored. The control points are not on
+//!   B-spline; `PW` weights (rational), `SD` degree (default 3). When every
+//!   control-point block carries a `PL`, the knot spans take the `PL` values
+//!   (mapping measured on a SINUMERIK ONE, see `bspline_knot_plan`); only
+//!   their ratios matter. Without `PL` the knots are uniform, which
+//!   approximates the control: its knot rule for that case is not
+//!   identified. The control points are not on
 //!   the curve, so the samples are attributed to control-point blocks by
 //!   Greville abscissa: each block owns the stretch of the curve up to the
 //!   parameter where its control point has the most influence.
@@ -56,6 +59,10 @@
 //!   extrapolation. Only the first/last spline segments differ.
 //! * A/C splines are chord-length parameterized; a per-block `PL` parameter
 //!   interval is not applied.
+//! * A BSPLINE without `PL` uses uniform knots; the control's knots in
+//!   that case are not uniform and their rule is not identified. A `PL` on
+//!   only some of the blocks, or with a degree other than 2 or 3, is
+//!   ignored with a warning (uniform knots).
 //! * The spline channels are all axes programmed in the spline blocks
 //!   (`SPLINEPATH` declarations are not parsed; the control default is the
 //!   first three channel axes).
@@ -571,6 +578,22 @@ impl Flattener {
             }
         };
 
+        // A B-spline whose blocks all carry a PL gets non-uniform knots and
+        // loses its repeated control points; `kept` lists the points in use.
+        let plan = match kind {
+            SplineKind::BSpline => bspline_knot_plan(&items, &points, &point_rows, self.spline_degree),
+            _ => None,
+        };
+        let (kept, intervals): (Option<Vec<usize>>, Option<Vec<f64>>) = match plan {
+            Some(plan) => (Some(plan.kept), Some(plan.intervals)),
+            None => (None, None),
+        };
+        if let Some(kept) = &kept {
+            points = kept.iter().map(|&i| std::mem::take(&mut points[i])).collect();
+            weights = kept.iter().map(|&i| weights[i]).collect();
+            point_rows = kept.iter().map(|&i| point_rows[i]).collect();
+        }
+
         // Sample the curve: per source point, the run of samples that ends
         // at (or is attributed to) that point.
         let runs: Option<Vec<Vec<Vec<f64>>>> = if points.len() < 2 {
@@ -580,7 +603,14 @@ impl Flattener {
                 SplineKind::Akima | SplineKind::Cubic => {
                     interpolating_spline_runs(&points, &metric, self.tolerance, kind)
                 }
-                SplineKind::BSpline => bspline_runs(&points, &weights, self.spline_degree, &metric, self.tolerance),
+                SplineKind::BSpline => bspline_runs(
+                    &points,
+                    &weights,
+                    self.spline_degree,
+                    intervals.as_deref(),
+                    &metric,
+                    self.tolerance,
+                ),
             }
         };
 
@@ -674,6 +704,79 @@ impl Flattener {
             }
         }
     }
+}
+
+/// Knot spans of a B-spline taken from the programmed `PL` values, with the
+/// control points they apply to.
+struct KnotPlan {
+    /// Indices into the point list of the control points in use.
+    kept: Vec<usize>,
+    /// Relative length of each knot span, in curve order.
+    intervals: Vec<f64>,
+}
+
+/// The knot spans of a B-spline whose control-point blocks all carry a `PL`,
+/// as measured on a SINUMERIK ONE. A control point that repeats its
+/// predecessor is dropped together with its `PL`. Counting the start
+/// position as control point 0, knot span `j` (from 0) of a cubic takes the
+/// `PL` of control point `j + 2`, and of a quadratic that of control point
+/// `j + 1`. `None` means uniform knots on all points: no block has a `PL`,
+/// or the controller rule for the input is unknown (warned).
+fn bspline_knot_plan(
+    items: &[SplineItem],
+    points: &[Vec<f64>],
+    point_rows: &[Option<usize>],
+    degree: usize,
+) -> Option<KnotPlan> {
+    let block = |i: usize| match point_rows[i].map(|index| &items[index]) {
+        Some(SplineItem::Point(row)) => Some(row),
+        _ => None,
+    };
+    let mut kept: Vec<usize> = vec![0];
+    for i in 1..points.len() {
+        if points[i] != points[kept[kept.len() - 1]] {
+            kept.push(i);
+        }
+    }
+    let pls: Vec<Option<f64>> = kept[1..]
+        .iter()
+        .map(|&i| block(i).and_then(|row| cell_float(row, "PL")))
+        .collect();
+    if pls.iter().all(Option::is_none) {
+        return None;
+    }
+    let line_no = block(1).map_or(0, |row| row.line_no);
+    let fallback = |reason: &str| {
+        emit_warning(format_args!(
+            "Warning [line {}]: BSPLINE PL values are ignored and uniform knots are used ({})",
+            line_no, reason
+        ));
+        None
+    };
+    if pls.iter().any(Option::is_none) {
+        return fallback("not every control-point block carries a PL");
+    }
+    let pls: Vec<f64> = pls.into_iter().flatten().collect();
+    // The control accepts PL=0 as a repeated knot; that case is not measured.
+    if pls.iter().any(|&pl| !(pl > 0.0 && pl.is_finite())) {
+        return fallback("a PL is not a positive number");
+    }
+    let n = kept.len();
+    let p = degree.min(n - 1).max(1);
+    let spans = n - p;
+    if spans == 1 {
+        // A single knot span has no interior knots: PL cannot change the curve.
+        return Some(KnotPlan {
+            kept,
+            intervals: vec![1.0],
+        });
+    }
+    if p != 2 && p != 3 {
+        return fallback("the PL mapping is only known for SD=2 and SD=3");
+    }
+    // `pls[i]` is the PL of control point i + 1.
+    let intervals = pls[p - 2..p - 2 + spans].to_vec();
+    Some(KnotPlan { kept, intervals })
 }
 
 /// The exact coordinates of the point programmed by buffer item `item_index`.
@@ -973,15 +1076,17 @@ fn natural_cubic_slopes(ts: &[f64], ys: &[f64]) -> Vec<f64> {
         .collect()
 }
 
-/// A clamped uniform (rational) B-spline: the effective degree, its knot
-/// vector on `[0, spans]` and the control points in homogeneous
-/// coordinates `(channel * w, ..., w)`.
+/// A clamped (rational) B-spline: the effective degree, its knot vector on
+/// `[0, spans]` (uniform unless span intervals are given) and the control
+/// points in homogeneous coordinates `(channel * w, ..., w)`.
 struct BSpline {
     /// The programmed degree, capped by the control point count: `n`
     /// control points support at most degree `n - 1`.
     p: usize,
     spans: usize,
     knots: Vec<f64>,
+    /// The interior knots are the integers `1..spans`.
+    uniform: bool,
     ctrl: Vec<Vec<f64>>,
     channels: usize,
     /// de Boor working rows, `(p + 1) * (channels + 1)` values, reused by
@@ -990,14 +1095,32 @@ struct BSpline {
 }
 
 impl BSpline {
-    fn new(points: &[Vec<f64>], weights: &[f64], degree: usize) -> Self {
+    /// `intervals` are the relative lengths of the `n - p` knot spans; only
+    /// their ratios matter. `None` gives uniform knots.
+    fn new(points: &[Vec<f64>], weights: &[f64], degree: usize, intervals: Option<&[f64]>) -> Self {
         let n = points.len();
         let p = degree.min(n - 1).max(1);
         let spans = n - p;
+        // Equal intervals take the integer knots, so a constant PL gives
+        // exactly the output of no PL.
+        let intervals = intervals.filter(|iv| iv.len() == spans && iv.iter().any(|&v| v != iv[0]));
         let mut knots = Vec::with_capacity(n + p + 1);
         knots.extend(std::iter::repeat_n(0.0, p + 1));
-        for i in 1..spans {
-            knots.push(i as f64);
+        match intervals {
+            Some(intervals) => {
+                // Scale to a total of `spans`, the range of the uniform case.
+                let scale = spans as f64 / intervals.iter().sum::<f64>();
+                let mut sum = 0.0;
+                for interval in &intervals[..spans - 1] {
+                    sum += interval;
+                    knots.push(sum * scale);
+                }
+            }
+            None => {
+                for i in 1..spans {
+                    knots.push(i as f64);
+                }
+            }
         }
         knots.extend(std::iter::repeat_n(spans as f64, p + 1));
         let ctrl = points
@@ -1013,6 +1136,7 @@ impl BSpline {
             p,
             spans,
             knots,
+            uniform: intervals.is_none(),
             ctrl,
             channels: points[0].len(),
             scratch: std::cell::RefCell::new(Vec::new()),
@@ -1027,8 +1151,10 @@ impl BSpline {
         // Knot span index k with knots[k] <= t < knots[k+1].
         let k = if t >= self.spans as f64 {
             self.ctrl.len() - 1
-        } else {
+        } else if self.uniform {
             p + t as usize
+        } else {
+            p + knots[p + 1..p + self.spans].partition_point(|&knot| knot <= t)
         };
         // Row j of `d` is control point j + k - p.
         let width = channels + 1;
@@ -1058,8 +1184,9 @@ impl BSpline {
 
     /// Greville abscissa of control point `i`, the mean of the `p` knots
     /// after knot `i`: the parameter where that control point has the most
-    /// influence on the curve. Strictly increasing in `i` for this knot
-    /// vector, from 0 (first point) to `spans` (last point).
+    /// influence on the curve. Strictly increasing in `i` for a clamped
+    /// knot vector without repeated interior knots, from 0 (first point)
+    /// to `spans` (last point).
     fn greville(&self, i: usize) -> f64 {
         self.knots[i + 1..=i + self.p].iter().sum::<f64>() / self.p as f64
     }
@@ -1073,7 +1200,7 @@ impl BSpline {
         let mut prev_t = 0.0;
         let mut prev_p = self.eval(0.0);
         for j in 0..self.spans {
-            let t1 = (j + 1) as f64;
+            let t1 = self.knots[self.p + j + 1];
             let p1 = self.eval(t1);
             adaptive_flatten(&eval, prev_t, &prev_p, t1, &p1, tol, metric, 0, &mut |t, p| {
                 out.push((t, p.to_vec()))
@@ -1085,8 +1212,9 @@ impl BSpline {
     }
 }
 
-/// Flatten a clamped uniform (rational) B-spline whose control points are
-/// `points` with weights `weights`. Returns one run of samples per control
+/// Flatten a clamped (rational) B-spline whose control points are `points`
+/// with weights `weights`, on uniform knots or on the knot spans
+/// `intervals`. Returns one run of samples per control
 /// point after the first. The runs concatenate to the whole-curve sampling:
 /// a sample at parameter `u` belongs to the first control point `i >= 1`
 /// whose Greville abscissa is `>= u`, the last control point taking the
@@ -1097,10 +1225,11 @@ fn bspline_runs(
     points: &[Vec<f64>],
     weights: &[f64],
     degree: usize,
+    intervals: Option<&[f64]>,
     metric: &[usize],
     tol: f64,
 ) -> Option<Vec<Vec<Vec<f64>>>> {
-    let curve = BSpline::new(points, weights, degree);
+    let curve = BSpline::new(points, weights, degree, intervals);
     let last = points.len() - 1;
     let mut runs: Vec<Vec<Vec<f64>>> = vec![Vec::new(); last];
     let mut owner = 1;
@@ -1879,9 +2008,9 @@ mod tests {
         for (points, weights, degree) in cases {
             let n = points.len();
             let label = format!("n={n} degree={degree} weights={weights:?}");
-            let curve = BSpline::new(&points, &weights, degree);
+            let curve = BSpline::new(&points, &weights, degree, None);
             let samples = curve.samples(&[0, 1], tol);
-            let runs = bspline_runs(&points, &weights, degree, &[0, 1], tol).unwrap();
+            let runs = bspline_runs(&points, &weights, degree, None, &[0, 1], tol).unwrap();
             assert_eq!(runs.len(), n - 1, "{label}");
             assert!(runs.iter().all(|r| !r.is_empty()), "{label}: empty run");
             let joined: Vec<&Vec<f64>> = runs.iter().flatten().collect();
@@ -1909,6 +2038,58 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Span intervals become clamped knots scaled to `[0, spans]`; equal
+    /// intervals give the integer knots of the uniform case.
+    #[test]
+    fn bspline_knots_from_intervals() {
+        let points: Vec<Vec<f64>> = (0..6).map(|i| vec![i as f64, (i * i) as f64]).collect();
+        let weights = vec![1.0; 6];
+        let curve = BSpline::new(&points, &weights, 3, Some(&[10.0, 40.0, 50.0]));
+        assert_eq!(curve.knots, vec![0.0, 0.0, 0.0, 0.0, 0.3, 1.5, 3.0, 3.0, 3.0, 3.0]);
+        let uniform = BSpline::new(&points, &weights, 3, None);
+        let constant = BSpline::new(&points, &weights, 3, Some(&[0.3, 0.3, 0.3]));
+        assert_eq!(constant.knots, uniform.knots);
+        // The span lookup of `eval` agrees with the knots on both sides of
+        // an interior knot: the curve is continuous there.
+        for knot in [0.3, 1.5] {
+            let (before, after) = (curve.eval(knot - 1e-9), curve.eval(knot + 1e-9));
+            assert!((before[0] - after[0]).abs() < 1e-6 && (before[1] - after[1]).abs() < 1e-6);
+        }
+        assert_eq!(curve.eval(0.0), points[0]);
+        assert_eq!(curve.eval(3.0), points[5]);
+    }
+
+    /// The knot plan of a spline with a PL on every block: repeated control
+    /// points go, and the spans take the PL the measured mapping names.
+    #[test]
+    fn bspline_knot_plan_maps_pl_to_spans() {
+        let coords = [
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (2.0, 1.0),
+            (2.0, 1.0),
+            (3.0, 1.0),
+            (4.0, 0.0),
+            (5.0, 2.0),
+        ];
+        let pls = [0.0, 11.0, 12.0, 99.0, 13.0, 14.0, 15.0];
+        let points: Vec<Vec<f64>> = coords.iter().map(|&(x, y)| vec![x, y]).collect();
+        let items: Vec<SplineItem> = (1..coords.len())
+            .map(|i| {
+                SplineItem::Point(row(
+                    i,
+                    &[("X", f(coords[i].0)), ("Y", f(coords[i].1)), ("PL", f(pls[i]))],
+                ))
+            })
+            .collect();
+        let point_rows: Vec<Option<usize>> = std::iter::once(None).chain((0..items.len()).map(Some)).collect();
+        let cubic = bspline_knot_plan(&items, &points, &point_rows, 3).unwrap();
+        assert_eq!(cubic.kept, vec![0, 1, 2, 4, 5, 6]);
+        assert_eq!(cubic.intervals, vec![12.0, 13.0, 14.0]);
+        let quadratic = bspline_knot_plan(&items, &points, &point_rows, 2).unwrap();
+        assert_eq!(quadratic.intervals, vec![11.0, 12.0, 13.0, 14.0]);
     }
 
     /// Extra channels (here E) ride along with the spline samples.
