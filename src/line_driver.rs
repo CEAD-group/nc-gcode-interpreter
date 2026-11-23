@@ -1308,13 +1308,15 @@ fn decode_line_inner<'a>(
                         // (control flow), a frame keyword (frame_op at block
                         // start, a loud error mid-block), DEF (opens a
                         // definition), FGROUP (modal feed-group state, not a
-                        // call), or a word operator (which would
+                        // call), PRESETON/PRESETONS (sets an axis value), or a word operator (which would
                         // continue a preceding expression, e.g.
                         // `X=5 DIV R1`); those take the full grammar.
                         if is_reserved_word(word)
                             || is_frame_keyword(word)
                             || word.eq_ignore_ascii_case("DEF")
                             || word.eq_ignore_ascii_case("FGROUP")
+                            || word.eq_ignore_ascii_case("PRESETON")
+                            || word.eq_ignore_ascii_case("PRESETONS")
                             || WORD_OPERATORS.iter().any(|op| op.eq_ignore_ascii_case(word))
                         {
                             return DecodeResult::NeedsGrammar;

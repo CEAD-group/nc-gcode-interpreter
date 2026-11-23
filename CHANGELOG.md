@@ -4,6 +4,20 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Fixed
+
+- `PRESETON(<axis>, <value>, ...)` and `PRESETONS` set the axis value (#122).
+  The row of the call carries the new value, and later absolute and
+  incremental values start from it: `G1 E=10` / `PRESETON(E,0)` / `G1 E=4`
+  gives E 10, 0, 4, where the preset row kept 10 before. A preset before the
+  first value of an axis defines its start, so `E=IC(...)` no longer warns
+  about an unknown start and a flattened arc ramps the axis from the preset
+  value. The value is a machine value: under `TRANS` the frame stays active.
+  A preset of a name outside the configured axes warns and is not applied,
+  and a preset of a geometry axis under an active rotation is an error.
+
 ## [v0.3.2] - 2026-11-13
 
 ### Fixed
