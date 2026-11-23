@@ -18,7 +18,8 @@ released to PyPI.
   A preset of a name outside the configured axes warns and is not applied,
   and a preset of a geometry axis under an active rotation is an error.
   The preset row is not a movement: it needs no feed, and with flattening a
-  pending spline ends at its programmed endpoint before the preset.
+  pending spline ends at its programmed endpoint before the preset. The call
+  must be alone in its block, apart from a block number and a comment.
 
 ## [v0.3.2] - 2026-11-13
 

@@ -109,3 +109,30 @@ def test_preset_under_g1_without_feed_is_not_a_move(stage1):
     assert df["X"].to_list()[-1] == 50.0
     with pytest.raises(NcError):
         nc_to_dataframe("G1\nPRESETON(X,50)\nX51\n")
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "G2 X10 I5 J0 F100 PRESETON(E,0)",
+        "G1 X10 PRESETON(E,0)",
+        "PRESETON(E,0) X10",
+        "PRESETON(E,0) PRESETON(X,1)",
+        "PRESETON(E,0) M3",
+    ],
+)
+def test_preset_must_be_alone_in_the_block(stage1, block):
+    with pytest.raises(NcError, match="alone in the block"):
+        nc_to_dataframe(f"G0 X0 Y0\n{block}\n", extra_axes=["E"])
+
+
+def test_preset_block_may_carry_a_number_and_a_comment(stage1):
+    assert column("G1 E=10 F100\nN20 PRESETON(E,0) ; reset\nE=4\n", "E") == [10.0, 0.0, 4.0]
+
+
+def test_arcs_around_a_preset_block_are_flattened(stage1):
+    text = "G0 X0 Y0\nG2 X10 I5 J0 F100\nPRESETON(E,0)\nX0 I-5 J0\n"
+    df, _ = nc_to_dataframe(text, extra_axes=["E"], flatten_tolerance=0.1)
+    preset = df["non_returning_function_call"].to_list().index("PRESETON(E,0)")
+    assert preset > 4
+    assert df.height - preset - 1 == preset - 1
