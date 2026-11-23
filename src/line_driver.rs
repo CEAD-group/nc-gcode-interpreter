@@ -734,8 +734,10 @@ fn execute_decoded(
                                 name
                             ));
                             // The flattener ramps the axis from the same assumed start.
-                            let start = state.get_translation(name);
-                            state.assumed_starts.push((name.to_string(), start));
+                            if matches!(state.resolve_output_key(name), Some((ColKind::Axis, _))) {
+                                let start = state.get_translation(name);
+                                state.assumed_starts.push((name.to_string(), start));
+                            }
                             value
                         }
                     }

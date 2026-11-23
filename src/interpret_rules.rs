@@ -2574,8 +2574,10 @@ fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) ->
                 key
             ));
             // The flattener ramps the axis from the same assumed start.
-            let start = state.get_translation(&key);
-            state.assumed_starts.push((key.clone(), start));
+            if matches!(state.resolve_output_key(&key), Some((ColKind::Axis, _))) {
+                let start = state.get_translation(&key);
+                state.assumed_starts.push((key.clone(), start));
+            }
             Ok(increment)
         }
     }

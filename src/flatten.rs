@@ -177,8 +177,8 @@ impl Flattener {
     /// Seed `axis` only while its position is unknown: a start the
     /// interpreter assumed must not replace one the rows established.
     pub fn seed_unknown_position(&mut self, axis: &str, machine_value: f64) {
-        let key = intern_column(&axis.to_uppercase());
-        if let Some(slot) = self.axis_slot(key) {
+        // Compared without interning: the name can be any variable, and interned names are never freed.
+        if let Some(slot) = self.geometric_axes.iter().position(|a| a.eq_ignore_ascii_case(axis)) {
             self.positions[slot].get_or_insert(machine_value);
         }
     }
