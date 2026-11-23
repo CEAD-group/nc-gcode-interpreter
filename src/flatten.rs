@@ -761,6 +761,10 @@ fn bspline_knot_plan(
     if pls.iter().any(|&pl| !(pl > 0.0 && pl.is_finite())) {
         return fallback("a PL is not a positive number");
     }
+    // Judged on the programmed degree: dropping repeats can lower the effective one.
+    if degree != 2 && degree != 3 {
+        return fallback("the PL mapping is only known for SD=2 and SD=3");
+    }
     let n = kept.len();
     let p = degree.min(n - 1).max(1);
     let spans = n - p;
@@ -770,9 +774,6 @@ fn bspline_knot_plan(
             kept,
             intervals: vec![1.0],
         });
-    }
-    if p != 2 && p != 3 {
-        return fallback("the PL mapping is only known for SD=2 and SD=3");
     }
     // `pls[i]` is the PL of control point i + 1.
     let intervals = pls[p - 2..p - 2 + spans].to_vec();
@@ -1109,10 +1110,12 @@ impl BSpline {
         match intervals {
             Some(intervals) => {
                 // Scale to a total of `spans`, the range of the uniform case.
-                let scale = spans as f64 / intervals.iter().sum::<f64>();
+                // Relative to the largest interval, so the sum of finite values cannot overflow.
+                let largest = intervals.iter().copied().fold(0.0, f64::max);
+                let scale = spans as f64 / intervals.iter().map(|v| v / largest).sum::<f64>();
                 let mut sum = 0.0;
                 for interval in &intervals[..spans - 1] {
-                    sum += interval;
+                    sum += interval / largest;
                     knots.push(sum * scale);
                 }
             }
@@ -2047,7 +2050,20 @@ mod tests {
         let points: Vec<Vec<f64>> = (0..6).map(|i| vec![i as f64, (i * i) as f64]).collect();
         let weights = vec![1.0; 6];
         let curve = BSpline::new(&points, &weights, 3, Some(&[10.0, 40.0, 50.0]));
-        assert_eq!(curve.knots, vec![0.0, 0.0, 0.0, 0.0, 0.3, 1.5, 3.0, 3.0, 3.0, 3.0]);
+        let expected = [0.0, 0.0, 0.0, 0.0, 0.3, 1.5, 3.0, 3.0, 3.0, 3.0];
+        assert_eq!(curve.knots.len(), expected.len());
+        assert!(curve
+            .knots
+            .iter()
+            .zip(expected)
+            .all(|(knot, want)| (knot - want).abs() < 1e-12));
+        // The sum of these finite intervals is not finite; the knots still are.
+        let huge = BSpline::new(&points, &weights, 3, Some(&[1e307, 4e307, 5e307]));
+        assert!(huge
+            .knots
+            .iter()
+            .zip(expected)
+            .all(|(knot, want)| (knot - want).abs() < 1e-12));
         let uniform = BSpline::new(&points, &weights, 3, None);
         let constant = BSpline::new(&points, &weights, 3, Some(&[0.3, 0.3, 0.3]));
         assert_eq!(constant.knots, uniform.knots);

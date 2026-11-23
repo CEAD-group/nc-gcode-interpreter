@@ -269,3 +269,25 @@ def test_pl_reaches_the_flattener_on_every_parse_path(monkeypatch, stage1, min_b
         assert len(points) > 20
         assert spline.max_distance(points) < 1e-6
     assert "PL" not in df.columns and "PL" not in batches.columns
+
+
+def test_other_degree_falls_back_even_when_repeats_lower_it(capfd):
+    """SD=4 stays unsupported when a repeated point leaves too few points for degree 4."""
+    points = [(10, 10), (10, 10), (20, 0), (30, 10)]
+
+    def text(knot_distance):
+        blocks = "".join(f"X{x} Y{y}{knot_distance}\n" for x, y in points)
+        return f"G1 X0 Y0 F100\nBSPLINE SD=4\n{blocks}G1 X40 Y0\n"
+
+    without = flatten(text(""))
+    capfd.readouterr()
+    with_pl = flatten(text(" PL=1"))
+    assert "only known for SD=2 and SD=3" in capfd.readouterr().err
+    assert_frame_equal(with_pl, without)
+
+
+def test_huge_pl_values_do_not_overflow():
+    """Only the ratios count, also when the sum of the PL values is not finite."""
+    small = flatten(program(degree=2))
+    huge = flatten(program(degree=2, pl_of=lambda i, value: f"{value}{'0' * 306}"))
+    assert flat(curve_points(huge)) == pytest.approx(flat(curve_points(small)), abs=1e-9)
