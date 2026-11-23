@@ -4,6 +4,29 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking:** four G-group columns are renamed to the group numbers of the
+  SINUMERIK G-group list (#120). `gg58_dyn_resp_path` is now
+  `gg59_dyn_resp_path` (DYNNORM and the other DYN words, confirmed by
+  `$P_GG[59]` on a controller), `gg59_area_limit` is now `gg60_area_limit`
+  (WALCS0 to WALCS10), `gg53_tool_wear` is now `gg56_tool_wear` (TOWSTD and the
+  other TOW words) and `gg56_frame_rot_tool` is now `gg53_frame_rot_tool`
+  (TOROT, TOFRAME and their variants). The `nr` fields in `GGroups.g_groups`
+  change with them. The old names are not kept as aliases.
+
+### Fixed
+
+- `GFRAME[n]` has number n+1 in `GGroups.g_groups`, as in the manual. Before,
+  `GFRAME[0]` and `GFRAME[1]` both had number 1.
+- The G-command table gains the commands it lacked against the manual: `G646`
+  (group 10), `CUT3DCP` (group 22), `COMPPATH` (group 30), `ORIANGLE`,
+  `ORICURINV` and `ORIAXESFR` (group 51), and group 38 with `SPIF1` and `SPIF2`
+  as the column `gg38_punch_fast_io`. `G646` was rejected as an unknown G code,
+  and the keywords were recorded as subprogram calls.
+
 ## [v0.3.2] - 2026-11-13
 
 ### Fixed
