@@ -1,5 +1,6 @@
 """Curve flattening (flatten_tolerance): arcs and splines become G1 runs."""
 
+import itertools
 import math
 
 import polars as pl
@@ -432,7 +433,7 @@ def test_arc_with_first_incremental_value_ramps_from_the_assumed_start(monkeypat
     text = "G0 X0 Y0 Z1\nG2 X200 Y0 I100 J0 E=IC(4.7) F3000\n"
     df, _ = nc_to_dataframe(text, extra_axes=["E"], flatten_tolerance=0.5)
     values = df["E"].to_list()[1:]
-    steps = [b - a for a, b in zip([0.0] + values, values)]
+    steps = [b - a for a, b in itertools.pairwise([0.0, *values])]
     assert values[-1] == pytest.approx(4.7)
     assert max(steps) == pytest.approx(min(steps))
     err = capfd.readouterr().err
