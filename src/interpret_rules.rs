@@ -2620,6 +2620,11 @@ fn interpret_axis_increment(pair: Pair<Rule>, state: &mut State, key: String) ->
                 "Warning: axis '{}' is incremented with IC() before any absolute position was set; assuming it starts at 0 (a real control would start from the actual axis position).",
                 key
             ));
+            // The flattener ramps the axis from the same assumed start.
+            if matches!(state.resolve_output_key(&key), Some((ColKind::Axis, _))) {
+                let start = state.get_translation(&key);
+                state.assumed_starts.push((key.clone(), start));
+            }
             Ok(increment)
         }
     }
@@ -4134,6 +4139,7 @@ pub(crate) fn interpret_block(
             // Only a statement row can carry arc words; a control block's
             // rows belong to its body blocks, which ran this hook themselves.
             if had_statements {
+                output.seed_assumed_starts(&mut state.assumed_starts);
                 let last = output.last_mut().expect("Output vector should not be empty");
                 state.finish_block_frame(last, line_no)?;
                 if !state.ext.m_functions.is_empty() {
