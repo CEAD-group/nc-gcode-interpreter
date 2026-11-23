@@ -1667,6 +1667,19 @@ fn interpret_preset(call: &Pair<Rule>, state: &mut State) -> Result<Option<Vec<(
             state,
         ));
     }
+    // The grammar skips an omitted argument, which would shift the pairs after it.
+    let omitted = parts.arguments.as_ref().is_some_and(|arguments| {
+        let text: String = arguments.as_str().split_whitespace().collect();
+        text.starts_with(',') || text.contains(",,")
+    });
+    if omitted {
+        return Err(annotate_error(
+            call,
+            name,
+            format!("{name} does not take omitted arguments"),
+            state,
+        ));
+    }
     let arguments: Vec<Pair<Rule>> = parts
         .arguments
         .into_iter()

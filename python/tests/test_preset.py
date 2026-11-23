@@ -69,7 +69,10 @@ def test_unconfigured_axis_warns_and_is_not_applied(stage1, capfd):
     assert "not a configured axis" in capfd.readouterr().err
 
 
-@pytest.mark.parametrize("call", ["PRESETON(E)", "PRESETON()", "PRESETON(E,1,X)", 'PRESETON(E,"A")'])
+@pytest.mark.parametrize(
+    "call",
+    ["PRESETON(E)", "PRESETON()", "PRESETON(E,1,X)", 'PRESETON(E,"A")', "PRESETON(X,,2,E,3)", "PRESETON(,X,2)"],
+)
 def test_malformed_calls_fail(stage1, call):
     with pytest.raises(NcError):
         nc_to_dataframe(call + "\n", extra_axes=["E"])
@@ -78,3 +81,31 @@ def test_malformed_calls_fail(stage1, call):
 def test_geometry_axis_under_rotation_fails(stage1):
     with pytest.raises(NcError, match="rotation"):
         nc_to_dataframe("ROT Z30\nG1 X1 Y1 F100\nPRESETON(X,0)\n")
+
+
+def test_preset_ends_a_pending_spline_at_its_programmed_endpoint(stage1):
+    """The preset is not a control point: the spline ends at X20 Y0 before it."""
+    text = "G1 X0 Y0 F100\nBSPLINE SD=2\nX10 Y10\nX20 Y0\nPRESETON(X,100)\nG1 X101 Y0\n"
+    df, _ = nc_to_dataframe(text, flatten_tolerance=0.5)
+    rows = list(zip(df["X"].to_list(), df["Y"].to_list(), df["non_returning_function_call"].to_list(), strict=True))
+    preset = next(i for i, row in enumerate(rows) if row[2] is not None)
+    assert rows[preset - 1][:2] == (20.0, 0.0)
+    assert rows[preset][:2] == (100.0, 0.0)
+    assert rows[preset + 1][:2] == (101.0, 0.0)
+    assert max(x for x, _, _ in rows[:preset]) == 20.0
+
+
+def test_spline_after_a_preset_starts_from_the_preset_value(stage1):
+    text = "G1 X0 Y0 F100\nBSPLINE SD=2\nX10 Y10\nX20 Y0\nPRESETON(X,100)\nX110 Y10\nX120 Y0\nG1 X130\n"
+    df, _ = nc_to_dataframe(text, flatten_tolerance=0.5)
+    xs = df["X"].to_list()
+    preset = df["non_returning_function_call"].to_list().index("PRESETON(X,100)")
+    assert all(100.0 <= x <= 130.0 for x in xs[preset:])
+    assert xs[preset + 1] - 100.0 < 10.0
+
+
+def test_preset_under_g1_without_feed_is_not_a_move(stage1):
+    df, _ = nc_to_dataframe("G1\nPRESETON(X,50)\n")
+    assert df["X"].to_list()[-1] == 50.0
+    with pytest.raises(NcError):
+        nc_to_dataframe("G1\nPRESETON(X,50)\nX51\n")

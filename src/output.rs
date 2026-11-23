@@ -523,8 +523,10 @@ impl ModalTracker {
         let mut no_feed_motion = false;
         let mut tapping = false;
         let mut class_changed: Option<&str> = None;
+        let mut preset = false;
         for (key, value) in cells.iter() {
             match value {
+                Value::Str(text) if key_eq(key, "non_returning_function_call") => preset = is_preset_call(text),
                 Value::Str(code) if key.starts_with("gg") => {
                     if key_eq(key, "gg02_wait") {
                         dwell |= code == "G4";
@@ -588,6 +590,7 @@ impl ModalTracker {
             && (self.motion_uses_feed || tapping)
             && !no_feed_motion
             && !dwell
+            && !preset
             && moves(cells);
         if missing {
             return Err(TrackError::MissingFeed(MissingFeed {
@@ -1396,6 +1399,13 @@ fn rekey_g4_dwell(row: &mut Row) {
     if let Some(value) = f.or(s) {
         row.cells.insert(intern_column(DWELL_COLUMN), value);
     }
+}
+
+/// Whether a recorded call is `PRESETON(...)` or `PRESETONS(...)`: its row
+/// carries new axis values without a movement.
+pub(crate) fn is_preset_call(text: &str) -> bool {
+    let name = text.split('(').next().unwrap_or("").trim();
+    text.contains('(') && (name.eq_ignore_ascii_case("PRESETON") || name.eq_ignore_ascii_case("PRESETONS"))
 }
 
 /// Marker column emitted by the curve flattener: `1.0` on rows it generated

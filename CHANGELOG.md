@@ -17,6 +17,8 @@ released to PyPI.
   value. The value is a machine value: under `TRANS` the frame stays active.
   A preset of a name outside the configured axes warns and is not applied,
   and a preset of a geometry axis under an active rotation is an error.
+  The preset row is not a movement: it needs no feed, and with flattening a
+  pending spline ends at its programmed endpoint before the preset.
 
 ## [v0.3.2] - 2026-11-13
 
