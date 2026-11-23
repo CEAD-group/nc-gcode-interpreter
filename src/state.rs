@@ -139,6 +139,8 @@ pub struct State {
     pub seen_jump_targets: HashSet<String>,
     /// Unsupported NC addresses already warned about (once per run).
     warned_addresses: HashSet<String>,
+    /// Axis starts assumed by IC() before any position (axis, machine value), handed to the flattener at block end.
+    pub assumed_starts: Vec<(String, f64)>,
     /// Interned output keys of the geometry axes X, Y, Z (`None` when the axis
     /// is not configured) and of the arc centre offsets I, J, K.
     geometry_keys: [Option<&'static str>; 3],
@@ -271,6 +273,7 @@ impl State {
             jump_scopes: Vec::new(),
             seen_jump_targets: HashSet::new(),
             warned_addresses: HashSet::new(),
+            assumed_starts: Vec::new(),
             geometry_keys,
             arc_offset_keys,
             warned_unpositioned: [false; 3],

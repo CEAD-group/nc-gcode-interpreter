@@ -762,6 +762,16 @@ impl OutputRows {
         self.flattener = Some(flattener);
     }
 
+    /// Hand the axis starts the interpreter assumed in this block to the
+    /// flattener, before the block's row reaches it.
+    pub fn seed_assumed_starts(&mut self, starts: &mut Vec<(String, f64)>) {
+        for (axis, machine_value) in starts.drain(..) {
+            if let Some(flattener) = self.flattener.as_mut() {
+                flattener.seed_unknown_position(&axis, machine_value);
+            }
+        }
+    }
+
     /// Number of committed rows in a `Collect` sink (0 for streaming sinks).
     /// Lets the experimental resumable VM (#47) pause at a row boundary.
     #[allow(dead_code)]
