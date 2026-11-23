@@ -220,12 +220,16 @@ def test_repeated_control_points_are_dropped_with_their_pl(capfd):
     repeated = [*BLOCKS[:4], (BLOCKS[3][0], BLOCKS[3][1], 999), *BLOCKS[4:]]
     df = flatten(program(blocks=[first, *repeated]))
     assert capfd.readouterr().err == ""
-    assert moves(df) == pytest.approx(expected)
+    assert flat(moves(df)) == pytest.approx(flat(expected))
     # A repeat at the end leaves the curve end on the last control point.
     df = flatten(program(blocks=[*BLOCKS, (BLOCKS[-1][0], BLOCKS[-1][1], 999)]))
-    assert moves(df) == pytest.approx(expected)
+    assert flat(moves(df)) == pytest.approx(flat(expected))
     assert moves(df)[-1] == CONTROL[-1]
 
+
+def flat(points):
+    """Coordinates in one list: pytest.approx takes no nested sequences."""
+    return [value for point in points for value in point]
 
 def moves(df):
     """The spline rows that move: a dropped block keeps a row for its other
