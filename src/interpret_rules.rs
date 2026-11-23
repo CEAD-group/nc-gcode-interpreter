@@ -1547,7 +1547,45 @@ fn call_repetition_count(pair: Pair<Rule>, state: &mut State) -> Result<u32, Par
 /// A block holds one subprogram call: the output row has one call cell, and
 /// a second call would silently replace the first. A repeat count before the
 /// name would otherwise run the call once or set a variable P.
+/// `PRESETON` and `PRESETONS` stand alone in their block (manual 4.8.5): next
+/// to motion words the row could not tell the preset values from the movement.
+fn reject_mixed_preset(block: &Pair<Rule>, state: &State) -> Result<(), ParsingError> {
+    let mut preset: Option<Pair<Rule>> = None;
+    let mut others = 0;
+    for item in block.clone().into_inner() {
+        match item.as_rule() {
+            Rule::block_number | Rule::label_def | Rule::comment => {}
+            Rule::statement => {
+                let call = item
+                    .clone()
+                    .into_inner()
+                    .next()
+                    .filter(|inner| inner.as_rule() == Rule::non_returning_function_call)
+                    .filter(|inner| crate::output::is_preset_call(inner.as_str()));
+                match call {
+                    Some(call) if preset.is_none() => preset = Some(call),
+                    _ => others += 1,
+                }
+            }
+            _ => others += 1,
+        }
+    }
+    match preset {
+        Some(call) if others > 0 => {
+            let name = call_parts(&call).name;
+            Err(annotate_error(
+                &call,
+                &name,
+                format!("{name} must be alone in the block (manual 4.8.5)"),
+                state,
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(crate) fn reject_second_call(block: &Pair<Rule>, state: &State) -> Result<(), ParsingError> {
+    reject_mixed_preset(block, state)?;
     let mut first: Option<Pair<Rule>> = None;
     let mut count_before: Option<Pair<Rule>> = None;
     for statement in block.clone().into_inner().filter(|p| p.as_rule() == Rule::statement) {
@@ -1647,6 +1685,85 @@ fn interpret_fgroup(call: &Pair<Rule>, state: &State) -> Result<Option<String>, 
         axes.push(axis);
     }
     Ok(Some(axes.join(",")))
+}
+
+/// `PRESETON(<axis>, <value>, ...)` and `PRESETONS` (manual 4.8.5): the new
+/// actual value of each named axis, in pairs. `None` when the call is neither.
+/// The axis does not move; later absolute and incremental values start from
+/// the new value.
+fn interpret_preset(call: &Pair<Rule>, state: &mut State) -> Result<Option<Vec<(String, f64)>>, ParsingError> {
+    let parts = call_parts(call);
+    let name = parts.name.as_str();
+    if (name != "PRESETON" && name != "PRESETONS") || !parts.text.contains('(') {
+        return Ok(None);
+    }
+    if parts.pcall || parts.repetitions.is_some() {
+        return Err(annotate_error(
+            call,
+            name,
+            format!("{name} is a predefined procedure; PCALL and a repeat count do not apply"),
+            state,
+        ));
+    }
+    // The grammar skips an omitted argument, which would shift the pairs after it.
+    let omitted = parts.arguments.as_ref().is_some_and(|arguments| {
+        // Commas inside a string literal separate nothing.
+        let mut quoted = false;
+        let text: String = arguments
+            .as_str()
+            .chars()
+            .filter(|&c| {
+                quoted ^= c == '"';
+                !quoted && c != '"' && !c.is_whitespace()
+            })
+            .collect();
+        text.starts_with(',') || text.contains(",,")
+    });
+    if omitted {
+        return Err(annotate_error(
+            call,
+            name,
+            format!("{name} does not take omitted arguments"),
+            state,
+        ));
+    }
+    let arguments: Vec<Pair<Rule>> = parts
+        .arguments
+        .into_iter()
+        .flat_map(|arguments| arguments.into_inner())
+        .collect();
+    if arguments.is_empty() || arguments.len() % 2 == 1 || arguments.len() > 16 {
+        return Err(annotate_error(
+            call,
+            name,
+            format!("{name} takes one to eight pairs of an axis and its new actual value"),
+            state,
+        ));
+    }
+    let mut presets = Vec::new();
+    for pair in arguments.chunks(2) {
+        let axis = pair[0].as_str().trim().to_uppercase();
+        // Programs that preset an axis outside the configured list ran before; keep them running.
+        if !is_channel_axis(&axis, state) {
+            let (line_no, _) = get_error_context(&pair[0], state);
+            crate::state::emit_warning(format_args!(
+                "Warning [line {}]: {} names '{}', which is not a configured axis; the preset is not applied",
+                line_no, name, axis
+            ));
+            continue;
+        }
+        // The rotated frame couples the geometry axes, so one of them cannot take a value alone.
+        if state.rotated && crate::frame::geometry_index(&axis).is_some() {
+            return Err(annotate_error(
+                call,
+                name,
+                format!("{name} on the geometry axis {axis} under an active rotation is not supported"),
+                state,
+            ));
+        }
+        presets.push((axis, evaluate_call_number(&pair[1], state)?));
+    }
+    Ok(Some(presets))
 }
 
 /// The output key of an `FGREF[<axis>]` assignment target, `None` when the
@@ -3582,6 +3699,24 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                 let (line_no, preview) = get_error_context(&statement, state);
                 if let Some(axes) = interpret_fgroup(&statement, state)? {
                     last.insert(crate::output::intern_column(FGROUP_COLUMN), Value::Str(axes));
+                    continue;
+                }
+                if let Some(presets) = interpret_preset(&statement, state)? {
+                    for (axis, value) in presets {
+                        let Some((ColKind::Axis, skey)) = state.resolve_output_key(&axis) else {
+                            continue;
+                        };
+                        // The preset is a machine value; the state keeps local coordinates.
+                        let local_value = value - state.get_translation(skey);
+                        state.update_axis(skey, local_value)?;
+                        let last = output.last_mut().expect("Output vector should not be empty");
+                        state.insert_machine_axis(skey, local_value, last);
+                    }
+                    let last = output.last_mut().expect("Output vector should not be empty");
+                    last.insert(
+                        "non_returning_function_call",
+                        Value::Str(statement.as_str().trim().to_string()),
+                    );
                     continue;
                 }
                 let call = call_parts(&statement);
