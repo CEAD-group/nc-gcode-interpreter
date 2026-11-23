@@ -174,18 +174,29 @@ impl Flattener {
         }
     }
 
+    /// Seed `axis` only while its position is unknown: a start the
+    /// interpreter assumed must not replace one the rows established.
+    pub fn seed_unknown_position(&mut self, axis: &str, machine_value: f64) {
+        let key = intern_column(&axis.to_uppercase());
+        if let Some(slot) = self.axis_slot(key) {
+            self.positions[slot].get_or_insert(machine_value);
+        }
+    }
+
     pub fn new(tolerance: f64, axis_identifiers: &[String]) -> Result<Self, ParsingError> {
         if !(tolerance > 0.0 && tolerance.is_finite()) {
             return Err(ParsingError::ParseError {
                 message: format!("flatten tolerance must be a positive number, got {}", tolerance),
             });
         }
-        let geometric_axes: Vec<&'static str> = axis_identifiers
-            .iter()
-            .map(|a| a.to_uppercase())
-            .filter(|a| !NON_GEOMETRIC_AXES.contains(&a.as_str()))
-            .map(|a| intern_column(&a))
-            .collect();
+        let mut geometric_axes: Vec<&'static str> = Vec::new();
+        for axis in axis_identifiers.iter().map(|a| a.to_uppercase()) {
+            let axis = intern_column(&axis);
+            // An extra axis that is also a default one is listed twice and would warn twice.
+            if !NON_GEOMETRIC_AXES.contains(&axis) && !geometric_axes.contains(&axis) {
+                geometric_axes.push(axis);
+            }
+        }
         Ok(Flattener {
             tolerance,
             positions: vec![None; geometric_axes.len()],

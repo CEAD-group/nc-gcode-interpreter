@@ -722,7 +722,7 @@ fn execute_decoded(
                 // interpret_axis_increment. The lookup name is the resolved key
                 // (uppercased interned name for axes/blocks, as-written for
                 // variables), matching the pre-interning normalize_key behavior.
-                let increment_local = |state: &State, name: &str, value: f64| -> f64 {
+                let increment_local = |state: &mut State, name: &str, value: f64| -> f64 {
                     if !*incremental {
                         return value;
                     }
@@ -733,6 +733,9 @@ fn execute_decoded(
                                 "Warning: axis '{}' is incremented with IC() before any absolute position was set; assuming it starts at 0 (a real control would start from the actual axis position).",
                                 name
                             ));
+                            // The flattener ramps the axis from the same assumed start.
+                            let start = state.get_translation(name);
+                            state.assumed_starts.push((name.to_string(), start));
                             value
                         }
                     }
@@ -801,6 +804,8 @@ fn execute_decoded(
     let last = output.last_mut().expect("row was just pushed");
     // Same end-of-block frame hook as interpret_block (arc words under a rotation).
     state.finish_block_frame(last, line.line_no)?;
+    output.seed_assumed_starts(&mut state.assumed_starts);
+    let last = output.last_mut().expect("row was just pushed");
     if let Some(n) = line.n {
         last.insert("N", Value::Str(n.to_string()));
     }

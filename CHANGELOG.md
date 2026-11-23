@@ -17,6 +17,12 @@ released to PyPI.
   value. The value is a machine value: under `TRANS` the frame stays active.
   A preset of a name outside the configured axes warns and is not applied,
   and a preset of a geometry axis under an active rotation is an error.
+- A flattened arc that carries an axis's first value as `IC(...)` ramps the
+  axis from the start of 0 the interpreter already assumes, instead of holding
+  the end value on every sample (#123). A consumer that takes differences saw
+  the whole change on the first chord. An absolute first value is still held,
+  because no start is known, and that warning is now printed once instead of
+  twice for an axis that is both a default and an extra axis.
 
 ## [v0.3.2] - 2026-11-13
 

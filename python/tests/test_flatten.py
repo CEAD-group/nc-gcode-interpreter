@@ -423,3 +423,32 @@ def test_unsupported_constructs_warn_loudly(capfd):
     # Supported constructs stay quiet.
     nc_to_dataframe(ARC_PROGRAM, flatten_tolerance=0.1)
     assert capfd.readouterr().err == ""
+
+
+@pytest.mark.parametrize("stage1", ["0", "1"])
+def test_arc_with_first_incremental_value_ramps_from_the_assumed_start(monkeypatch, capfd, stage1):
+    """IC() before any position assumes a start of 0; the flattened arc ramps from it (#123)."""
+    monkeypatch.setenv("NC_STAGE1", stage1)
+    text = "G0 X0 Y0 Z1\nG2 X200 Y0 I100 J0 E=IC(4.7) F3000\n"
+    df, _ = nc_to_dataframe(text, extra_axes=["E"], flatten_tolerance=0.5)
+    values = df["E"].to_list()[1:]
+    steps = [b - a for a, b in zip([0.0] + values, values)]
+    assert values[-1] == pytest.approx(4.7)
+    assert max(steps) == pytest.approx(min(steps))
+    err = capfd.readouterr().err
+    assert "assuming it starts at 0" in err
+    assert "is held at" not in err
+
+
+def test_arc_with_first_incremental_value_starts_at_the_frame_offset():
+    df, _ = nc_to_dataframe(
+        "G0 X0 Y0 Z1\nTRANS E100\nG2 X200 Y0 I100 J0 E=IC(4) F3000\n", extra_axes=["E"], flatten_tolerance=5
+    )
+    assert df["E"].to_list()[-5:] == pytest.approx([100.8, 101.6, 102.4, 103.2, 104.0])
+
+
+def test_arc_with_first_absolute_value_holds_it_and_warns_once(capfd):
+    """An absolute first value has no known start: the axis is held, with one warning."""
+    df, _ = nc_to_dataframe("G0 X0 Y0 Z1\nG2 X200 Y0 I100 J0 E=4.7 F3000\n", extra_axes=["E"], flatten_tolerance=5)
+    assert set(df["E"].to_list()[1:]) == {4.7}
+    assert capfd.readouterr().err.count("is held at 4.7") == 1
