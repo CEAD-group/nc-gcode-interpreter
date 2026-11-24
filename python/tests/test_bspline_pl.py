@@ -72,7 +72,8 @@ def de_boor(ctrl, knots, degree, t):
     for r in range(1, degree + 1):
         for j in range(degree, r - 1, -1):
             i = j + k - degree
-            alpha = (t - knots[i]) / (knots[i + degree + 1 - r] - knots[i])
+            width = knots[i + degree + 1 - r] - knots[i]
+            alpha = 0.0 if width == 0 else (t - knots[i]) / width
             d[j] = [(1 - alpha) * a + alpha * b for a, b in zip(d[j - 1], d[j], strict=True)]
     x, y, w = d[degree]
     return x / w, y / w
@@ -206,10 +207,50 @@ def test_pl_with_other_degree_warns_and_uses_uniform_knots(capfd, degree):
     assert_frame_equal(with_pl, without)
 
 
-def test_non_positive_pl_warns_and_uses_uniform_knots(capfd):
+def test_negative_pl_warns_and_uses_uniform_knots(capfd):
     without = flatten(program(pl_of=lambda i, value: None))
-    with_zero = flatten(program(pl_of=lambda i, value: 0 if i == 4 else value))
-    assert "not a positive number" in capfd.readouterr().err
+    with_negative = flatten(program(pl_of=lambda i, value: -1 if i == 4 else value))
+    assert "negative or not a number" in capfd.readouterr().err
+    assert_frame_equal(with_negative, without)
+
+
+@pytest.mark.parametrize(("degree", "zero_blocks"), [(3, (4,)), (3, (4, 5)), (2, (4,))])
+def test_zero_pl_repeats_a_knot(capfd, degree, zero_blocks):
+    """PL=0 is a node distance of zero (#129)."""
+    text = program(degree=degree, pl_of=lambda i, value: 0 if i in zero_blocks else value)
+    points = curve_points(flatten(text))
+    assert capfd.readouterr().err == ""
+    used = BLOCKS[1:8] if degree == 3 else BLOCKS[0:8]
+    first = 2 if degree == 3 else 1
+    spans = [0 if i in zero_blocks else value for i, (_, _, value) in enumerate(used, start=first)]
+    assert Reference(CONTROL, spans, degree).max_distance(points) < 1e-6
+    assert points[-1] == CONTROL[-1]
+    # No sample is emitted twice for the empty span.
+    assert all(a != b for a, b in itertools.pairwise(points))
+
+
+def test_zero_pl_on_an_unused_cubic_block_is_accepted(capfd):
+    """The same PL values give the same knots wherever the spline starts (#129)."""
+    zero_first = program(pl_of=lambda i, value: 0 if i in (1, 9) else value)
+    assert_frame_equal(flatten(zero_first), flatten(program()))
+    assert capfd.readouterr().err == ""
+
+
+@pytest.mark.parametrize(
+    ("degree", "zero_blocks", "reason"),
+    [
+        (3, (4, 5, 6), "as often in succession as the spline degree"),
+        (2, (4, 5), "as often in succession as the spline degree"),
+        (3, (2,), "first or last knot span"),
+        (3, (8,), "first or last knot span"),
+        (2, (1,), "first or last knot span"),
+    ],
+)
+def test_zero_pl_that_would_split_the_curve_warns(capfd, degree, zero_blocks, reason):
+    without = flatten(program(degree=degree, pl_of=lambda i, value: None))
+    text = program(degree=degree, pl_of=lambda i, value: 0 if i in zero_blocks else value)
+    with_zero = flatten(text)
+    assert reason in capfd.readouterr().err
     assert_frame_equal(with_zero, without)
 
 

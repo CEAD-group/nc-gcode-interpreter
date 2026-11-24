@@ -4,6 +4,21 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Fixed
+
+- `BSPLINE` flattening accepts `PL=0` as a knot distance of zero, a repeated
+  knot (#129). Before, any `PL=0` on a control-point block made the whole
+  spline fall back to uniform knots with a warning, unless that block happened
+  to repeat the previous position and was dropped, so the same `PL` values gave
+  different knots depending on where the spline started. A `PL=0` on a block
+  whose `PL` is not used (the first and last block of a cubic) no longer has an
+  effect. Two cases still warn and use uniform knots, because they would split
+  the curve and are not measured on a control: `PL=0` as often in succession as
+  the spline degree, and `PL=0` on the first or last knot span. A negative `PL`
+  warns as before.
+
 ## [v0.4.0] - 2026-11-23
 
 ### Changed
