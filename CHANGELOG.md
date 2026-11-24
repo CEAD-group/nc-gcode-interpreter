@@ -4,6 +4,14 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- Numeric literals accept the Siemens exponent notation `<mantissa>EX<exponent>`
+  (#117), for example `X=-.1EX-3`, `R1=1.874EX8` and `8.2EX-3`, in every place
+  a literal is accepted. A plain `E` exponent stays an error.
+
 ## [v0.4.1] - 2026-11-24
 
 ### Added

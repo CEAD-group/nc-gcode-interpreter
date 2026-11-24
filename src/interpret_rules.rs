@@ -213,7 +213,7 @@ pub(crate) const FRAME_KEYWORDS: &[&str] = &[
 fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, ParsingError> {
     let inner_pair = primary.into_inner().next().expect("Error");
     match inner_pair.as_rule() {
-        Rule::value => inner_pair.as_str().parse::<f64>().map_err(|_| {
+        Rule::value => parse_value_literal(inner_pair.as_str()).ok_or(()).map_err(|_| {
             annotate_error(
                 &inner_pair,
                 "numeric literal",
@@ -1939,7 +1939,7 @@ fn interpret_assignment(element: Pair<Rule>, state: &mut State) -> Result<(Strin
         (Rule::variable_single_char, Rule::value) => {
             // Uppercase: the rule matches case-insensitively (x100 == X100).
             let key = variable_pair.as_str().to_uppercase();
-            let value = expression_pair.as_str().parse::<f64>().map_err(|_| {
+            let value = parse_value_literal(expression_pair.as_str()).ok_or(()).map_err(|_| {
                 annotate_error(
                     &expression_pair,
                     "numeric literal",
@@ -2232,6 +2232,15 @@ fn format_nc_concat_number(n: f64) -> String {
         let s = format!("{n:.10}");
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     }
+}
+
+/// Parse the lexeme of a `value` literal. Rust's float parser wants `E` where
+/// SINUMERIK writes `EX`; the plain form is tried first to keep it cheap.
+fn parse_value_literal(lexeme: &str) -> Option<f64> {
+    lexeme
+        .parse::<f64>()
+        .ok()
+        .or_else(|| lexeme.to_ascii_uppercase().replacen("EX", "E", 1).parse::<f64>().ok())
 }
 
 /// Parse a string as a number the way NUMBER/ISNUMBER do. SINUMERIK writes the
@@ -3530,14 +3539,16 @@ fn interpret_case(pair: Pair<Rule>, state: &mut State) -> Result<BlockFlow, Pars
             Rule::case_arm => {
                 let mut arm_pairs = arm.clone().into_inner();
                 let constant_pair = arm_pairs.next().expect("case_arm starts with a value");
-                let constant = constant_pair.as_str().trim().parse::<f64>().map_err(|_| {
-                    annotate_error(
-                        &constant_pair,
-                        "CASE constant",
-                        format!("'{}' is not a valid number", constant_pair.as_str()),
-                        state,
-                    )
-                })?;
+                let constant = parse_value_literal(constant_pair.as_str().trim())
+                    .ok_or(())
+                    .map_err(|_| {
+                        annotate_error(
+                            &constant_pair,
+                            "CASE constant",
+                            format!("'{}' is not a valid number", constant_pair.as_str()),
+                            state,
+                        )
+                    })?;
                 if reals_equal(value, constant) {
                     let goto = arm_pairs.next().expect("case_arm contains a goto_statement");
                     return interpret_goto(goto, state);
@@ -3941,7 +3952,7 @@ fn rotation_assignments(
         // evaluated here rather than as axis assignments.
         let name = target.as_str().trim().to_uppercase();
         let angle = match value_pair.as_rule() {
-            Rule::value => value_pair.as_str().parse::<f64>().map_err(|_| {
+            Rule::value => parse_value_literal(value_pair.as_str()).ok_or(()).map_err(|_| {
                 ParsingError::with_context(
                     pair_line_no,
                     pair_preview.clone(),
