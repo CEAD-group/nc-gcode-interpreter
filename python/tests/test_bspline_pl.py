@@ -332,3 +332,12 @@ def test_huge_pl_values_do_not_overflow():
     small = flatten(program(degree=2))
     huge = flatten(program(degree=2, pl_of=lambda i, value: f"{value}{'0' * 306}"))
     assert flat(curve_points(huge)) == pytest.approx(flat(curve_points(small)), abs=1e-9)
+
+
+def test_zero_pl_on_the_only_span_left_after_a_repeat_warns(capfd):
+    """Dropping a repeated point must not skip the end-span check (review of #131)."""
+    body = "X10 Y10{}\nX10 Y10{}\nX20 Y0{}\nG1 X30\n"
+    head = "G1 X0 Y0 F100\nBSPLINE SD=2\n"
+    with_zero = flatten(head + body.format(" PL=0", " PL=1", " PL=2"), tolerance=0.1)
+    assert "first or last knot span" in capfd.readouterr().err
+    assert_frame_equal(with_zero, flatten(head + body.format("", "", ""), tolerance=0.1))

@@ -797,12 +797,13 @@ fn bspline_knot_plan(
     let n = kept.len();
     let p = degree.min(n - 1).max(1);
     let spans = n - p;
-    if spans == 1 {
-        // A single knot span has no interior knots: PL cannot change the curve.
-        return Some(KnotPlan {
-            kept,
-            intervals: vec![1.0],
-        });
+    // A single knot span has no interior knots: PL cannot change the curve.
+    let single = KnotPlan {
+        kept: kept.clone(),
+        intervals: vec![1.0],
+    };
+    if p < 2 {
+        return Some(single);
     }
     // `pls[i]` is the PL of control point i + 1.
     let intervals = pls[p - 2..p - 2 + spans].to_vec();
@@ -821,6 +822,9 @@ fn bspline_knot_plan(
             // The control allows exactly `p` (alarm 10891 above that), which splits the curve.
             return fallback("PL=0 as often in succession as the spline degree is not supported");
         }
+    }
+    if spans == 1 {
+        return Some(single);
     }
     Some(KnotPlan { kept, intervals })
 }
