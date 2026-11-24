@@ -4,6 +4,34 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- `SCALE`/`ASCALE` and `MIRROR`/`AMIRROR` with arguments are interpreted for
+  the geometry axes X, Y, Z (#134). They chain onto the programmable frame as
+  machine XYZ = R * S * M * local XYZ + t, so an `ATRANS` after a scale is
+  scaled and an `AMIRROR` of a mirrored axis switches the mirror off (the
+  toggle behaviour of MD10612 = 0). The `rotation` in the final state and the
+  `frame_r11` to `frame_r33` columns hold the rotation with the scale and
+  mirror factors folded in. A circular arc is accepted under a frame that
+  keeps it a circle with the same direction (its `I`/`J`/`K` and `CR` are
+  scaled); an in-plane mirror or unequal in-plane factors under an arc raise
+  an error, as does a rotation chained after unequal scale factors.
+- `ROTS`/`AROTS`/`CROTS` with one solid angle, which is the same rotation as
+  `ROT`/`AROT` about that axis (#134). Two solid angles still raise an error,
+  because the manuals describe that form in two ways that give different
+  rotations.
+- `start['rotation']` accepts a rotation with scale and mirror factors, so a
+  final state with an active `SCALE` or `MIRROR` can be resumed.
+
+### Changed
+
+- `TOFRAME`, `TOROT` (with their `X`/`Y`/`Z` variants) and `PAROT` raise an
+  "unsupported statement" error (#134). They were accepted without effect
+  before, so the blocks after them were read in the wrong frame without a
+  warning. `TOROTOF` and `PAROTOF` are still accepted.
+
 ## [v0.4.1] - 2026-11-24
 
 ### Added

@@ -924,9 +924,11 @@ const RESERVED_WORDS: &[&str] = &[
 /// claims one as a call.
 const WORD_OPERATORS: &[&str] = &["DIV", "MOD", "AND", "OR", "XOR", "B_AND", "B_OR", "B_XOR"];
 
+/// Frame words the grammar path interprets or rejects, never the fast path.
 fn is_frame_keyword(word: &str) -> bool {
     crate::interpret_rules::FRAME_KEYWORDS
         .iter()
+        .chain(crate::interpret_rules::ORIENTATION_FRAME_COMMANDS)
         .any(|kw| kw.eq_ignore_ascii_case(word))
 }
 

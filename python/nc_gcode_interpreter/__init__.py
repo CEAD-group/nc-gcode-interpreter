@@ -207,10 +207,13 @@ def nc_to_dataframe(
         forward-filled; `dataframe_to_nc` ignores it. Default False (column
         absent, output schema unchanged).
     include_frame: bool, optional
-        If True, add the programmable frame (TRANS/ATRANS, ROT/AROT) that is
-        active on each row as twelve Float64 columns: `frame_r11` to
-        `frame_r33`, the rotation R row by row, and `frame_tx`, `frame_ty`,
-        `frame_tz`, the translation t, in machine XYZ = R * local XYZ + t.
+        If True, add the programmable frame (TRANS, ROT, SCALE, MIRROR and
+        their additive forms) that is active on each row as twelve Float64
+        columns: `frame_r11` to `frame_r33`, the linear part R row by row, and
+        `frame_tx`, `frame_ty`, `frame_tz`, the translation t, in machine XYZ
+        = R * local XYZ + t. R is the rotation with the scale and mirror
+        factors folded in, so it is a pure rotation only while no SCALE or
+        MIRROR is active.
         The values are written on the first row and on the first row after
         each change, and forward-filled like the axis columns; with
         `disable_forward_fill` the other rows are null. Programmed A/B/C

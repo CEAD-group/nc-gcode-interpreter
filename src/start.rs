@@ -13,7 +13,7 @@
 //!   output row; positions and frame seed only the internal state.
 
 use crate::errors::ParsingError;
-use crate::frame::{self, Matrix3};
+use crate::frame::Matrix3;
 use crate::modal_groups::{classify_g_command, normalize_g_command, MODAL_G_GROUPS, NON_MODAL_G_GROUPS};
 use crate::output::OutputRows;
 use crate::state::{State, VarType};
@@ -38,7 +38,7 @@ pub struct StartState {
     /// Local (workpiece) positions per axis.
     pub axes: Vec<(String, f64)>,
     pub translation: Vec<(String, f64)>,
-    /// Row-major frame rotation; must be a proper rotation matrix.
+    /// Row-major linear part of the frame: a rotation with per-axis scale and mirror factors.
     pub rotation: Option<[[f64; 3]; 3]>,
     pub symbol_table: Vec<(String, f64)>,
     pub string_table: Vec<(String, String)>,
@@ -493,22 +493,6 @@ fn check_rotation(rotation: &Matrix3) -> Result<(), String> {
             return Err(format!("row {row_index} holds a value that is not a finite number"));
         }
     }
-    // R * R^T must be the identity and det(R) = +1: no scaling, no mirroring.
-    for i in 0..3 {
-        for j in 0..3 {
-            let dot: f64 = (0..3).map(|k| rotation[i][k] * rotation[j][k]).sum();
-            let expected = if i == j { 1.0 } else { 0.0 };
-            if (dot - expected).abs() > 1e-6 {
-                return Err("the matrix is not orthonormal, so it is not a rotation".to_string());
-            }
-        }
-    }
-    let r = rotation;
-    let det = r[0][0] * (r[1][1] * r[2][2] - r[1][2] * r[2][1]) - r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0])
-        + r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
-    if (det - 1.0).abs() > 1e-6 {
-        return Err("the matrix mirrors (determinant -1), so it is not a rotation".to_string());
-    }
     Ok(())
 }
 
@@ -538,8 +522,9 @@ fn apply_start(start: &StartState, state: &mut State) -> Result<Seed, ParsingErr
     }
     if let Some(rotation) = &start.rotation {
         check_rotation(rotation).map_err(|message| invalid("start['rotation']", &message))?;
-        state.rotation = *rotation;
-        state.rotated = !frame::is_identity(rotation);
+        state
+            .set_linear(*rotation)
+            .map_err(|message| invalid("start['rotation']", message))?;
     }
     for (axis, value) in &start.axes {
         let field = format!("start['axes']['{axis}']");
@@ -830,7 +815,11 @@ mod tests {
                 ..StartState::default()
             },
             StartState {
-                rotation: Some([[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+                rotation: Some([[1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+                ..StartState::default()
+            },
+            StartState {
+                rotation: Some([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
                 ..StartState::default()
             },
         ];

@@ -210,6 +210,13 @@ pub(crate) fn resolve_jump(
 pub(crate) const FRAME_KEYWORDS: &[&str] = &[
     "TRANS", "ATRANS", "SCALE", "ASCALE", "ROT", "AROT", "ROTS", "AROTS", "CROTS", "MIRROR", "AMIRROR",
 ];
+
+/// G group 52/53 commands that rotate the frame to the tool or workpiece
+/// orientation (manual 3.12.3). The interpreter has no tool orientation or
+/// kinematics to derive that rotation from.
+pub(crate) const ORIENTATION_FRAME_COMMANDS: &[&str] = &[
+    "TOFRAME", "TOFRAMEX", "TOFRAMEY", "TOFRAMEZ", "TOROT", "TOROTX", "TOROTY", "TOROTZ", "PAROT",
+];
 fn interpret_primary(primary: Pair<Rule>, state: &mut State) -> Result<f64, ParsingError> {
     let inner_pair = primary.into_inner().next().expect("Error");
     match inner_pair.as_rule() {
@@ -3787,6 +3794,22 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                                 .to_string(),
                         });
                     }
+                    // Accepting these as a plain modal word would read every
+                    // following block in the wrong frame.
+                    if ORIENTATION_FRAME_COMMANDS
+                        .iter()
+                        .any(|kw| kw.eq_ignore_ascii_case(name))
+                    {
+                        return Err(ParsingError::UnsupportedStatement {
+                            line_no,
+                            preview,
+                            statement: format!("The frame rotation {}", name.to_uppercase()),
+                            hint: "TOFRAME, TOROT and PAROT rotate the frame to the tool or workpiece \
+                                   orientation, which depends on machine kinematics the interpreter does \
+                                   not model. Program the rotation with ROT/AROT instead."
+                                .to_string(),
+                        });
+                    }
                     // Keyword-shaped G commands (POLY, BSPLINE, SOFT, CP, ...)
                     // parse as bare words; the vocabulary table decides
                     // whether this is a G command or a subprogram call.
@@ -3916,6 +3939,70 @@ fn frame_assignments(pairs: Vec<Pair<Rule>>, state: &mut State) -> Result<Vec<(S
     Ok(result)
 }
 
+/// The words of a frame instruction that name geometry axes (plus `RPL=`
+/// where `rpl` allows it), evaluated without moving any axis.
+struct GeometryWords {
+    values: [Option<f64>; 3],
+    rpl: Option<f64>,
+}
+
+/// Evaluate the words of a ROT/SCALE/MIRROR-style block. The words name
+/// geometry axes, which need not be configured axes (a rotation about Z on an
+/// X/Y machine is fine), so they are evaluated here rather than as axis
+/// assignments. `what` names the instruction family in error messages.
+fn geometry_words(
+    pairs: Vec<Pair<Rule>>,
+    state: &mut State,
+    what: &str,
+    rpl: bool,
+) -> Result<GeometryWords, ParsingError> {
+    let mut words = GeometryWords {
+        values: [None; 3],
+        rpl: None,
+    };
+    for pair in pairs {
+        let (pair_line_no, pair_preview) = get_error_context(&pair, state);
+        let error = |message: String| {
+            ParsingError::with_context(pair_line_no, pair_preview.clone(), format!("frame {what}"), message)
+        };
+        let mut inner = pair.into_inner();
+        let target = inner.next().expect("assignment has a target");
+        // `RPL=30` parses as a one-operand string_expression (#78); unwrap it
+        // to the expression it is.
+        let value_pair = unwrap_lone_operand(inner.next().expect("assignment has a value"));
+        let name = target.as_str().trim().to_uppercase();
+        let value = match value_pair.as_rule() {
+            Rule::value => value_pair
+                .as_str()
+                .parse::<f64>()
+                .map_err(|_| error(format!("'{}' is not a valid number", value_pair.as_str())))?,
+            Rule::expression => evaluate_expression(value_pair, state)?,
+            _ => {
+                let noun = if what == "rotation" {
+                    "angle in degrees"
+                } else {
+                    "value"
+                };
+                return Err(error(format!("{name}= expects a numeric {noun}")));
+            }
+        };
+        if rpl && name == "RPL" {
+            words.rpl = Some(value);
+            continue;
+        }
+        let Some(index) = frame::geometry_index(&name) else {
+            return Err(error(format!(
+                "a frame {what} is modeled for the geometry axes X, Y, Z only; '{name}' is not one of them"
+            )));
+        };
+        if words.values[index].is_some() {
+            return Err(error(format!("axis {name} is programmed twice")));
+        }
+        words.values[index] = Some(value);
+    }
+    Ok(words)
+}
+
 /// Evaluate the angle words of a ROT/AROT block into a rotation matrix:
 /// either `X.. Y.. Z..` (RPY angles) or `RPL=..` (about the active plane's
 /// normal). Manual 3.12.2.4 lists the two as alternative syntaxes, so mixing
@@ -3926,55 +4013,10 @@ fn rotation_assignments(
     line_no: usize,
     preview: &str,
 ) -> Result<Matrix3, ParsingError> {
-    let mut angles = [0.0; 3];
-    let mut has_axis_angle = false;
-    let mut rpl: Option<f64> = None;
-    for pair in pairs {
-        let (pair_line_no, pair_preview) = get_error_context(&pair, state);
-        let mut inner = pair.into_inner();
-        let target = inner.next().expect("assignment has a target");
-        // `RPL=30` parses as a one-operand string_expression (#78); unwrap it
-        // to the expression it is.
-        let value_pair = unwrap_lone_operand(inner.next().expect("assignment has a value"));
-        // The angle words name geometry axes, which need not be configured
-        // axes (a rotation about Z on an X/Y machine is fine), so they are
-        // evaluated here rather than as axis assignments.
-        let name = target.as_str().trim().to_uppercase();
-        let angle = match value_pair.as_rule() {
-            Rule::value => value_pair.as_str().parse::<f64>().map_err(|_| {
-                ParsingError::with_context(
-                    pair_line_no,
-                    pair_preview.clone(),
-                    "frame rotation".to_string(),
-                    format!("'{}' is not a valid angle", value_pair.as_str()),
-                )
-            })?,
-            Rule::expression => evaluate_expression(value_pair, state)?,
-            _ => {
-                return Err(ParsingError::with_context(
-                    pair_line_no,
-                    pair_preview,
-                    "frame rotation".to_string(),
-                    format!("{name}= expects a numeric angle in degrees"),
-                ))
-            }
-        };
-        if name == "RPL" {
-            rpl = Some(angle);
-            continue;
-        }
-        let Some(index) = frame::geometry_index(&name) else {
-            return Err(ParsingError::with_context(
-                pair_line_no,
-                pair_preview,
-                "frame rotation".to_string(),
-                format!("ROT/AROT angles refer to the geometry axes X, Y, Z only; '{name}' cannot be rotated about"),
-            ));
-        };
-        angles[index] = angle;
-        has_axis_angle = true;
-    }
-    match rpl {
+    let words = geometry_words(pairs, state, "rotation", true)?;
+    let has_axis_angle = words.values.iter().any(Option::is_some);
+    let angles = words.values.map(|angle| angle.unwrap_or(0.0));
+    match words.rpl {
         Some(_) if has_axis_angle => Err(ParsingError::with_context(
             line_no,
             preview.to_string(),
@@ -3988,6 +4030,76 @@ fn rotation_assignments(
         Some(angle) => Ok(frame::axis_rotation(state.plane.normal_axis(), angle)),
         None => Ok(frame::rpy_rotation(angles[0], angles[1], angles[2])),
     }
+}
+
+/// ROTS/AROTS/CROTS: one solid angle is the same rotation as ROT/AROT about
+/// that axis (manual 3.12.2.5). Two solid angles are rejected, because the
+/// manuals disagree on which angle tilts which axis.
+fn solid_angle_rotation(
+    op: &str,
+    pairs: Vec<Pair<Rule>>,
+    state: &mut State,
+    line_no: usize,
+    preview: &str,
+) -> Result<Matrix3, ParsingError> {
+    let words = geometry_words(pairs, state, "rotation", false)?;
+    let programmed: Vec<usize> = (0..3).filter(|&index| words.values[index].is_some()).collect();
+    match programmed[..] {
+        [index] => Ok(frame::axis_rotation(index, words.values[index].unwrap_or(0.0))),
+        [_, _] => Err(ParsingError::UnsupportedStatement {
+            line_no,
+            preview: preview.to_string(),
+            statement: format!("{op} with two solid angles"),
+            hint: "The Sinumerik manuals describe the two-angle form in two ways that give \
+                   different rotations (which axis each angle tilts), so it is not interpreted \
+                   until it is checked against a control. One solid angle, or ROT/AROT, is supported."
+                .to_string(),
+        }),
+        _ => Err(ParsingError::with_context(
+            line_no,
+            preview.to_string(),
+            "frame rotation".to_string(),
+            format!("{op} takes at most two solid angles; a third would over-define the plane (manual 3.12.2.5)"),
+        )),
+    }
+}
+
+/// SCALE/ASCALE factors per geometry axis as a matrix (manual 3.12.2.6).
+fn scale_assignments(
+    pairs: Vec<Pair<Rule>>,
+    state: &mut State,
+    line_no: usize,
+    preview: &str,
+) -> Result<Matrix3, ParsingError> {
+    let words = geometry_words(pairs, state, "scaling", false)?;
+    let factors = words.values.map(|factor| factor.unwrap_or(1.0));
+    if let Some(index) = factors.iter().position(|factor| !factor.is_finite() || *factor <= 0.0) {
+        return Err(ParsingError::with_context(
+            line_no,
+            preview.to_string(),
+            "frame scaling".to_string(),
+            format!(
+                "the scale factor {} for axis {} must be greater than 0 (mirroring is programmed with MIRROR/AMIRROR)",
+                factors[index],
+                frame::AXIS_NAMES[index]
+            ),
+        ));
+    }
+    Ok(frame::scaling(factors))
+}
+
+/// MIRROR/AMIRROR: every programmed geometry axis changes direction. The
+/// value is not evaluated, which is the toggle behaviour of MD10612
+/// MIRROR_TOGGLE = 0, the default (manual 3.12.2.7).
+fn mirror_assignments(pairs: Vec<Pair<Rule>>, state: &mut State) -> Result<Matrix3, ParsingError> {
+    let words = geometry_words(pairs, state, "mirroring", false)?;
+    Ok(frame::scaling(words.values.map(|value| {
+        if value.is_some() {
+            -1.0
+        } else {
+            1.0
+        }
+    })))
 }
 
 fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), ParsingError> {
@@ -4031,35 +4143,33 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
                 return Ok(());
             }
             let rotation = rotation_assignments(assignments, state, line_no, &preview)?;
-            state.apply_rotation(rotation, absolute, line_no, &preview)
+            state.compose_frame(rotation, absolute, line_no, &preview)
         }
-        // Solid-angle rotation, scaling and mirroring change the geometry in
-        // ways this interpreter does not model, so anything with parameters
-        // must fail loudly instead of producing wrong coordinates. The bare
-        // forms are frame resets: a bare ABSOLUTE instruction (ROTS/CROTS/
-        // SCALE/MIRROR) deletes the whole programmable frame including the
-        // translation (manual 3.12.2.1), while a bare ADDITIVE instruction
-        // adds nothing and is a no-op.
-        _ => {
-            if assignments.is_empty() {
-                if !op.starts_with('A') {
-                    // Bare absolute frame instruction: delete the programmable
-                    // frame. (CROTS is absolute despite the leading C.)
-                    state.reset_frame();
-                }
-                Ok(())
-            } else {
-                Err(ParsingError::UnsupportedStatement {
-                    line_no,
-                    preview,
-                    statement: format!("The frame instruction {}", op),
-                    hint: "Solid-angle rotation, scaling and mirroring frames are not modeled; \
-                           interpreting this program would produce wrong coordinates. Only TRANS, \
-                           ATRANS, ROT and AROT are supported."
-                        .to_string(),
-                })
+        // A bare absolute instruction deletes the whole programmable frame,
+        // translation included (manual 3.12.2.1). A bare additive one adds nothing.
+        _ if assignments.is_empty() => {
+            if !op.starts_with('A') {
+                // CROTS is absolute despite the leading C.
+                state.reset_frame();
             }
+            Ok(())
         }
+        "ROTS" | "AROTS" | "CROTS" => {
+            let rotation = solid_angle_rotation(&op, assignments, state, line_no, &preview)?;
+            state.compose_frame(rotation, op != "AROTS", line_no, &preview)
+        }
+        "SCALE" | "ASCALE" => {
+            // Chained onto the frame, so a later ATRANS is scaled as well
+            // (manual 3.12.2.6 note "Work offset after scaling").
+            let scale = scale_assignments(assignments, state, line_no, &preview)?;
+            state.compose_frame(scale, op == "SCALE", line_no, &preview)
+        }
+        "MIRROR" | "AMIRROR" => {
+            // Chaining a second mirror of the same axis undoes the first.
+            let mirror = mirror_assignments(assignments, state)?;
+            state.compose_frame(mirror, op == "MIRROR", line_no, &preview)
+        }
+        _ => unreachable!("frame_kw matches no other keyword"),
     })
 }
 fn interpret_block_number(element: Pair<Rule>, output: &mut Output) {
