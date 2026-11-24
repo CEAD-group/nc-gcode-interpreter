@@ -4,6 +4,32 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [v0.4.1] - 2026-11-24
+
+### Added
+
+- `include_frame` on `nc_to_dataframe` and `nc_to_batches` (#130). When set,
+  every row carries the programmable frame that is active on it: the rotation
+  `R` as `frame_r11` to `frame_r33` (row by row) and the translation `t` as
+  `frame_tx`, `frame_ty`, `frame_tz`, in machine XYZ = R * local XYZ + t. The
+  values are written on the first row and on the first row after a change and
+  forward-filled like the axis columns. The interpreter does not rotate
+  programmed A/B/C values, so a consumer that needs the orientation in the
+  basic system can apply `R` itself. The columns are absent by default.
+
+### Fixed
+
+- `BSPLINE` flattening accepts `PL=0` as a knot distance of zero, a repeated
+  knot (#129). Before, any `PL=0` on a control-point block made the whole
+  spline fall back to uniform knots with a warning, unless that block happened
+  to repeat the previous position and was dropped, so the same `PL` values gave
+  different knots depending on where the spline started. A `PL=0` on a block
+  whose `PL` is not used (the first and last block of a cubic) no longer has an
+  effect. Two cases still warn and use uniform knots, because they would split
+  the curve and are not measured on a control: `PL=0` as often in succession as
+  the spline degree, and `PL=0` on the first or last knot span. A negative `PL`
+  warns as before.
+
 ## [v0.4.0] - 2026-11-23
 
 ### Changed
