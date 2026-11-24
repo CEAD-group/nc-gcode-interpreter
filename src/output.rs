@@ -764,6 +764,18 @@ impl OutputRows {
 
     /// Hand the axis starts the interpreter assumed in this block to the
     /// flattener, before the block's row reaches it.
+    /// Put a changed programmable frame on the next row that has a cell: a
+    /// frame block emits no row of its own.
+    pub fn seed_frame(&mut self, frame: [f64; 12]) {
+        self.seed.retain(|(key, _)| !FRAME_COLUMNS.contains(key));
+        self.seed.extend(
+            FRAME_COLUMNS
+                .iter()
+                .zip(frame)
+                .map(|(&key, value)| (key, Value::Float(value))),
+        );
+    }
+
     pub fn seed_assumed_starts(&mut self, starts: &mut Vec<(String, f64)>) {
         for (axis, machine_value) in starts.drain(..) {
             if let Some(flattener) = self.flattener.as_mut() {
@@ -1423,6 +1435,23 @@ pub(crate) fn is_preset_call(text: &str) -> bool {
 /// filtering on null recovers the original toolpath points. Per-row like the
 /// block addresses: never forward-filled.
 pub const FLATTENED_COLUMN: &str = "flattened";
+
+/// The programmable frame per row (`include_frame`): the rotation `R`
+/// row-major and the translation `t` in machine XYZ = R * local XYZ + t.
+pub const FRAME_COLUMNS: [&str; 12] = [
+    "frame_r11",
+    "frame_r12",
+    "frame_r13",
+    "frame_r21",
+    "frame_r22",
+    "frame_r23",
+    "frame_r31",
+    "frame_r32",
+    "frame_r33",
+    "frame_tx",
+    "frame_ty",
+    "frame_tz",
+];
 
 /// Leading column carrying each output row's 1-based source line number (the
 /// `Row::line_no` the streaming path yields). One value per row, never

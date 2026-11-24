@@ -353,6 +353,10 @@ fn exec_block<'i>(block: Pair<'i, Rule>, output: &mut Output, state: &mut State)
         state.finish_block_frame(last, line_no)?;
         output.seed_assumed_starts(&mut state.assumed_starts);
     }
+    // A frame block is no statement, and its comment or block number can still give a row.
+    if let Some(frame) = state.take_frame_change() {
+        output.seed_frame(frame);
+    }
     Ok(match flow {
         BlockFlow::Continue => Step::Continue,
         BlockFlow::EndProgram => Step::EndProgram,

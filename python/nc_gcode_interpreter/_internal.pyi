@@ -61,6 +61,7 @@ def nc_to_batches(
     required_subprograms: list[str] | None = None,
     stop_on_setal: bool = False,
     defer_rows: bool = False,
+    include_frame: bool = False,
 ) -> Any:
     """Interpret an NC program into an iterator of columnar polars DataFrames.
 

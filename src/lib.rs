@@ -492,6 +492,7 @@ mod python_bindings {
         required_subprograms: Vec<String>,
         stop_on_setal: bool,
         defer_rows: bool,
+        include_frame: bool,
     ) -> PyResult<(
         mpsc::Receiver<WorkerMessage>,
         mpsc::Receiver<Result<FinalState, ErrInfo>>,
@@ -515,6 +516,7 @@ mod python_bindings {
             required_subprograms,
             stop_on_setal,
             defer_rows,
+            include_frame,
         };
         if let Some(name) = extensions.duplicate_subprogram() {
             return Err(PyErr::new::<PyValueError, _>(format!(
@@ -1130,7 +1132,7 @@ mod python_bindings {
     /// thread. Wrapping each with `pl.DataFrame` and concatenating reconstructs
     /// `nc_to_dataframe`.
     #[pyfunction]
-    #[pyo3(signature = (input, batch_size = 500_000, definitions = None, variables = None, start = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false, subprograms = None, external_variables = None, m_function_subprograms = None, required_subprograms = None, stop_on_setal = false, defer_rows = false))]
+    #[pyo3(signature = (input, batch_size = 500_000, definitions = None, variables = None, start = None, axis_identifiers = None, extra_axes = None, iteration_limit = 10000, disable_forward_fill = false, axis_index_map = None, allow_undefined_variables = false, input_is_path = false, flatten_tolerance = None, include_line_numbers = false, include_variables = false, subprograms = None, external_variables = None, m_function_subprograms = None, required_subprograms = None, stop_on_setal = false, defer_rows = false, include_frame = false))]
     #[allow(clippy::too_many_arguments)]
     fn nc_to_batches(
         input: PyBackedStr,
@@ -1154,6 +1156,7 @@ mod python_bindings {
         required_subprograms: Option<Vec<String>>,
         stop_on_setal: bool,
         defer_rows: bool,
+        include_frame: bool,
         py: Python<'_>,
     ) -> PyResult<NcBatchIterator> {
         // The provider declares the variable names it serves.
@@ -1186,6 +1189,7 @@ mod python_bindings {
             required_subprograms.unwrap_or_default(),
             stop_on_setal,
             defer_rows,
+            include_frame,
         )?;
 
         Ok(NcBatchIterator {
