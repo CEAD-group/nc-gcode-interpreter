@@ -107,6 +107,11 @@ def _definition_texts(
     return texts
 
 
+_FRAME_COLUMNS = frozenset(
+    [f"frame_r{row}{column}" for row in (1, 2, 3) for column in (1, 2, 3)] + ["frame_tx", "frame_ty", "frame_tz"]
+)
+
+
 def _subprogram_texts(subprograms: "Mapping[str, str] | None") -> dict[str, str] | None:
     return None if subprograms is None else dict(subprograms)
 
@@ -129,6 +134,7 @@ def nc_to_dataframe(
     m_function_subprograms: "Mapping[int, str] | None" = None,
     required_subprograms: "Iterable[str] | None" = None,
     stop_on_setal: bool = False,
+    include_frame: bool = False,
 ) -> tuple[pl.DataFrame, dict]:
     """
     Parses Sinumerik-flavored NC G-code and converts it into a Polars DataFrame along with the final state.
@@ -200,6 +206,16 @@ def nc_to_dataframe(
         across a jump, matching the streaming `nc_to_rows`. Never
         forward-filled; `dataframe_to_nc` ignores it. Default False (column
         absent, output schema unchanged).
+    include_frame: bool, optional
+        If True, add the programmable frame (TRANS/ATRANS, ROT/AROT) that is
+        active on each row as twelve Float64 columns: `frame_r11` to
+        `frame_r33`, the rotation R row by row, and `frame_tx`, `frame_ty`,
+        `frame_tz`, the translation t, in machine XYZ = R * local XYZ + t.
+        The values are written on the first row and on the first row after
+        each change, and forward-filled like the axis columns; with
+        `disable_forward_fill` the other rows are null. Programmed A/B/C
+        values are not rotated by the interpreter, so a consumer can apply R
+        to them. Default False (columns absent).
 
     Returns:
     --------
@@ -258,6 +274,7 @@ def nc_to_dataframe(
         stop_on_setal,
         # No row is read before the run ends, so a provider call need not wait for one.
         defer_rows=True,
+        include_frame=include_frame,
     )
     # pl.DataFrame wraps each Arrow record batch via __arrow_c_array__ (polars
     # >= 1.3), no pyarrow needed. Exhaust the iterator before reading .state.
@@ -391,6 +408,8 @@ def sanitize_dataframe(
     # dataframe_to_nc.
     if "line_no" in df.columns:
         df = df.drop("line_no")
+    # The `frame_*` columns (include_frame=True) report the frame; they are not NC words.
+    df = df.drop([name for name in df.columns if name in _FRAME_COLUMNS])
 
     modal = [g["short_name"] for g in GGroups.g_groups if g["effectiveness"] == "modal"]
     non_modal = [g["short_name"] for g in GGroups.g_groups if g["effectiveness"] != "modal"]
@@ -688,6 +707,7 @@ def nc_to_batches(
     m_function_subprograms: "Mapping[int, str] | None" = None,
     required_subprograms: "Iterable[str] | None" = None,
     stop_on_setal: bool = False,
+    include_frame: bool = False,
 ) -> _BatchIterator:
     """Interpret an NC program into a stream of columnar polars DataFrames.
 
@@ -755,5 +775,6 @@ def nc_to_batches(
         None if m_function_subprograms is None else dict(m_function_subprograms),
         None if required_subprograms is None else list(required_subprograms),
         stop_on_setal,
+        include_frame=include_frame,
     )
     return _BatchIterator(inner)

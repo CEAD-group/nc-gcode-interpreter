@@ -141,6 +141,8 @@ pub struct State {
     warned_addresses: HashSet<String>,
     /// Axis starts assumed by IC() before any position (axis, machine value), handed to the flattener at block end.
     pub assumed_starts: Vec<(String, f64)>,
+    /// The frame the `frame_*` columns last reported.
+    emitted_frame: Option<[f64; 12]>,
     /// Interned output keys of the geometry axes X, Y, Z (`None` when the axis
     /// is not configured) and of the arc centre offsets I, J, K.
     geometry_keys: [Option<&'static str>; 3],
@@ -274,6 +276,7 @@ impl State {
             seen_jump_targets: HashSet::new(),
             warned_addresses: HashSet::new(),
             assumed_starts: Vec::new(),
+            emitted_frame: None,
             geometry_keys,
             arc_offset_keys,
             warned_unpositioned: [false; 3],
@@ -407,6 +410,24 @@ impl State {
     }
 
     /// Gets the translation value for an axis
+    /// The programmable frame as `[R row-major, t]` when the `frame_*` columns
+    /// are requested and it differs from what the last row carried.
+    pub fn take_frame_change(&mut self) -> Option<[f64; 12]> {
+        if !self.ext.include_frame {
+            return None;
+        }
+        let mut frame = [0.0; 12];
+        for row in 0..3 {
+            frame[row * 3..row * 3 + 3].copy_from_slice(&self.rotation[row]);
+            frame[9 + row] = self.geometry_keys[row].map_or(0.0, |key| self.get_translation(key));
+        }
+        if self.emitted_frame == Some(frame) {
+            return None;
+        }
+        self.emitted_frame = Some(frame);
+        Some(frame)
+    }
+
     pub fn get_translation(&self, axis: &str) -> f64 {
         *self.translation.get(axis).unwrap_or(&0.0)
     }

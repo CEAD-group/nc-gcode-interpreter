@@ -91,6 +91,8 @@ pub struct Extensions {
     /// Keep finished rows batched across provider calls instead of sending
     /// them first; for a consumer that reads no row before the run ends.
     pub defer_rows: bool,
+    /// Put the programmable frame on the rows (`frame_*` columns).
+    pub include_frame: bool,
 }
 
 /// A subprogram text with its line-start table, shared across calls.
@@ -169,6 +171,7 @@ pub(crate) struct ExtState {
     pub m_functions: Arc<HashMap<u32, String>>,
     pub required: Arc<HashSet<String>>,
     pub stop_on_setal: bool,
+    pub include_frame: bool,
     external_names: Arc<HashSet<String>>,
     provider: Option<SharedProvider>,
     /// The batch sink to flush before a provider call, when rows are streamed.
@@ -237,6 +240,7 @@ impl ExtState {
                     .collect(),
             ),
             stop_on_setal: extensions.stop_on_setal,
+            include_frame: extensions.include_frame,
             m_functions: Arc::new(m_functions),
             subprograms: Arc::new(subprograms),
             external_names: Arc::new(names),
