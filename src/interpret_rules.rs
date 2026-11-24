@@ -4140,6 +4140,9 @@ pub(crate) fn interpret_block(
             // rows belong to its body blocks, which ran this hook themselves.
             if had_statements {
                 output.seed_assumed_starts(&mut state.assumed_starts);
+                if let Some(frame) = state.take_frame_change() {
+                    output.seed_frame(frame);
+                }
                 let last = output.last_mut().expect("Output vector should not be empty");
                 state.finish_block_frame(last, line_no)?;
                 if !state.ext.m_functions.is_empty() {

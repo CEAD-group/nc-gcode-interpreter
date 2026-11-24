@@ -807,6 +807,9 @@ fn execute_decoded(
     // Same end-of-block frame hook as interpret_block (arc words under a rotation).
     state.finish_block_frame(last, line.line_no)?;
     output.seed_assumed_starts(&mut state.assumed_starts);
+    if let Some(frame) = state.take_frame_change() {
+        output.seed_frame(frame);
+    }
     let last = output.last_mut().expect("row was just pushed");
     if let Some(n) = line.n {
         last.insert("N", Value::Str(n.to_string()));

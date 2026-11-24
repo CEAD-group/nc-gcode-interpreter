@@ -4,6 +4,19 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
+## [Unreleased]
+
+### Added
+
+- `include_frame` on `nc_to_dataframe` and `nc_to_batches` (#130). When set,
+  every row carries the programmable frame that is active on it: the rotation
+  `R` as `frame_r11` to `frame_r33` (row by row) and the translation `t` as
+  `frame_tx`, `frame_ty`, `frame_tz`, in machine XYZ = R * local XYZ + t. The
+  values are written on the first row and on the first row after a change and
+  forward-filled like the axis columns. The interpreter does not rotate
+  programmed A/B/C values, so a consumer that needs the orientation in the
+  basic system can apply `R` itself. The columns are absent by default.
+
 ## [v0.4.0] - 2026-11-23
 
 ### Changed
