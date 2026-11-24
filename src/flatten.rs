@@ -787,9 +787,8 @@ fn bspline_knot_plan(
         return fallback("not every control-point block carries a PL");
     }
     let pls: Vec<f64> = pls.into_iter().flatten().collect();
-    // The control accepts PL=0 as a repeated knot; that case is not measured.
-    if pls.iter().any(|&pl| !(pl > 0.0 && pl.is_finite())) {
-        return fallback("a PL is not a positive number");
+    if pls.iter().any(|&pl| !(pl >= 0.0 && pl.is_finite())) {
+        return fallback("a PL is negative or not a number");
     }
     // Judged on the programmed degree: dropping repeats can lower the effective one.
     if degree != 2 && degree != 3 {
@@ -798,15 +797,35 @@ fn bspline_knot_plan(
     let n = kept.len();
     let p = degree.min(n - 1).max(1);
     let spans = n - p;
-    if spans == 1 {
-        // A single knot span has no interior knots: PL cannot change the curve.
-        return Some(KnotPlan {
-            kept,
-            intervals: vec![1.0],
-        });
+    // A single knot span has no interior knots: PL cannot change the curve.
+    let single = KnotPlan {
+        kept: kept.clone(),
+        intervals: vec![1.0],
+    };
+    if p < 2 {
+        return Some(single);
     }
     // `pls[i]` is the PL of control point i + 1.
     let intervals = pls[p - 2..p - 2 + spans].to_vec();
+    // PL=0 repeats a knot; fewer than `p` in succession keep the curve in one piece.
+    let mut zeros = 0;
+    for (index, &interval) in intervals.iter().enumerate() {
+        if interval > 0.0 {
+            zeros = 0;
+            continue;
+        }
+        zeros += 1;
+        if index == 0 || index == spans - 1 {
+            return fallback("PL=0 on the first or last knot span is not supported");
+        }
+        if zeros >= p {
+            // The control allows exactly `p` (alarm 10891 above that), which splits the curve.
+            return fallback("PL=0 as often in succession as the spline degree is not supported");
+        }
+    }
+    if spans == 1 {
+        return Some(single);
+    }
     Some(KnotPlan { kept, intervals })
 }
 
@@ -1234,6 +1253,10 @@ impl BSpline {
         let mut prev_p = self.eval(0.0);
         for j in 0..self.spans {
             let t1 = self.knots[self.p + j + 1];
+            if t1 <= prev_t {
+                // A repeated knot (PL=0) gives an empty span.
+                continue;
+            }
             let p1 = self.eval(t1);
             adaptive_flatten(&eval, prev_t, &prev_p, t1, &p1, tol, metric, 0, &mut |t, p| {
                 out.push((t, p.to_vec()))
