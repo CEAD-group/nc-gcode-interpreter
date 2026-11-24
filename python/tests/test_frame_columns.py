@@ -4,7 +4,7 @@ import math
 
 import polars as pl
 import pytest
-from nc_gcode_interpreter import nc_to_batches, nc_to_dataframe
+from nc_gcode_interpreter import dataframe_to_nc, nc_to_batches, nc_to_dataframe
 
 ROTATION = [f"frame_r{row}{column}" for row in (1, 2, 3) for column in (1, 2, 3)]
 TRANSLATION = ["frame_tx", "frame_ty", "frame_tz"]
@@ -93,3 +93,23 @@ def test_batches_fill_the_frame_across_batch_borders(stage1):
     batches = pl.concat(list(nc_to_batches(text, batch_size=3, include_frame=True)))
     assert batches.select(ROTATION + TRANSLATION).equals(whole.select(ROTATION + TRANSLATION))
     assert batches["frame_tx"].to_list() == [0.0] + [5.0] * 9
+
+
+def test_a_frame_block_that_gives_a_row_carries_its_own_frame(stage1):
+    df, _ = frames("G0 X0\nTRANS X10 ; offset\nN30 ATRANS X5\nG0 X0\n")
+    assert df["frame_tx"].to_list() == [0.0, 10.0, 15.0, 15.0]
+
+
+def test_comment_only_program_has_the_columns(stage1):
+    df, _ = frames("; only a comment\n")
+    assert df.select(ROTATION + TRANSLATION).row(0) == (*IDENTITY, 0.0, 0.0, 0.0)
+
+
+def test_export_ignores_the_frame_columns(stage1, tmp_path):
+    text = "G0 X0\nTRANS X10\nG0 X1\n"
+    plain, _ = nc_to_dataframe(text)
+    with_frame, _ = frames(text)
+    dataframe_to_nc(plain, tmp_path / "plain.mpf")
+    dataframe_to_nc(with_frame, tmp_path / "frame.mpf")
+    assert (tmp_path / "frame.mpf").read_text() == (tmp_path / "plain.mpf").read_text()
+    assert "frame_" not in (tmp_path / "frame.mpf").read_text()

@@ -4138,11 +4138,12 @@ pub(crate) fn interpret_block(
             }
             // Only a statement row can carry arc words; a control block's
             // rows belong to its body blocks, which ran this hook themselves.
+            // A frame block is no statement, and its comment or block number can still give a row.
+            if let Some(frame) = state.take_frame_change() {
+                output.seed_frame(frame);
+            }
             if had_statements {
                 output.seed_assumed_starts(&mut state.assumed_starts);
-                if let Some(frame) = state.take_frame_change() {
-                    output.seed_frame(frame);
-                }
                 let last = output.last_mut().expect("Output vector should not be empty");
                 state.finish_block_frame(last, line_no)?;
                 if !state.ext.m_functions.is_empty() {

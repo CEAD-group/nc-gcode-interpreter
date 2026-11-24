@@ -107,6 +107,11 @@ def _definition_texts(
     return texts
 
 
+_FRAME_COLUMNS = frozenset(
+    [f"frame_r{row}{column}" for row in (1, 2, 3) for column in (1, 2, 3)] + ["frame_tx", "frame_ty", "frame_tz"]
+)
+
+
 def _subprogram_texts(subprograms: "Mapping[str, str] | None") -> dict[str, str] | None:
     return None if subprograms is None else dict(subprograms)
 
@@ -403,6 +408,8 @@ def sanitize_dataframe(
     # dataframe_to_nc.
     if "line_no" in df.columns:
         df = df.drop("line_no")
+    # The `frame_*` columns (include_frame=True) report the frame; they are not NC words.
+    df = df.drop([name for name in df.columns if name in _FRAME_COLUMNS])
 
     modal = [g["short_name"] for g in GGroups.g_groups if g["effectiveness"] == "modal"]
     non_modal = [g["short_name"] for g in GGroups.g_groups if g["effectiveness"] != "modal"]
