@@ -227,8 +227,9 @@ value_repeating  =  { "REP" ~ "(" ~ expression ~ ("," ~ expression)? ~ ")" }
 value_none       =  { "" }
 // Atomic: the interpreter only reads the full lexeme (as_str). Siemens
 // accepts X.5, Z-.5 and an explicit positive sign; at least one digit is
-// required, on either side of the decimal point. Keep block numbers separate.
-value            = @{ ("+" | "-")? ~ (ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT*)? | "." ~ ASCII_DIGIT+) ~ !ASCII_ALPHA }
+// required, on either side of the decimal point. The exponent is written
+// <mantissa>EX<exponent> (8.2EX-3). Keep block numbers separate.
+value            = @{ ("+" | "-")? ~ (ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT*)? | "." ~ ASCII_DIGIT+) ~ (^"EX" ~ ("+" | "-")? ~ ASCII_DIGIT+)? ~ !ASCII_ALPHA }
 op               = _{
     op_add | op_sub | op_mul | op_div | op_int_div | op_mod
   | op_b_and | op_b_xor | op_b_or

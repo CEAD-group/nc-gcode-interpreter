@@ -132,7 +132,7 @@ fn malformed_literals_and_unknown_codes_still_fail() {
         "G0 X1.2.3",
         "G0 X=.",
         "G0 X=+.",
-        "G0 X=1.2EX3",
+        "G0 X=1.2E3",
         "G00099999",
         "G01.5 X1",
     ] {
@@ -150,5 +150,29 @@ fn padded_looking_identifiers_remain_variables() {
     let expected = fixture.csv("DEF REAL G01_OFFSET=0.5\nG0 X=G01_OFFSET\n", "whole-file", false);
     for mode in MODES {
         assert_eq!(fixture.csv(source, mode, false), expected, "{mode}");
+    }
+}
+
+#[test]
+fn ex_exponent_literals_match_the_plain_spelling() {
+    // Manual 3 "REAL constant" (X=-.1EX-3) and 4.1 ($R[6]=1.874EX8, 8.2EX-3).
+    let source = "G1 X=-.1EX-3 Y2EX1 Z1.5ex+2 F100\nR1=1.874EX8\nR2=8.2EX-3*2\nX=R1/1EX6 Y=R2\n\
+                  X=IC(2.5EX-1)\nTRANS X1EX1\nG1 X1 Y2EX0\nDEF REAL DEPTH=-5EX-1\nZ=DEPTH\nSCALE X2EX0\nAROT X3EX1\nG1 Y1\n";
+    let canonical = "G1 X=-0.0001 Y20 Z150 F100\nR1=187400000\nR2=0.0082*2\nX=R1/1000000 Y=R2\n\
+                     X=IC(0.25)\nTRANS X10\nG1 X1 Y2\nDEF REAL DEPTH=-0.5\nZ=DEPTH\nSCALE X2\nAROT X30\nG1 Y1\n";
+    let fixture = Fixture::new();
+    let expected = fixture.csv(canonical, "whole-file", false);
+    for mode in MODES {
+        assert_eq!(fixture.csv(source, mode, false), expected, "{mode}");
+    }
+}
+
+#[test]
+fn malformed_exponents_are_rejected() {
+    let fixture = Fixture::new();
+    for source in ["G1 X1EX-\n", "G1 X1EX2.5\n", "R1=1EXA\n", "R1=1EX\n", "R1=1E5\n"] {
+        for mode in MODES {
+            assert!(!fixture.run(source, mode, false).status.success(), "{mode}: {source}");
+        }
     }
 }

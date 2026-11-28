@@ -4,10 +4,13 @@ Notable changes to **nc-gcode-interpreter**. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are git tags,
 released to PyPI.
 
-## [Unreleased]
+## [v0.4.2] - 2026-11-28
 
 ### Added
 
+- Numeric literals accept the Siemens exponent notation `<mantissa>EX<exponent>`
+  (#117), for example `X=-.1EX-3`, `R1=1.874EX8` and `8.2EX-3`, in every place
+  a literal is accepted. A plain `E` exponent stays an error.
 - `SCALE`/`ASCALE` and `MIRROR`/`AMIRROR` with arguments are interpreted for
   the geometry axes X, Y, Z (#134). They chain onto the programmable frame as
   machine XYZ = R * S * M * local XYZ + t, so an `ATRANS` after a scale is
