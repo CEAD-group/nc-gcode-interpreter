@@ -287,17 +287,17 @@ def test_cr_arc_under_an_in_plane_rotation_matches_the_baked_arc():
 def test_arc_under_a_tilting_rotation_errors(arc):
     """An arc whose plane no longer coincides with the machine plane is not
     modeled; it must fail instead of flattening a wrong arc."""
-    with pytest.raises(ValueError, match="tilts the G17 plane"):
+    with pytest.raises(ValueError, match="unevenly scales the G17 plane"):
         nc_to_dataframe(nc_lines("G1 F1000 X0 Y0 Z0 F100", "AROT X30", arc))
     # A half turn keeps the plane parallel but reverses it: also unsupported.
-    with pytest.raises(ValueError, match="tilts the G17 plane"):
+    with pytest.raises(ValueError, match="unevenly scales the G17 plane"):
         nc_to_dataframe(nc_lines("G1 F1000 X0 Y0 Z0 F100", "AROT Y180", arc))
 
 
 def test_arc_in_another_plane_checks_that_plane():
     # In G18 the normal is Y, so an RPL (about Y) is fine and an X tilt is not.
     nc_to_dataframe(nc_lines("G18 G1 X0 Y0 Z0 F100", "AROT RPL=30", "G2 X10 Z0 I5 K0"))
-    with pytest.raises(ValueError, match="tilts the G18 plane"):
+    with pytest.raises(ValueError, match="unevenly scales the G18 plane"):
         nc_to_dataframe(nc_lines("G18 G1 X0 Y0 Z0 F100", "AROT X30", "G2 X10 Z0 I5 K0"))
 
 

@@ -167,7 +167,8 @@ def nc_to_dataframe(
     start: Mapping | None, optional
         The machine state at program start, in the shape of the returned state
         dict, so a returned state can be passed back. Keys: ``axes`` and
-        ``translation`` (dict[str, float]), ``rotation`` (3x3), ``symbol_table``
+        ``translation`` (dict[str, float]), ``rotation`` (3x3), ``axis_scale``
+        (SCALE factor per non-geometry axis, dict[str, float]), ``symbol_table``
         (dict[str, float]), ``string_table`` (dict[str, str]), ``g_groups``
         (modal G group column to code, e.g. ``{"gg01_motion": "G1"}``),
         ``feed`` (float; pass the control's default feed SD42110
@@ -207,10 +208,13 @@ def nc_to_dataframe(
         forward-filled; `dataframe_to_nc` ignores it. Default False (column
         absent, output schema unchanged).
     include_frame: bool, optional
-        If True, add the programmable frame (TRANS/ATRANS, ROT/AROT) that is
-        active on each row as twelve Float64 columns: `frame_r11` to
-        `frame_r33`, the rotation R row by row, and `frame_tx`, `frame_ty`,
-        `frame_tz`, the translation t, in machine XYZ = R * local XYZ + t.
+        If True, add the programmable frame (TRANS, ROT, SCALE, MIRROR and
+        their additive forms) that is active on each row as twelve Float64
+        columns: `frame_r11` to `frame_r33`, the linear part R row by row, and
+        `frame_tx`, `frame_ty`, `frame_tz`, the translation t, in machine XYZ
+        = R * local XYZ + t. R is the rotation with the scale and mirror
+        factors folded in, so it is a pure rotation only while no SCALE or
+        MIRROR is active.
         The values are written on the first row and on the first row after
         each change, and forward-filled like the axis columns; with
         `disable_forward_fill` the other rows are null. Programmed A/B/C
@@ -603,8 +607,8 @@ def nc_to_rows(
 
     Errors raise ``ValueError`` from ``next()`` when reached. After the
     iterator is exhausted, its ``state`` attribute holds the final
-    interpreter state (axes, symbol_table, translation, rotation, string_table,
-    g_groups, feed, tool, transformation, fgroup, fgref).
+    interpreter state (axes, symbol_table, translation, rotation, axis_scale,
+    string_table, g_groups, feed, tool, transformation, fgroup, fgref).
 
     Example:
     --------
@@ -645,7 +649,7 @@ class _BatchIterator:
     no Python list of primitives materialized. ``pl.DataFrame`` wraps that
     capsule directly (polars >= 1.3), so no ``pyarrow`` is involved. After
     exhaustion its ``state`` attribute holds the final interpreter state (axes,
-    symbol_table, translation, rotation, string_table, g_groups, feed, tool,
+    symbol_table, translation, rotation, axis_scale, string_table, g_groups, feed, tool,
     transformation, fgroup, fgref), like
     the iterator returned by :func:`nc_to_rows`.
     """

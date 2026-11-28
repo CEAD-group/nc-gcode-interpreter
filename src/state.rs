@@ -116,12 +116,19 @@ pub struct State {
     /// symbol_table - using one in a numeric expression is a loud error.
     pub string_table: HashMap<String, String>,
     pub translation: FxMap<String, f64>,
-    /// Programmable frame rotation over the geometry axes X, Y, Z (row-major):
-    /// machine XYZ = rotation * local XYZ + translation. Every other axis only
-    /// gets its translation, so programmed A/B/C orientations are never rotated.
+    /// Linear part of the programmable frame over the geometry axes X, Y, Z
+    /// (row-major, rotation * scale * mirror): machine XYZ = rotation * local
+    /// XYZ + translation. Every other axis gets `axis_scale` and its
+    /// translation, so programmed A/B/C orientations are never rotated.
     pub rotation: Matrix3,
+    /// SCALE/ASCALE factor of each non-geometry axis (manual 3.12.2.6 scales
+    /// all path, synchronized and positioning axes): machine = factor * local
+    /// + translation. An absent axis has factor 1.
+    pub axis_scale: FxMap<String, f64>,
+    /// Inverse of `rotation`, kept so a frame change can recover the locals.
+    inverse: Matrix3,
     /// `rotation` is not the identity. The hot path checks this flag only, so
-    /// programs without ROT/AROT pay nothing for the frame model.
+    /// programs without ROT/SCALE/MIRROR pay nothing for the frame model.
     pub rotated: bool,
     /// Active working plane (G17 default): the RPL rotation axis and the plane
     /// an arc must keep under a rotated frame.
@@ -266,7 +273,9 @@ impl State {
             string_table: HashMap::new(),
             translation,
             rotation: frame::IDENTITY,
+            inverse: frame::IDENTITY,
             rotated: false,
+            axis_scale: FxMap::default(),
             plane: Plane::G17,
             axis_identifiers,
             iteration_limit,
@@ -445,7 +454,47 @@ impl State {
     pub fn reset_frame(&mut self) {
         self.reset_translations();
         self.rotation = frame::IDENTITY;
+        self.inverse = frame::IDENTITY;
         self.rotated = false;
+        self.axis_scale.clear();
+    }
+
+    /// SCALE/ASCALE factor of a non-geometry axis.
+    #[inline]
+    pub fn axis_factor(&self, axis: &str) -> f64 {
+        if self.axis_scale.is_empty() {
+            return 1.0;
+        }
+        *self.axis_scale.get(axis).unwrap_or(&1.0)
+    }
+
+    /// Machine value of a non-geometry axis: factor * local + translation.
+    #[inline]
+    pub fn other_machine(&self, axis: &str, local: f64) -> f64 {
+        local * self.axis_factor(axis) + self.get_translation(axis)
+    }
+
+    /// Local value of a non-geometry axis at a machine value.
+    pub fn other_local(&self, axis: &str, machine: f64) -> f64 {
+        (machine - self.get_translation(axis)) / self.axis_factor(axis)
+    }
+
+    /// ASCALE on a non-geometry axis multiplies its factor; SCALE has reset it first.
+    pub fn chain_axis_scale(&mut self, axis: &str, factor: f64) {
+        *self.axis_scale.entry(axis.to_string()).or_insert(1.0) *= factor;
+    }
+
+    /// Install the linear part of the frame. `Err` holds the reason when it is
+    /// not a rotation times per-axis scale and mirror factors.
+    pub fn set_linear(&mut self, linear: Matrix3) -> Result<(), &'static str> {
+        let inverse = frame::inverse(&linear).ok_or("the frame is singular (a scale factor of 0)")?;
+        if !frame::columns_orthogonal(&linear) {
+            return Err("the frame shears the axes (a rotation after unequal scale factors)");
+        }
+        self.rotation = linear;
+        self.inverse = inverse;
+        self.rotated = !frame::is_identity(&linear);
+        Ok(())
     }
 
     /// Run a frame instruction with the machine position held: a frame change
@@ -461,12 +510,12 @@ impl State {
             .axes
             .iter()
             .filter(|(key, _)| frame::geometry_index(key).is_none())
-            .map(|(key, local)| (key.clone(), local + self.get_translation(key)))
+            .map(|(key, local)| (key.clone(), self.other_machine(key, *local)))
             .collect();
         change(self)?;
         self.store_geometry_locals(machine, positioned);
         for (key, machine_value) in others {
-            let local = machine_value - self.get_translation(&key);
+            let local = self.other_local(&key, machine_value);
             self.axes.insert(key, local);
         }
         Ok(())
@@ -479,14 +528,14 @@ impl State {
         }
     }
 
-    /// Compose a rotation onto the programmable frame. `absolute` (ROT) first
-    /// deletes the frame, translation included; additive (AROT) chains onto
-    /// the current frame, so the angles refer to the already rotated axes
-    /// (manual 3.12.2.4 example 3: AROT Y90 then AROT Z90 turns about the
-    /// rotated Z).
-    pub fn apply_rotation(
+    /// Chain a rotation, scale or mirror onto the programmable frame.
+    /// `absolute` (ROT, SCALE, MIRROR) first deletes the frame, translation
+    /// included; additive (AROT, ...) chains onto the current frame, so the
+    /// values refer to the already transformed axes (manual 3.12.2.4 example
+    /// 3: AROT Y90 then AROT Z90 turns about the rotated Z).
+    pub fn compose_frame(
         &mut self,
-        rotation: Matrix3,
+        linear: Matrix3,
         absolute: bool,
         line_no: usize,
         preview: &str,
@@ -494,12 +543,21 @@ impl State {
         if absolute {
             self.reset_frame();
         }
-        self.rotation = frame::multiply(&self.rotation, &rotation);
-        self.rotated = !frame::is_identity(&self.rotation);
+        if let Err(reason) = self.set_linear(frame::multiply(&self.rotation, &linear)) {
+            return Err(ParsingError::UnsupportedStatement {
+                line_no,
+                preview: preview.to_string(),
+                statement: "This frame instruction".to_string(),
+                hint: format!(
+                    "{reason}. A Sinumerik frame holds one rotation with per-axis scale and mirror \
+                     factors, and what the control makes of this chain is not modeled."
+                ),
+            });
+        }
         // A geometry axis that is not configured cannot report the motion a
-        // rotation would give it, so such a rotation must leave it alone.
+        // rotation would give it, so the frame must not mix it with another.
         for (index, key) in self.geometry_keys.iter().enumerate() {
-            if key.is_none() && !frame::keeps_axis(&self.rotation, index) {
+            if key.is_none() && frame::couples_axis(&self.rotation, index) {
                 return Err(ParsingError::with_context(
                     line_no,
                     preview.to_string(),
@@ -543,8 +601,13 @@ impl State {
                 }
             }
             None => {
+                // An offset after a scale is scaled (manual 3.12.2.6 note).
+                let scaled = match frame::geometry_index(axis) {
+                    Some(_) => delta,
+                    None => delta * self.axis_factor(axis),
+                };
                 let current = self.get_translation(axis);
-                self.translation.insert(axis.to_string(), current + delta);
+                self.translation.insert(axis.to_string(), current + scaled);
             }
         }
         Ok(())
@@ -626,13 +689,13 @@ impl State {
         }
     }
 
-    /// Local X, Y, Z of a machine point under the active frame: R^T (machine - t).
+    /// Local X, Y, Z of a machine point under the active frame: L^-1 (machine - t).
     fn local_of_machine(&self, machine: [f64; 3]) -> [f64; 3] {
         let mut shifted = machine;
         for (index, name) in frame::AXIS_NAMES.iter().enumerate() {
             shifted[index] -= self.get_translation(name);
         }
-        frame::apply_transposed(&self.rotation, shifted)
+        frame::apply(&self.inverse, shifted)
     }
 
     /// Store the local coordinates of `machine` for every positioned geometry
@@ -673,7 +736,7 @@ impl State {
             self.insert_rotated_geometry(last);
             return;
         }
-        last.insert(skey, Value::Float(local_value + self.get_translation(skey)));
+        last.insert(skey, Value::Float(self.other_machine(skey, local_value)));
     }
 
     /// Emit every positioned geometry axis: under a rotation any of them can
@@ -691,11 +754,11 @@ impl State {
         }
     }
 
-    /// End-of-block frame work for the arc parameters I/J/K and CR: under a
-    /// rotation the centre offset vector is rotated with the frame so the
-    /// row stays consistent with its machine X/Y/Z, which only models arcs
-    /// whose plane stays the machine plane (rotation about the plane normal,
-    /// as RPL gives). Any other rotation under an arc block is an error.
+    /// End-of-block frame work for the arc parameters I/J/K and CR: the centre
+    /// offset vector is transformed with the frame and CR scaled, so the row
+    /// stays consistent with its machine X/Y/Z. That only models arcs that
+    /// stay circles in the machine plane with the programmed sense of
+    /// rotation; any other frame under an arc block is an error.
     pub fn finish_block_frame(&mut self, last: &mut CellMap, line_no: usize) -> Result<(), ParsingError> {
         if !self.rotated {
             return Ok(());
@@ -708,30 +771,38 @@ impl State {
                 programmed[index] = true;
             }
         }
-        let has_radius = matches!(last.get("CR"), Some(Value::Float(_)));
-        if !programmed.iter().any(|p| *p) && !has_radius {
+        let radius = match last.get("CR") {
+            Some(Value::Float(value)) => Some(*value),
+            _ => None,
+        };
+        if !programmed.iter().any(|p| *p) && radius.is_none() {
             return Ok(());
         }
         let normal = self.plane.normal_axis();
-        if !frame::keeps_axis(&self.rotation, normal) {
+        let Some(scale) = frame::plane_similarity(&self.rotation, normal) else {
             return Err(ParsingError::UnsupportedStatement {
                 line_no,
                 preview: self.get_line(line_no).unwrap_or("").to_string(),
                 statement: format!(
-                    "A circular arc under a frame rotation that tilts the {} plane",
+                    "A circular arc under a frame that tilts, mirrors or unevenly scales the {} plane",
                     self.plane.code()
                 ),
                 hint: "Arcs are modeled only while the programmable frame rotates about the \
-                       normal of the active plane (RPL, or ROT/AROT about that axis); a tilted \
-                       arc plane is not flattened and would produce wrong coordinates."
+                       normal of the active plane (RPL, or ROT/AROT about that axis) and scales \
+                       both plane axes by one factor. A tilted arc plane and a circle scaled into \
+                       an ellipse are not flattened, and a mirrored arc would need its G2/G3 \
+                       direction reversed."
                     .to_string(),
             });
-        }
-        let rotated = frame::apply(&self.rotation, offsets);
+        };
+        let transformed = frame::apply(&self.rotation, offsets);
         for (index, key) in self.arc_offset_keys.iter().enumerate() {
-            if programmed[index] || rotated[index].abs() > frame::EPS {
-                last.insert(key, Value::Float(rotated[index]));
+            if programmed[index] || transformed[index].abs() > frame::EPS {
+                last.insert(key, Value::Float(transformed[index]));
             }
+        }
+        if let Some(radius) = radius {
+            last.insert("CR", Value::Float(radius * scale));
         }
         Ok(())
     }
@@ -772,7 +843,7 @@ impl State {
                 return Some(self.machine_geometry()[index]);
             }
         }
-        Some(local + self.get_translation(key))
+        Some(self.other_machine(key, local))
     }
 
     /// Gets the array index for an axis, if a mapping exists
@@ -804,6 +875,7 @@ impl State {
             axes: self.axes.clone(),
             symbol_table: self.symbol_table.clone(),
             translation: self.translation.clone(),
+            axis_scale: self.axis_scale.clone(),
             rotation: self.rotation,
             string_table: self.string_table.clone(),
             g_groups: self.g_groups.clone(),
@@ -827,8 +899,11 @@ pub struct FinalState {
     pub axes: FxMap<String, f64>,
     pub symbol_table: HashMap<String, f64>,
     pub translation: FxMap<String, f64>,
-    /// Programmable frame rotation (row-major; machine = rotation * local +
-    /// translation for X, Y, Z). The identity when no ROT/AROT is active.
+    /// SCALE/ASCALE factor of each scaled non-geometry axis.
+    pub axis_scale: FxMap<String, f64>,
+    /// Linear part of the programmable frame (row-major; machine = rotation *
+    /// local + translation for X, Y, Z), with scale and mirror folded in. The
+    /// identity when no rotation, scale or mirror is active.
     pub rotation: Matrix3,
     pub string_table: HashMap<String, String>,
     /// Modal G group values at the end of the run, sorted by group.
