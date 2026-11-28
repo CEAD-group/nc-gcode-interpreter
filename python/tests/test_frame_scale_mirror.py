@@ -199,7 +199,7 @@ def test_scaled_square_program():
     square = ["G1 X10 Y0", "G1 X10 Y10", "G1 X0 Y10", "G1 X0 Y0"]
     df, _ = run("TRANS X5 Y5", "ASCALE X2 Y2", *square)
     points = list(zip(df["X"].to_list()[-4:], df["Y"].to_list()[-4:], strict=True))
-    assert points == pytest.approx([(25, 5), (25, 25), (5, 25), (5, 5)])
+    assert points == [(25, 5), (25, 25), (5, 25), (5, 5)]
 
 
 def test_scale_applies_to_a_non_geometry_axis():
