@@ -139,7 +139,7 @@ def test_string_table_round_trips_through_state_dict():
     assert state["string_table"] == {"MSG": "HELLO WORLD", "TAG": "ABC"}
     # The existing numeric sub-tables are untouched by the new key.
     assert set(state) == {
-        "axes", "symbol_table", "translation", "rotation", "string_table", "g_groups", "feed",
+        "axes", "symbol_table", "translation", "rotation", "axis_scale", "string_table", "g_groups", "feed",
         "tool", "transformation", "fgroup", "fgref",
     }
     # The string variable never leaks into the numeric symbol table.

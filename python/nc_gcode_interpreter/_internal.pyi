@@ -66,7 +66,7 @@ def nc_to_batches(
     """Interpret an NC program into an iterator of columnar polars DataFrames.
 
     The returned iterator exposes ``state`` (dict with ``axes``,
-    ``symbol_table``, ``translation``, ``rotation``, ``string_table``,
+    ``symbol_table``, ``translation``, ``rotation``, ``axis_scale``, ``string_table``,
     ``g_groups``, ``feed``, ``tool``, ``transformation``, ``fgroup`` and
     ``fgref``) once
     exhausted, and

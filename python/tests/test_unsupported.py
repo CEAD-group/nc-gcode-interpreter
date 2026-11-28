@@ -5,23 +5,32 @@ from nc_gcode_interpreter import nc_to_dataframe
 @pytest.mark.parametrize(
     "program",
     [
-        "MIRROR X0\nX2",  # mirroring frame
-        "AMIRROR X0\nX2",  # additive mirroring frame
-        "ROTS X30 Y10\nX2",  # solid-angle rotation frame
-        "AROTS X30\nX2",  # additive solid-angle rotation frame
-        "CROTS X30\nX2",  # solid-angle rotation on the data-management frame
-        "SCALE X2 Y2\nX2",  # scaling frame
-        "ASCALE X2 Y2\nX2",  # additive scaling frame
+        "ROTS X30 Y10\nX2",  # two solid angles: the manuals disagree on the rotation
+        "CROTS X30 Y10\nX2",
+        "MIRROR A0\nX2",
+        "SCALE X2\nAROT Z30\nX2",  # a rotation after unequal factors shears the frame
+        "TOFRAME\nX2",  # frame rotations that follow the tool or workpiece orientation
+        "TOFRAMEZ\nX2",
+        "TOROT\nX2",
+        "torotx\nX2",
+        "PAROT\nX2",
+        "G1 F100 X1 TOROT",
     ],
-    ids=lambda p: p.splitlines()[0],
+    ids=lambda p: " / ".join(p.splitlines()[:-1]) or p,
 )
 def test_unsupported_statements_error_loudly(program):
     """
     Statements that would silently corrupt the output (unmodeled frame
     transformations) must raise instead of being ignored.
     """
-    with pytest.raises(ValueError, match="not supported"):
+    with pytest.raises(ValueError, match=r"not supported|geometry axes X, Y, Z only"):
         nc_to_dataframe(program)
+
+
+def test_switching_an_orientation_frame_off_is_accepted():
+    df, _state = nc_to_dataframe("TOROTOF\nPAROTOF\nX2")
+    assert df["gg53_frame_rot_tool"][-1] == "TOROTOF"
+    assert df["gg52_frame_rot_wp"][-1] == "PAROTOF"
 
 
 @pytest.mark.parametrize(

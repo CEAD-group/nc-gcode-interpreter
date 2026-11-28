@@ -49,12 +49,12 @@ def test_group_numbers_follow_the_manual() -> None:
 def test_renamed_and_added_commands_reach_their_columns() -> None:
     from nc_gcode_interpreter import nc_to_dataframe
 
-    program = "DYNFINISH\nWALCS1\nTOROT\nTOWWCS\nG646\nCOMPPATH\nORIAXESFR\nCUT3DCP\nSPIF2\nG1 X1 F100\n"
+    program = "DYNFINISH\nWALCS1\nTOROTOF\nTOWWCS\nG646\nCOMPPATH\nORIAXESFR\nCUT3DCP\nSPIF2\nG1 X1 F100\n"
     df, _ = nc_to_dataframe(program)
     last = df.row(-1, named=True)
     assert last["gg59_dyn_resp_path"] == "DYNFINISH"
     assert last["gg60_area_limit"] == "WALCS1"
-    assert last["gg53_frame_rot_tool"] == "TOROT"
+    assert last["gg53_frame_rot_tool"] == "TOROTOF"
     assert last["gg56_tool_wear"] == "TOWWCS"
     assert last["gg10_exact_stop_mode"] == "G646"
     assert last["gg30_nc_compress"] == "COMPPATH"

@@ -135,8 +135,8 @@ def test_start_seeds_every_entry_point():
         {"g_groups": {"gg02_wait": "G4"}},
         {"g_groups": {"motion": "G1"}},
         {"axes": {"Q": 1.0}},
-        {"rotation": [[2, 0, 0], [0, 1, 0], [0, 0, 1]]},
-        {"rotation": [[-1, 0, 0], [0, 1, 0], [0, 0, 1]]},
+        {"rotation": [[1, 1, 0], [0, 1, 0], [0, 0, 1]]},
+        {"rotation": [[0, 0, 0], [0, 1, 0], [0, 0, 1]]},
     ],
 )
 def test_invalid_start_values_are_errors(start):

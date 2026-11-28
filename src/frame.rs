@@ -1,12 +1,14 @@
-//! Programmable frame rotation (ROT/AROT/RPL) for the geometry axes X, Y, Z.
+//! Programmable frame rotation, scaling and mirroring (ROT/AROT/RPL,
+//! SCALE/ASCALE, MIRROR/AMIRROR) for the geometry axes X, Y, Z.
 //!
-//! The frame is a rotation matrix `R` plus the per-axis translation kept in
-//! `State`: machine XYZ = R * local XYZ + t. Only the geometry axes rotate;
+//! The frame is a linear part `L` plus the per-axis translation kept in
+//! `State`: machine XYZ = L * local XYZ + t, with L = R * S * M (Basic
+//! Functions manual 4.5.2.11). Only the geometry axes are transformed;
 //! every other axis (A, B, C, E, ...) gets a translation at most, so programmed
 //! orientation axes stay what the program wrote. The conventions here follow
 //! the Sinumerik frame chapters cited at each function.
 
-/// Row-major 3x3 rotation matrix over the geometry axes (0 = X, 1 = Y, 2 = Z).
+/// Row-major 3x3 matrix over the geometry axes (0 = X, 1 = Y, 2 = Z).
 pub type Matrix3 = [[f64; 3]; 3];
 
 pub const IDENTITY: Matrix3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -84,23 +86,70 @@ pub fn apply(r: &Matrix3, v: [f64; 3]) -> [f64; 3] {
     out
 }
 
-/// The inverse rotation: a rotation matrix is orthogonal, so R^-1 = R^T.
-pub fn apply_transposed(r: &Matrix3, v: [f64; 3]) -> [f64; 3] {
-    let mut out = [0.0; 3];
-    for (i, cell) in out.iter_mut().enumerate() {
-        *cell = r[0][i] * v[0] + r[1][i] * v[1] + r[2][i] * v[2];
+pub fn determinant(m: &Matrix3) -> f64 {
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+}
+
+/// The inverse by cofactors, or `None` for a singular matrix (a zero scale).
+pub fn inverse(m: &Matrix3) -> Option<Matrix3> {
+    let det = determinant(m);
+    if !det.is_finite() || det.abs() <= EPS {
+        return None;
     }
-    out
+    let mut out = [[0.0; 3]; 3];
+    for (i, row) in out.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            let (r0, r1) = ((j + 1) % 3, (j + 2) % 3);
+            let (c0, c1) = ((i + 1) % 3, (i + 2) % 3);
+            *cell = (m[r0][c0] * m[r1][c1] - m[r0][c1] * m[r1][c0]) / det;
+        }
+    }
+    Some(out)
+}
+
+/// Scaling (and, with a negative factor, mirroring) along the geometry axes.
+pub fn scaling(factors: [f64; 3]) -> Matrix3 {
+    [[factors[0], 0.0, 0.0], [0.0, factors[1], 0.0], [0.0, 0.0, factors[2]]]
+}
+
+/// True when the columns are mutually orthogonal, so the matrix is a rotation
+/// times per-axis scale and mirror factors: the form R * S * M a Sinumerik
+/// frame holds. A rotation chained after unequal scale factors shears the
+/// axes and fails this.
+pub fn columns_orthogonal(m: &Matrix3) -> bool {
+    (0..3).all(|a| {
+        (a + 1..3).all(|b| {
+            let dot: f64 = (0..3).map(|k| m[k][a] * m[k][b]).sum();
+            let scale: f64 = (0..3).map(|k| m[k][a].abs().max(m[k][b].abs())).fold(1.0, f64::max);
+            dot.abs() <= EPS * scale * scale
+        })
+    })
+}
+
+/// True when the frame mixes geometry axis `axis` with another one, in either direction.
+pub fn couples_axis(m: &Matrix3, axis: usize) -> bool {
+    (0..3).any(|other| other != axis && (m[axis][other].abs() > EPS || m[other][axis].abs() > EPS))
+}
+
+/// The scale factor of the plane with normal `normal` when the frame maps that
+/// plane onto itself by a rotation and one positive factor, so a circle stays
+/// a circle with the same sense of rotation. `None` for a tilted plane,
+/// unequal in-plane factors or an in-plane mirror.
+pub fn plane_similarity(m: &Matrix3, normal: usize) -> Option<f64> {
+    if couples_axis(m, normal) {
+        return None;
+    }
+    let (a, b) = ((normal + 1) % 3, (normal + 2) % 3);
+    let (p, q, r, s) = (m[a][a], m[a][b], m[b][a], m[b][b]);
+    let scale = (p * p + r * r).sqrt();
+    let tolerance = EPS * scale.max(1.0);
+    let similar = (p - s).abs() <= tolerance && (q + r).abs() <= tolerance;
+    (similar && scale > EPS).then_some(scale)
 }
 
 pub fn is_identity(r: &Matrix3) -> bool {
     (0..3).all(|i| (0..3).all(|j| (r[i][j] - IDENTITY[i][j]).abs() <= EPS))
-}
-
-/// True when the rotation maps geometry axis `axis` onto itself, so a plane
-/// with that normal stays parallel to the machine plane with the same sense.
-pub fn keeps_axis(r: &Matrix3, axis: usize) -> bool {
-    (0..3).all(|i| (r[i][axis] - IDENTITY[i][axis]).abs() <= EPS)
 }
 
 /// Rotation about one geometry axis by `degrees`, right-hand rule: positive
@@ -176,12 +225,37 @@ mod tests {
     }
 
     #[test]
-    fn keeps_axis_detects_plane_normal() {
-        assert!(keeps_axis(&axis_rotation(2, 33.0), 2));
-        assert!(!keeps_axis(&axis_rotation(0, 33.0), 2));
-        // A half turn about X flips Z: the plane is parallel but reversed.
-        assert!(!keeps_axis(&axis_rotation(0, 180.0), 2));
+    fn plane_similarity_accepts_only_rotation_and_one_positive_factor() {
+        assert_eq!(plane_similarity(&axis_rotation(2, 33.0), 2), Some(1.0));
+        assert_eq!(plane_similarity(&axis_rotation(0, 33.0), 2), None);
+        // A half turn about X reverses the sense of rotation in the X/Y plane.
+        assert_eq!(plane_similarity(&axis_rotation(0, 180.0), 2), None);
+        let scaled = multiply(&axis_rotation(2, 20.0), &scaling([2.0, 2.0, 5.0]));
+        assert!((plane_similarity(&scaled, 2).unwrap() - 2.0).abs() < 1e-12);
+        assert_eq!(plane_similarity(&scaling([2.0, 3.0, 1.0]), 2), None);
+        assert_eq!(plane_similarity(&scaling([-1.0, 1.0, 1.0]), 2), None);
+        // Mirroring the normal axis leaves the plane itself untouched.
+        assert_eq!(plane_similarity(&scaling([1.0, 1.0, -1.0]), 2), Some(1.0));
         assert!(is_identity(&rpy_rotation(0.0, 0.0, 0.0)));
         assert!(is_identity(&axis_rotation(1, 360.0)));
+    }
+
+    #[test]
+    fn inverse_undoes_rotation_scale_and_mirror() {
+        let m = multiply(&rpy_rotation(10.0, 20.0, 30.0), &scaling([2.0, -0.5, 3.0]));
+        assert!(is_identity(&multiply(&m, &inverse(&m).unwrap())));
+        assert!(inverse(&scaling([1.0, 0.0, 1.0])).is_none());
+    }
+
+    #[test]
+    fn a_rotation_after_unequal_scale_factors_shears() {
+        let scale = scaling([2.0, 1.0, 1.0]);
+        assert!(columns_orthogonal(&multiply(&axis_rotation(2, 30.0), &scale)));
+        assert!(!columns_orthogonal(&multiply(&scale, &axis_rotation(2, 30.0))));
+        // Equal factors in the rotated plane commute with the rotation.
+        assert!(columns_orthogonal(&multiply(
+            &scaling([2.0, 2.0, 5.0]),
+            &axis_rotation(2, 30.0)
+        )));
     }
 }

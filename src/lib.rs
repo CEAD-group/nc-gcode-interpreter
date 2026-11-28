@@ -136,6 +136,7 @@ mod python_bindings {
         dict.set_item("axes", state.axes.clone())?;
         dict.set_item("symbol_table", state.symbol_table.clone())?;
         dict.set_item("translation", state.translation.clone())?;
+        dict.set_item("axis_scale", state.axis_scale.clone())?;
         // Row-major 3x3: machine XYZ = rotation * local XYZ + translation.
         let rotation: Vec<Vec<f64>> = state.rotation.iter().map(|row| row.to_vec()).collect();
         dict.set_item("rotation", rotation)?;
@@ -220,6 +221,7 @@ mod python_bindings {
             match key.as_str() {
                 "axes" => state.axes = number_items(&value, &key)?,
                 "translation" => state.translation = number_items(&value, &key)?,
+                "axis_scale" => state.axis_scale = number_items(&value, &key)?,
                 "symbol_table" => state.symbol_table = number_items(&value, &key)?,
                 "string_table" => state.string_table = string_items(&value, &key)?,
                 "g_groups" => state.g_groups = string_items(&value, &key)?,
