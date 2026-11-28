@@ -18,6 +18,12 @@ released to PyPI.
   keeps it a circle with the same direction (its `I`/`J`/`K` and `CR` are
   scaled); an in-plane mirror or unequal in-plane factors under an arc raise
   an error, as does a rotation chained after unequal scale factors.
+- `SCALE`/`ASCALE` also scale every other configured axis, such as an
+  extruder axis `E` (#134; manual 3.12.2.6 scales all path, synchronized and
+  positioning axes): machine = factor * local + t, `ASCALE` multiplies the
+  factor, an `ATRANS` after it is scaled and an absolute frame instruction
+  resets it. The factors are in the final state as `axis_scale`, which
+  `start` accepts.
 - `ROTS`/`AROTS`/`CROTS` with one solid angle, which is the same rotation as
   `ROT`/`AROT` about that axis (#134). Two solid angles still raise an error,
   because the manuals describe that form in two ways that give different

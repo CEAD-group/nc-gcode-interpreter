@@ -3719,7 +3719,7 @@ fn interpret_statement(element: Pair<Rule>, output: &mut Output, state: &mut Sta
                             continue;
                         };
                         // The preset is a machine value; the state keeps local coordinates.
-                        let local_value = value - state.get_translation(skey);
+                        let local_value = state.other_local(skey, value);
                         state.update_axis(skey, local_value)?;
                         let last = output.last_mut().expect("Output vector should not be empty");
                         state.insert_machine_axis(skey, local_value, last);
@@ -3944,6 +3944,8 @@ fn frame_assignments(pairs: Vec<Pair<Rule>>, state: &mut State) -> Result<Vec<(S
 struct GeometryWords {
     values: [Option<f64>; 3],
     rpl: Option<f64>,
+    /// Non-geometry axis words, collected only where `others` allows them.
+    others: Vec<(String, f64)>,
 }
 
 /// Evaluate the words of a ROT/SCALE/MIRROR-style block. The words name
@@ -3955,10 +3957,12 @@ fn geometry_words(
     state: &mut State,
     what: &str,
     rpl: bool,
+    others: bool,
 ) -> Result<GeometryWords, ParsingError> {
     let mut words = GeometryWords {
         values: [None; 3],
         rpl: None,
+        others: Vec::new(),
     };
     for pair in pairs {
         let (pair_line_no, pair_preview) = get_error_context(&pair, state);
@@ -3991,6 +3995,19 @@ fn geometry_words(
             continue;
         }
         let Some(index) = frame::geometry_index(&name) else {
+            if others && state.is_axis(&name) {
+                if words.others.iter().any(|(other, _)| *other == name) {
+                    return Err(error(format!("axis {name} is programmed twice")));
+                }
+                words.others.push((name, value));
+                continue;
+            }
+            if others {
+                return Err(error(format!(
+                    "'{name}' is not a configured axis ({})",
+                    state.axis_identifiers.join(", ")
+                )));
+            }
             return Err(error(format!(
                 "a frame {what} is modeled for the geometry axes X, Y, Z only; '{name}' is not one of them"
             )));
@@ -4013,7 +4030,7 @@ fn rotation_assignments(
     line_no: usize,
     preview: &str,
 ) -> Result<Matrix3, ParsingError> {
-    let words = geometry_words(pairs, state, "rotation", true)?;
+    let words = geometry_words(pairs, state, "rotation", true, false)?;
     let has_axis_angle = words.values.iter().any(Option::is_some);
     let angles = words.values.map(|angle| angle.unwrap_or(0.0));
     match words.rpl {
@@ -4042,7 +4059,7 @@ fn solid_angle_rotation(
     line_no: usize,
     preview: &str,
 ) -> Result<Matrix3, ParsingError> {
-    let words = geometry_words(pairs, state, "rotation", false)?;
+    let words = geometry_words(pairs, state, "rotation", false, false)?;
     let programmed: Vec<usize> = (0..3).filter(|&index| words.values[index].is_some()).collect();
     match programmed[..] {
         [index] => Ok(frame::axis_rotation(index, words.values[index].unwrap_or(0.0))),
@@ -4064,35 +4081,43 @@ fn solid_angle_rotation(
     }
 }
 
-/// SCALE/ASCALE factors per geometry axis as a matrix (manual 3.12.2.6).
+/// SCALE/ASCALE factors: a matrix for the geometry axes plus a factor per
+/// other configured axis, since manual 3.12.2.6 scales all path, synchronized
+/// and positioning axes.
 fn scale_assignments(
     pairs: Vec<Pair<Rule>>,
     state: &mut State,
     line_no: usize,
     preview: &str,
-) -> Result<Matrix3, ParsingError> {
-    let words = geometry_words(pairs, state, "scaling", false)?;
+) -> Result<(Matrix3, Vec<(String, f64)>), ParsingError> {
+    let words = geometry_words(pairs, state, "scaling", false, true)?;
     let factors = words.values.map(|factor| factor.unwrap_or(1.0));
-    if let Some(index) = factors.iter().position(|factor| !factor.is_finite() || *factor <= 0.0) {
+    let geometry = factors
+        .iter()
+        .zip(frame::AXIS_NAMES)
+        .map(|(factor, name)| (name, *factor));
+    let others = words.others.iter().map(|(name, factor)| (name.as_str(), *factor));
+    if let Some((name, factor)) = geometry
+        .chain(others)
+        .find(|(_, factor)| !factor.is_finite() || *factor <= 0.0)
+    {
         return Err(ParsingError::with_context(
             line_no,
             preview.to_string(),
             "frame scaling".to_string(),
             format!(
-                "the scale factor {} for axis {} must be greater than 0 (mirroring is programmed with MIRROR/AMIRROR)",
-                factors[index],
-                frame::AXIS_NAMES[index]
+                "the scale factor {factor} for axis {name} must be greater than 0 (mirroring is programmed with MIRROR/AMIRROR)"
             ),
         ));
     }
-    Ok(frame::scaling(factors))
+    Ok((frame::scaling(factors), words.others))
 }
 
 /// MIRROR/AMIRROR: every programmed geometry axis changes direction. The
 /// value is not evaluated, which is the toggle behaviour of MD10612
 /// MIRROR_TOGGLE = 0, the default (manual 3.12.2.7).
 fn mirror_assignments(pairs: Vec<Pair<Rule>>, state: &mut State) -> Result<Matrix3, ParsingError> {
-    let words = geometry_words(pairs, state, "mirroring", false)?;
+    let words = geometry_words(pairs, state, "mirroring", false, false)?;
     Ok(frame::scaling(words.values.map(|value| {
         if value.is_some() {
             -1.0
@@ -4161,8 +4186,12 @@ fn interpret_frame_op(element: Pair<Rule>, state: &mut State) -> Result<(), Pars
         "SCALE" | "ASCALE" => {
             // Chained onto the frame, so a later ATRANS is scaled as well
             // (manual 3.12.2.6 note "Work offset after scaling").
-            let scale = scale_assignments(assignments, state, line_no, &preview)?;
-            state.compose_frame(scale, op == "SCALE", line_no, &preview)
+            let (scale, others) = scale_assignments(assignments, state, line_no, &preview)?;
+            state.compose_frame(scale, op == "SCALE", line_no, &preview)?;
+            for (axis, factor) in others {
+                state.chain_axis_scale(&axis, factor);
+            }
+            Ok(())
         }
         "MIRROR" | "AMIRROR" => {
             // Chaining a second mirror of the same axis undoes the first.

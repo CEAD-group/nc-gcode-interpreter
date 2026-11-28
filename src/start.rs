@@ -38,6 +38,8 @@ pub struct StartState {
     /// Local (workpiece) positions per axis.
     pub axes: Vec<(String, f64)>,
     pub translation: Vec<(String, f64)>,
+    /// SCALE/ASCALE factor per non-geometry axis.
+    pub axis_scale: Vec<(String, f64)>,
     /// Row-major linear part of the frame: a rotation with per-axis scale and mirror factors.
     pub rotation: Option<[[f64; 3]; 3]>,
     pub symbol_table: Vec<(String, f64)>,
@@ -519,6 +521,20 @@ fn apply_start(start: &StartState, state: &mut State) -> Result<Seed, ParsingErr
         let field = format!("start['translation']['{axis}']");
         let key = axis_key(state, &field, axis)?;
         state.translation.insert(key, *value);
+    }
+    for (axis, factor) in &start.axis_scale {
+        let field = format!("start['axis_scale']['{axis}']");
+        let key = axis_key(state, &field, axis)?;
+        if crate::frame::geometry_index(&key).is_some() {
+            return Err(invalid(
+                &field,
+                "the geometry axes X, Y, Z are scaled through start['rotation']",
+            ));
+        }
+        if !factor.is_finite() || *factor <= 0.0 {
+            return Err(invalid(&field, "the scale factor must be a number greater than 0"));
+        }
+        state.axis_scale.insert(key, *factor);
     }
     if let Some(rotation) = &start.rotation {
         check_rotation(rotation).map_err(|message| invalid("start['rotation']", &message))?;

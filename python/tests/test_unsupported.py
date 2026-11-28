@@ -7,7 +7,6 @@ from nc_gcode_interpreter import nc_to_dataframe
     [
         "ROTS X30 Y10\nX2",  # two solid angles: the manuals disagree on the rotation
         "CROTS X30 Y10\nX2",
-        "SCALE A2\nX2",  # scaling an axis that is not a geometry axis
         "MIRROR A0\nX2",
         "SCALE X2\nAROT Z30\nX2",  # a rotation after unequal factors shears the frame
         "TOFRAME\nX2",  # frame rotations that follow the tool or workpiece orientation

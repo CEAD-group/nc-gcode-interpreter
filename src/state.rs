@@ -118,9 +118,13 @@ pub struct State {
     pub translation: FxMap<String, f64>,
     /// Linear part of the programmable frame over the geometry axes X, Y, Z
     /// (row-major, rotation * scale * mirror): machine XYZ = rotation * local
-    /// XYZ + translation. Every other axis only gets its translation, so
-    /// programmed A/B/C orientations are never rotated.
+    /// XYZ + translation. Every other axis gets `axis_scale` and its
+    /// translation, so programmed A/B/C orientations are never rotated.
     pub rotation: Matrix3,
+    /// SCALE/ASCALE factor of each non-geometry axis (manual 3.12.2.6 scales
+    /// all path, synchronized and positioning axes): machine = factor * local
+    /// + translation. An absent axis has factor 1.
+    pub axis_scale: FxMap<String, f64>,
     /// Inverse of `rotation`, kept so a frame change can recover the locals.
     inverse: Matrix3,
     /// `rotation` is not the identity. The hot path checks this flag only, so
@@ -271,6 +275,7 @@ impl State {
             rotation: frame::IDENTITY,
             inverse: frame::IDENTITY,
             rotated: false,
+            axis_scale: FxMap::default(),
             plane: Plane::G17,
             axis_identifiers,
             iteration_limit,
@@ -451,6 +456,32 @@ impl State {
         self.rotation = frame::IDENTITY;
         self.inverse = frame::IDENTITY;
         self.rotated = false;
+        self.axis_scale.clear();
+    }
+
+    /// SCALE/ASCALE factor of a non-geometry axis.
+    #[inline]
+    pub fn axis_factor(&self, axis: &str) -> f64 {
+        if self.axis_scale.is_empty() {
+            return 1.0;
+        }
+        *self.axis_scale.get(axis).unwrap_or(&1.0)
+    }
+
+    /// Machine value of a non-geometry axis: factor * local + translation.
+    #[inline]
+    pub fn other_machine(&self, axis: &str, local: f64) -> f64 {
+        local * self.axis_factor(axis) + self.get_translation(axis)
+    }
+
+    /// Local value of a non-geometry axis at a machine value.
+    pub fn other_local(&self, axis: &str, machine: f64) -> f64 {
+        (machine - self.get_translation(axis)) / self.axis_factor(axis)
+    }
+
+    /// ASCALE on a non-geometry axis multiplies its factor; SCALE has reset it first.
+    pub fn chain_axis_scale(&mut self, axis: &str, factor: f64) {
+        *self.axis_scale.entry(axis.to_string()).or_insert(1.0) *= factor;
     }
 
     /// Install the linear part of the frame. `Err` holds the reason when it is
@@ -479,12 +510,12 @@ impl State {
             .axes
             .iter()
             .filter(|(key, _)| frame::geometry_index(key).is_none())
-            .map(|(key, local)| (key.clone(), local + self.get_translation(key)))
+            .map(|(key, local)| (key.clone(), self.other_machine(key, *local)))
             .collect();
         change(self)?;
         self.store_geometry_locals(machine, positioned);
         for (key, machine_value) in others {
-            let local = machine_value - self.get_translation(&key);
+            let local = self.other_local(&key, machine_value);
             self.axes.insert(key, local);
         }
         Ok(())
@@ -570,8 +601,13 @@ impl State {
                 }
             }
             None => {
+                // An offset after a scale is scaled (manual 3.12.2.6 note).
+                let scaled = match frame::geometry_index(axis) {
+                    Some(_) => delta,
+                    None => delta * self.axis_factor(axis),
+                };
                 let current = self.get_translation(axis);
-                self.translation.insert(axis.to_string(), current + delta);
+                self.translation.insert(axis.to_string(), current + scaled);
             }
         }
         Ok(())
@@ -700,7 +736,7 @@ impl State {
             self.insert_rotated_geometry(last);
             return;
         }
-        last.insert(skey, Value::Float(local_value + self.get_translation(skey)));
+        last.insert(skey, Value::Float(self.other_machine(skey, local_value)));
     }
 
     /// Emit every positioned geometry axis: under a rotation any of them can
@@ -807,7 +843,7 @@ impl State {
                 return Some(self.machine_geometry()[index]);
             }
         }
-        Some(local + self.get_translation(key))
+        Some(self.other_machine(key, local))
     }
 
     /// Gets the array index for an axis, if a mapping exists
@@ -839,6 +875,7 @@ impl State {
             axes: self.axes.clone(),
             symbol_table: self.symbol_table.clone(),
             translation: self.translation.clone(),
+            axis_scale: self.axis_scale.clone(),
             rotation: self.rotation,
             string_table: self.string_table.clone(),
             g_groups: self.g_groups.clone(),
@@ -862,6 +899,8 @@ pub struct FinalState {
     pub axes: FxMap<String, f64>,
     pub symbol_table: HashMap<String, f64>,
     pub translation: FxMap<String, f64>,
+    /// SCALE/ASCALE factor of each scaled non-geometry axis.
+    pub axis_scale: FxMap<String, f64>,
     /// Linear part of the programmable frame (row-major; machine = rotation *
     /// local + translation for X, Y, Z), with scale and mirror folded in. The
     /// identity when no rotation, scale or mirror is active.

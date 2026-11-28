@@ -244,6 +244,7 @@ fn start_state(map: &serde_json::Map<String, Json>) -> Result<StartState, String
         match key.as_str() {
             "axes" => start.axes = number_map(value, key)?,
             "translation" => start.translation = number_map(value, key)?,
+            "axis_scale" => start.axis_scale = number_map(value, key)?,
             "symbol_table" => start.symbol_table = number_map(value, key)?,
             "string_table" => start.string_table = string_map(value, key)?,
             "g_groups" => start.g_groups = string_map(value, key)?,

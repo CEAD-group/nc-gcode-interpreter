@@ -192,3 +192,53 @@ def test_arc_under_a_distorting_or_mirroring_frame_errors(frame):
 def test_arc_ignores_scale_and_mirror_of_the_plane_normal():
     df, _ = run("SCALE Z3", "AMIRROR Z0", "G1 X1 Y0 Z1", "G2 X3 Y0 I1 J0")
     assert (df["X"][-1], df["I"][-1], df["Z"][-1]) == pytest.approx((3.0, 1.0, -3.0))
+
+
+def test_scaled_square_program():
+    # Manual 3.12.2.6: the contour is enlarged by the factors of the programmed axes.
+    square = ["G1 X10 Y0", "G1 X10 Y10", "G1 X0 Y10", "G1 X0 Y0"]
+    df, _ = run("TRANS X5 Y5", "ASCALE X2 Y2", *square)
+    points = list(zip(df["X"].to_list()[-4:], df["Y"].to_list()[-4:], strict=True))
+    assert points == pytest.approx([(25, 5), (25, 25), (5, 25), (5, 5)])
+
+
+def test_scale_applies_to_a_non_geometry_axis():
+    # Manual 3.12.2.6 scales all path, synchronized and positioning axes, not only X, Y, Z.
+    df, state = run("G1 E0", "SCALE E1.5", "G1 X1 E10", "G1 E=IC(2)", "G1 E4")
+    assert df["E"].to_list()[-3:] == pytest.approx([15.0, 18.0, 6.0])
+    assert df["X"][-3] == pytest.approx(1.0)
+    assert state["axes"]["E"] == pytest.approx(4.0)
+
+
+def test_ascale_multiplies_and_bare_scale_resets_a_non_geometry_axis():
+    df, _ = run("SCALE E2", "G1 E1", "ASCALE E3", "G1 E1", "SCALE", "G1 E1")
+    assert df["E"].to_list()[-3:] == pytest.approx([2.0, 6.0, 1.0])
+
+
+def test_offset_after_a_scale_is_scaled_on_a_non_geometry_axis():
+    df, state = run("TRANS E10", "ASCALE E2", "ATRANS E5", "G1 E1")
+    assert df["E"][-1] == pytest.approx(10.0 + 2.0 * (5.0 + 1.0))
+    assert state["translation"]["E"] == pytest.approx(20.0)
+
+
+def test_scale_does_not_move_a_non_geometry_axis():
+    df, state = run("G1 E6", "SCALE E2", "G1 X1")
+    assert df["E"][-1] == pytest.approx(6.0)
+    assert state["axes"]["E"] == pytest.approx(3.0)
+
+
+def test_scale_of_an_unknown_axis_errors():
+    with pytest.raises(ValueError, match="not a configured axis"):
+        run("SCALE ELX=2", "G1 X1")
+
+
+def test_final_state_with_a_non_geometry_scale_resumes():
+    _, state = run("TRANS E1", "ASCALE E2", "G1 E3")
+    assert state["axis_scale"] == {"E": pytest.approx(2.0)}
+    df, _ = nc_to_dataframe("G1 E4", start=state)
+    assert df["E"][-1] == pytest.approx(9.0)
+
+
+def test_start_axis_scale_rejects_a_geometry_axis():
+    with pytest.raises(ValueError, match="start\\['rotation'\\]"):
+        nc_to_dataframe("G1 X1 F100", start={"axis_scale": {"X": 2.0}})
